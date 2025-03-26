@@ -500,6 +500,7 @@ class BybitWebSocketClient:
             args=[
                 BybitPlaceOrderPostParams(
                     category=product_type,
+                    isLeverage=1,
                     symbol=symbol,
                     side=side,
                     orderType=order_type,

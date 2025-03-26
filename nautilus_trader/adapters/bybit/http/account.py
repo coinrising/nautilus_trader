@@ -317,6 +317,7 @@ class BybitAccountHttpAPI:
             params=BybitPlaceOrderPostParams(
                 category=product_type,
                 symbol=symbol,
+                isLeverage=1,
                 side=side,
                 orderType=order_type,
                 qty=quantity,
