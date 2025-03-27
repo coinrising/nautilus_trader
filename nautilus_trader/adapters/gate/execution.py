@@ -135,6 +135,9 @@ class GateExecutionClient(LiveExecutionClient):
         await self._instrument_provider.initialize()
         await self._update_account_state()
 
+    async def _disconnect(self):
+        pass
+
     def _stop(self) -> None:
         self._retry_manager_pool.shutdown()
 

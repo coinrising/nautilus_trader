@@ -43,7 +43,7 @@ class GateWebSocketClient:
         self._client: WebSocketClientProtocol = None
         self._api_key = api_key
         self._api_secret = api_secret
-        self._reconnecting = False
+        self.running = False
 
         self._subscriptions: set[str] = set()
 
@@ -54,12 +54,19 @@ class GateWebSocketClient:
     async def connect(self) -> None:
         self._client = await websockets.connect(self._base_url)
         self._log.info(f"Connected to {self._base_url}", LogColor.BLUE)
+        self.running = True
 
         self._loop.create_task(self._heartbeat())
         self._loop.create_task(self._keep_listening())
 
+    async def disconnect(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+            self.running = False
+
     async def _keep_listening(self):
-        while True:
+        while self.running:
             try:
                 if self._client is None:
                     self._client = await websockets.connect(self._base_url)
@@ -85,7 +92,7 @@ class GateWebSocketClient:
                 self._client = None
 
     async def _heartbeat(self):
-        while True:
+        while self.running:
             try:
                 if self._client is not None:
                     await self._send({'channel': 'spot.ping', 'time': int(time.time())})
