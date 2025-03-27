@@ -176,7 +176,7 @@ class GateDataClient(LiveMarketDataClient):
             channel = msg['channel']  # 目前看到的channel的格式都是 spot.*
             product_type, topic = channel.split('.')
             if topic == 'trades':
-                self.handle_trade_tickers(product_type, msg)
+                self.handle_trade_tick(product_type, msg)
             elif topic == 'book_ticker':
                 self.handle_quote_tickers(product_type, msg)
             # elif "kline" in ws_message.topic:
@@ -228,7 +228,7 @@ class GateDataClient(LiveMarketDataClient):
         except Exception as e:
             self._log.error(f"Failed to parse quote ticker: {msg} with error {e}")
 
-    def handle_trade_tickers(self, product_type: str, msg: dict) -> None:
+    def handle_trade_tick(self, product_type: str, msg: dict) -> None:
         try:
             result = msg['result']
             symbol = result['currency_pair']
@@ -243,18 +243,18 @@ class GateDataClient(LiveMarketDataClient):
                 price=Price.from_str(result['price']),
                 size=Quantity.from_str(result['amount']),
                 aggressor_side=parse_aggressor_side(result['side']),
-                trade_id=TradeId(result['id']),
-                ts_event=millis_to_nanos(int(result['create_time_ms'])),
+                trade_id=TradeId(str(result['id'])),
+                ts_event=millis_to_nanos(int(float(result['create_time_ms']))),
                 ts_init=ts_init,
             )
-            print('trade tick:', trade)
-            self._handle_trade_tick(trade)
+            # print('trade tick:', trade)
+            self._handle_data(trade)
         except Exception as e:
             self._log.error(f"Failed to parse trade tick: {msg} with error {e}")
 
 
     async def _request(self, request: RequestData) -> None:
-        print('data recv request:', request)
+        # print('data recv request:', request)
         if request.data_type.type == GateTickerData:
             symbol = request.data_type.metadata["symbol"]
             await self._handle_ticker_data_request(symbol, request.id)

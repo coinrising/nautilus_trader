@@ -122,7 +122,7 @@ class GateHttpClient:
             'time_in_force': time_in_force,
             'text': text,
         }
-        print(params)
+        # print(params)
         return self._sign_request('POST', f'/api/v4/spot/orders', payload=params)
 
     async def amend_order(self, product_type, symbol, venue_order_id, client_order_id, quantity, price):

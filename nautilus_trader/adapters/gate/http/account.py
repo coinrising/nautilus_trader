@@ -120,7 +120,7 @@ class GateAccountHttpAPI:
 
     async def place_order(self, product_type: GateProductType, symbol: str, side: GateOrderSide, order_type: GateOrderType, quantity: str,
                           price: str | None = None, time_in_force: GateTimeInForce | None = None, client_order_id: str | None = None) -> GatePlaceOrder:
-        resp = await self.client.place_order(product_type.value, symbol, side.value, order_type.value, quantity, price, time_in_force.value, client_order_id)
+        resp = await self.client.place_order(product_type.value, symbol, side.value, order_type.value, quantity, price, time_in_force.value, f"t-none")
         return GatePlaceOrder(orderId=resp['id'], orderLinkId=resp['text'])
 
     async def amend_order(self, product_type: GateProductType, symbol: str, venue_order_id: str | None = None, client_order_id: str | None = None,
@@ -143,7 +143,7 @@ class GateAccountHttpAPI:
 
     async def fetch_position_info(self, product_type: GateProductType=None, symbol: str=None) -> list[GatePosition]:
         resp = await self.client.fetch_position_info(product_type, symbol)
-        print('fetch position info:', resp)
+        # print('fetch position info:', resp)
         positions = []
         for r in resp:
             positions.append(GatePosition(symbol=r['currency'], side=r['buy'], size=r['available'], lock=r['locked']))
@@ -153,7 +153,7 @@ class GateAccountHttpAPI:
         # resp = await self.client.fetch_wallet_balance()
         # print('fetch wallet balance:', resp)
         resp = await self.client.fetch_position_info()
-        print('fetch position info:', resp)
+        # print('fetch position info:', resp)
         coins = []
         for r in resp:
             coins.append(GateCoinBalance(coin=r['currency'], available=r['available'], locked=r['locked'])

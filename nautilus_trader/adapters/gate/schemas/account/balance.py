@@ -27,8 +27,8 @@ class GateCoinBalance(msgspec.Struct):
         # return MarginBalance(initial=Money(0, Currency.USD), maintenance=Money(0, Currency.USD))
         currency: Currency = Currency.from_str(self.coin)
         return MarginBalance(
-            initial=Money(Decimal(self.totalPositionIM), currency),
-            maintenance=Money(Decimal(self.totalPositionMM), currency),
+            initial=Money(Decimal(0), currency),
+            maintenance=Money(Decimal(0), currency),
         )
 
 
