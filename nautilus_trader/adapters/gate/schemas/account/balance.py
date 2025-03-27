@@ -24,7 +24,7 @@ class GateCoinBalance(msgspec.Struct):
         )
 
     def parse_to_margin_balance(self) -> MarginBalance:
-        return MarginBalance(initial=Money(0, Currency.USD), maintenance=Money(0, Currency.USD))
+        # return MarginBalance(initial=Money(0, Currency.USD), maintenance=Money(0, Currency.USD))
         currency: Currency = Currency.from_str(self.coin)
         return MarginBalance(
             initial=Money(Decimal(self.totalPositionIM), currency),
