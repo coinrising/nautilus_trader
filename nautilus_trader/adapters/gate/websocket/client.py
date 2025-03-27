@@ -80,7 +80,7 @@ class GateWebSocketClient:
                 self._log.debug(f"ws received {msg['channel']}")
                 if msg['channel'] == 'spot.pong':
                     continue
-                self._handler(msg)
+                await self._handler(msg)
             except:
                 exception_text = traceback.format_exc()
                 self._log.error(exception_text)
@@ -143,13 +143,13 @@ class GateWebSocketClient:
         subscription = {'channel': 'spot.trades', 'payload': [symbol]}
         await self._subscribe(subscription)
 
-    async def subscribe_book_ticker(self, symbol: str) -> None:
-        subscription = {'channel': 'spot.book_ticker', 'payload': [symbol]}
-        await self._subscribe(subscription)
-
     async def unsubscribe_trades(self, symbol: str) -> None:
         subscription = {'channel': 'spot.trades', 'payload': [symbol]}
         await self._unsubscribe(subscription)
+
+    async def subscribe_book_ticker(self, symbol: str) -> None:
+        subscription = {'channel': 'spot.book_ticker', 'payload': [symbol]}
+        await self._subscribe(subscription)
 
     async def unsubscribe_book_ticker(self, symbol: str) -> None:
         subscription = {'channel': 'spot.book_ticker', 'payload': [symbol]}
@@ -159,22 +159,22 @@ class GateWebSocketClient:
     # Private
     ################################################################################
 
-    async def subscribe_account_position_update(self) -> None:
-        subscription = "position"
+    async def subscribe_balances_update(self) -> None:
+        subscription = {'channel': 'spot.balances'}
         await self._subscribe(subscription)
 
-    async def subscribe_orders_update(self) -> None:
-        subscription = "order"
+    async def subscribe_orders_update(self, symbol: str) -> None:
+        subscription = {'channel': 'spot.orders', 'payload': [symbol]}
         await self._subscribe(subscription)
 
-    async def subscribe_executions_update(self) -> None:
-        subscription = "execution"
-        await self._subscribe(subscription)
+    # async def subscribe_executions_update(self) -> None:
+    #     subscription = "execution"
+    #     await self._subscribe(subscription)
 
-    async def subscribe_executions_fast_update(self) -> None:
-        subscription = "execution.fast"
-        await self._subscribe(subscription)
+    # async def subscribe_executions_fast_update(self) -> None:
+    #     subscription = "execution.fast"
+    #     await self._subscribe(subscription)
 
-    async def subscribe_wallet_update(self) -> None:
-        subscription = "wallet"
-        await self._subscribe(subscription)
+    # async def subscribe_wallet_update(self) -> None:
+    #     subscription = "wallet"
+    #     await self._subscribe(subscription)

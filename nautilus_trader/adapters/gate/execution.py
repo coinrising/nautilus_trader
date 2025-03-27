@@ -3,13 +3,15 @@ from __future__ import annotations
 import time
 import asyncio
 
-from nautilus_trader.adapters.gate.http.client import GateHttpClient
-from nautilus_trader.adapters.gate.config import GateExecClientConfig
-from nautilus_trader.adapters.gate.http.client import GateHttpClient
-from nautilus_trader.adapters.gate.providers import GateInstrumentProvider
+
 from nautilus_trader.cache.cache import Cache
 from nautilus_trader.common.component import LiveClock
 from nautilus_trader.common.component import MessageBus
+from nautilus_trader.common.enums import LogColor
+from nautilus_trader.common.enums import LogLevel
+from nautilus_trader.core.datetime import millis_to_nanos
+from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.core.correctness import PyCondition
 from nautilus_trader.execution.messages import CancelAllOrders
 from nautilus_trader.execution.messages import CancelOrder
 from nautilus_trader.execution.messages import GenerateFillReports
@@ -21,21 +23,6 @@ from nautilus_trader.execution.messages import SubmitOrder
 from nautilus_trader.execution.reports import FillReport
 from nautilus_trader.execution.reports import OrderStatusReport
 from nautilus_trader.execution.reports import PositionStatusReport
-
-from nautilus_trader.adapters.gate.common.constants import GATE_VENUE
-from nautilus_trader.adapters.gate.common.enums import GateEnumParser
-from nautilus_trader.adapters.gate.common.enums import GateOrderType
-from nautilus_trader.adapters.gate.common.enums import GateProductType
-from nautilus_trader.adapters.gate.common.enums import GateTimeInForce
-from nautilus_trader.adapters.gate.common.symbol import GateSymbol
-from nautilus_trader.adapters.gate.http.account import GateAccountHttpAPI
-from nautilus_trader.adapters.gate.http.errors import GateError
-from nautilus_trader.adapters.gate.http.errors import should_retry
-from nautilus_trader.common.enums import LogColor
-from nautilus_trader.common.enums import LogLevel
-from nautilus_trader.core.correctness import PyCondition
-from nautilus_trader.core.datetime import millis_to_nanos
-from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.live.execution_client import LiveExecutionClient
 from nautilus_trader.live.retry import RetryManagerPool
 from nautilus_trader.model.enums import AccountType
@@ -51,7 +38,25 @@ from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.identifiers import VenueOrderId
 from nautilus_trader.model.orders import LimitOrder
 from nautilus_trader.model.orders import Order
+from nautilus_trader.model.objects import Price
+from nautilus_trader.model.objects import Quantity
+from nautilus_trader.model.objects import Money
 
+
+from nautilus_trader.adapters.gate.common.constants import GATE_VENUE
+from nautilus_trader.adapters.gate.common.enums import GateEnumParser
+from nautilus_trader.adapters.gate.common.enums import GateOrderType
+from nautilus_trader.adapters.gate.common.enums import GateProductType
+from nautilus_trader.adapters.gate.common.enums import GateTimeInForce
+from nautilus_trader.adapters.gate.common.symbol import GateSymbol
+from nautilus_trader.adapters.gate.config import GateExecClientConfig
+from nautilus_trader.adapters.gate.http.account import GateAccountHttpAPI
+from nautilus_trader.adapters.gate.http.client import GateHttpClient
+from nautilus_trader.adapters.gate.http.errors import GateError
+from nautilus_trader.adapters.gate.http.errors import should_retry
+from nautilus_trader.adapters.gate.providers import GateInstrumentProvider
+from nautilus_trader.adapters.gate.schemas.order import GateOrder, GateOrderStatus
+from nautilus_trader.adapters.gate.websocket.client import GateWebSocketClient
 
 class GateExecutionClient(LiveExecutionClient):
     def __init__(
@@ -113,6 +118,19 @@ class GateExecutionClient(LiveExecutionClient):
             clock=clock,
         )
 
+        # WebSocket API
+        self._ws_clients: dict[GateProductType, GateWebSocketClient] = {}
+        for product_type in set(product_types):
+            self._ws_clients[product_type] = GateWebSocketClient(
+                clock=clock,
+                product_type=product_type,
+                base_url=config.base_urls_ws[product_type],
+                handler=self._handle_ws_message,
+                api_key=config.api_key,
+                api_secret=config.api_secret,
+                loop=loop,
+            )
+
         # Order submission
         self._submit_order_methods = {
             OrderType.LIMIT: self._submit_limit_order,
@@ -120,7 +138,6 @@ class GateExecutionClient(LiveExecutionClient):
 
         # Hot caches
         self._instrument_ids: dict[str, InstrumentId] = {}
-        self._pending_trailing_stops: dict[ClientOrderId, Order] = {}
 
         self._retry_manager_pool = RetryManagerPool[None](
             pool_size=100,
@@ -135,8 +152,14 @@ class GateExecutionClient(LiveExecutionClient):
         await self._instrument_provider.initialize()
         await self._update_account_state()
 
+        for ws_client in self._ws_clients.values():
+            await ws_client.connect()
+            await ws_client.subscribe_balances_update()
+            await ws_client.subscribe_orders_update()
+
     async def _disconnect(self):
-        pass
+        for ws_client in self._ws_clients.values():
+            await ws_client.disconnect()
 
     def _stop(self) -> None:
         self._retry_manager_pool.shutdown()
@@ -401,6 +424,80 @@ class GateExecutionClient(LiveExecutionClient):
             time_in_force=time_in_force,
             client_order_id=str(order.client_order_id),
         )
+
+
+    # -- WEBSOCKET HANDLERS -------------------------------------------------------------------------
+
+    async def _handle_ws_message(self, msg: dict) -> None:
+        try:
+            if msg['event'] in {'subscribe', 'unsubscribe'}:
+                return
+            channel = msg['channel']  # 目前看到的channel的格式都是 spot.*
+            product_type, topic = channel.split('.')
+            if topic == 'spot.balances':
+                await self._update_account_state()
+            elif topic == 'spot.orders':
+                self._handle_account_order_update(product_type, msg)
+            else:
+                raise ValueError(f"Unknown websocket channel: {channel}")
+        except Exception as e:
+            self._log.error(f"Failed to handle websocket msg {msg} with: {e}")
+
+    def _handle_account_order_update(self, product_type: str, msg: dict) -> None:
+        try:
+            result = msg['result']
+            event = msg['event']
+            for order in result:
+                gate_order = GateOrder.from_dict(order)
+                instrument_id = self._get_cached_instrument_id(gate_order.symbol, GateProductType(product_type))
+                client_order_id = ClientOrderId(gate_order.orderLinkId) if gate_order.orderLinkId else None
+                venue_order_id = VenueOrderId(gate_order.orderId)
+                if client_order_id is None:
+                    client_order_id = self._cache.client_order_id(venue_order_id)
+
+                report = gate_order.parse_to_order_status_report(
+                    client_order_id=client_order_id,
+                    account_id=self.account_id,
+                    instrument_id=instrument_id,
+                    report_id=UUID4(),
+                    enum_parser=self._enum_parser,
+                    ts_init=self._clock.timestamp_ns(),
+                )
+
+                strategy_id = None
+                if report.client_order_id:
+                    strategy_id = self._cache.strategy_id_for_order(report.client_order_id)
+                if strategy_id is None:
+                    # External order
+                    self._send_order_status_report(report)
+                    return
+
+                order = self._cache.order(report.client_order_id)
+                if order is None:
+                    self._log.error(f"Cannot find {report.client_order_id!r}")
+                    return
+
+                if event == 'put':
+                    self.generate_order_accepted(
+                        strategy_id=strategy_id,
+                        instrument_id=report.instrument_id,
+                        client_order_id=report.client_order_id,
+                        venue_order_id=report.venue_order_id,
+                        ts_event=report.ts_last,
+                    )
+                elif event == 'finish':
+                    self.generate_order_canceled(
+                        strategy_id=strategy_id,
+                        instrument_id=report.instrument_id,
+                        client_order_id=report.client_order_id,
+                        venue_order_id=report.venue_order_id,
+                        ts_event=report.ts_last,
+                    )
+                
+        except Exception as e:
+            self._log.error('Failed to handle order update: ' + repr(e))
+
+    # -- PRIVATTE FUNCIONS -------------------------------------------------------------------------
 
     def _check_order_validity(self, order: Order, product_type: GateProductType) -> bool:
         # Check post only

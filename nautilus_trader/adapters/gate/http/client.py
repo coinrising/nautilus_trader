@@ -67,7 +67,7 @@ class GateHttpClient:
             resp = requests.request(method, self.base_url + url + query_string, headers=sign_headers, json=payload)
         data = resp.json()
         if resp.status_code // 100 != 2:
-            raise RuntimeError(f'gate request {url} failed, res: {resp.text}')
+            raise RuntimeError(f'gate request {url} failed on [HTTP {resp.status_code}]: {resp.text}')
         return data
 
     """
@@ -103,10 +103,13 @@ class GateHttpClient:
         params= {'currency': symbol} if symbol else None
         return self._sign_request('GET', '/api/v4/spot/my_trades', params)
 
-    async def fetch_order(self, product_type, symbol, order_id):
+    async def fetch_order(self, product_type, symbol, client_order_id, order_id):
         # https://www.gate.io/docs/developers/apiv4/zh_CN/#%E6%9F%A5%E8%AF%A2%E5%8D%95%E4%B8%AA%E8%AE%A2%E5%8D%95%E8%AF%A6%E6%83%85
         params= {'currency': symbol} if symbol else None
-        return self._sign_request('GET', f'/api/v4/spot/orders/{order_id}', params)
+        try:
+            return self._sign_request('GET', f'/api/v4/spot/orders/{client_order_id}', params)
+        except:
+            return self._sign_request('GET', f'/api/v4/spot/orders/{order_id}', params)
 
     async def place_order(self, product_type, symbol, side, order_type, quantity, price, time_in_force, text):
         # https://www.gate.io/docs/developers/apiv4/zh_CN/#%E4%B8%8B%E5%8D%95
@@ -119,6 +122,7 @@ class GateHttpClient:
             'price': price,
             'time_in_force': time_in_force,
             'text': text,
+            'auto_borrow': True
         }
         # print(params)
         return self._sign_request('POST', f'/api/v4/spot/orders', payload=params)

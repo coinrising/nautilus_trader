@@ -2,23 +2,19 @@ from __future__ import annotations
 
 from typing import Any
 
+from nautilus_trader.common.component import LiveClock
+from nautilus_trader.core.correctness import PyCondition
+
 from nautilus_trader.adapters.gate.common.enums import GateOrderSide
-from nautilus_trader.adapters.gate.common.enums import GateOrderStatus
 from nautilus_trader.adapters.gate.common.enums import GateOrderType
 from nautilus_trader.adapters.gate.common.enums import GateProductType
 from nautilus_trader.adapters.gate.common.enums import GateTimeInForce
-from nautilus_trader.adapters.gate.schemas.order import GateOrder
-from nautilus_trader.adapters.gate.schemas.order import GatePlaceOrder
-from nautilus_trader.adapters.gate.schemas.order import GateAmendOrder
-from nautilus_trader.adapters.gate.schemas.order import GateCancelOrder
-from nautilus_trader.adapters.gate.schemas.order import GateCancelAllOrder
-from nautilus_trader.adapters.gate.schemas.trade import GateExecution
-from nautilus_trader.adapters.gate.schemas.account.fee_rate import GateFeeRate
 from nautilus_trader.adapters.gate.http.client import GateHttpClient
-from nautilus_trader.adapters.gate.schemas.position import GatePosition
 from nautilus_trader.adapters.gate.schemas.account.balance import GateWalletBalance, GateCoinBalance
-from nautilus_trader.common.component import LiveClock
-from nautilus_trader.core.correctness import PyCondition
+from nautilus_trader.adapters.gate.schemas.account.fee_rate import GateFeeRate
+from nautilus_trader.adapters.gate.schemas.order import GateOrder, GatePlaceOrder, GateAmendOrder, GateCancelOrder, GateCancelAllOrder
+from nautilus_trader.adapters.gate.schemas.trade import GateExecution
+from nautilus_trader.adapters.gate.schemas.position import GatePosition
 
 
 class GateAccountHttpAPI:
@@ -42,18 +38,7 @@ class GateAccountHttpAPI:
         open_orders = await self.client.fetch_open_orders(product_type, symbol)
         orders = []
         for order in open_orders:
-            orders.append(GateOrder(orderId=order['id'], orderLinkId=order['text'], createdTime=order['create_time_ms'], updatedTime=order['update_time_ms'],
-                                    symbol=order['currency_pair'], orderType=GateOrderType(order['type']), price=order['price'], qty=order['amount'],
-                                    side=GateOrderSide(order['side']), orderStatus=GateOrderStatus(order['status']),
-                                    timeInForce=GateTimeInForce(order['time_in_force']),
-                                    cancelType=order['cancel_type'],
-                                    avgPrice=order['avg_deal_price'],
-                                    leavesQty=order['left'], cumExecQty=order['filled_amount'], cumExecValue=order['filled_total'],
-                                    cumExecFee=order['fee'], cumExecFeeCurrency=order['fee_currency'],
-                                    pointFee=order['point_fee'], gtFee=order['gt_fee'], gtMakerFee=order['gt_maker_fee'], gtTakerFee=order['gt_taker_fee'],
-                                    gtDiscount=order['gt_discount'],
-                                    rebatedFee=order['rebated_fee'], rebatedFeeCurrency=order['rebated_fee_currency'],
-                                    account='spot', iceberg='0'))
+            orders.append(GateOrder.from_dict(order))
         return orders
 
     async def query_order_history(
@@ -66,19 +51,7 @@ class GateAccountHttpAPI:
         order_history = await self.client.fetch_order_history(product_type, symbol)
         orders = []
         for order in order_history:
-            orders.append(GateOrder(orderId=order['id'], orderLinkId=order['text'], createdTime=order['create_time_ms'], updatedTime=order['update_time_ms'],
-                                    symbol=order['currency_pair'], orderType=GateOrderType(order['type']), price=order['price'], qty=order['amount'],
-                                    side=GateOrderSide(order['side']), orderStatus=GateOrderStatus(order['status']),
-                                    timeInForce=GateTimeInForce(order['time_in_force']),
-                                    cancelType=order['cancel_type'],
-                                    avgPrice=order['avg_deal_price'],
-                                    leavesQty=order['left'], cumExecQty=order['filled_amount'], cumExecValue=order['filled_total'],
-                                    cumExecFee=order['fee'], cumExecFeeCurrency=order['fee_currency'],
-                                    pointFee=order['point_fee'], gtFee=order['gt_fee'], gtMakerFee=order['gt_maker_fee'], gtTakerFee=order['gt_taker_fee'],
-                                    gtDiscount=order['gt_discount'],
-                                    rebatedFee=order['rebated_fee'], rebatedFeeCurrency=order['rebated_fee_currency'],
-                                    account='spot', iceberg='0',
-                                    ))
+            orders.append(GateOrder.from_dict(order))
         return orders
 
     async def query_order(
@@ -89,19 +62,7 @@ class GateAccountHttpAPI:
         order_id: str | None,
     ) -> GateOrder:
         order = await self.client.fetch_order(product_type, symbol, order_id)
-        return GateOrder(orderId=order['id'], orderLinkId=order['text'], createdTime=order['create_time_ms'], updatedTime=order['update_time_ms'],
-                         symbol=order['currency_pair'], orderType=GateOrderType(order['type']), price=order['price'], qty=order['amount'],
-                         side=GateOrderSide(order['side']), orderStatus=GateOrderStatus(order['status']),
-                         timeInForce=GateTimeInForce(order['time_in_force']),
-                         cancelType=order['cancel_type'],
-                         avgPrice=order['avg_deal_price'],
-                         leavesQty=order['left'], cumExecQty=order['filled_amount'], cumExecValue=order['filled_total'],
-                         cumExecFee=order['fee'], cumExecFeeCurrency=order['fee_currency'],
-                         pointFee=order['point_fee'], gtFee=order['gt_fee'], gtMakerFee=order['gt_maker_fee'], gtTakerFee=order['gt_taker_fee'],
-                         gtDiscount=order['gt_discount'],
-                         rebatedFee=order['rebated_fee'], rebatedFeeCurrency=order['rebated_fee_currency'],
-                         account='spot', iceberg='0',
-                         )
+        return GateOrder.from_dict(order)
 
     async def query_trade_history(
         self,

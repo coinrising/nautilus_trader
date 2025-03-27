@@ -1,52 +1,37 @@
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
-from functools import partial
-from typing import TYPE_CHECKING
-import msgspec
 
-from nautilus_trader.adapters.gate.common.constants import GATE_SPOT_DEPTHS
-from nautilus_trader.adapters.gate.common.constants import GATE_VENUE
-from nautilus_trader.adapters.gate.common.enums import GateEnumParser
-from nautilus_trader.adapters.gate.common.enums import GateProductType
-from nautilus_trader.adapters.gate.common.symbol import GateSymbol
-from nautilus_trader.adapters.gate.schemas.market.ticker import GateTickerData
-from nautilus_trader.adapters.gate.websocket.client import GateWebSocketClient
-from nautilus_trader.adapters.gate.config import GateDataClientConfig
-from nautilus_trader.adapters.gate.http.client import GateHttpClient
-from nautilus_trader.adapters.gate.providers import GateInstrumentProvider
-from nautilus_trader.adapters.gate.common.parsing import parse_aggressor_side
+from nautilus_trader.cache.cache import Cache
+from nautilus_trader.common.component import LiveClock
+from nautilus_trader.common.component import MessageBus
 from nautilus_trader.common.enums import LogColor
 from nautilus_trader.core.datetime import millis_to_nanos
-from nautilus_trader.live.data_client import LiveMarketDataClient
-
-# from nautilus_trader.data.messages import DataResponse
-# from nautilus_trader.data.messages import RequestBars
 from nautilus_trader.data.messages import RequestData
-# from nautilus_trader.data.messages import RequestTradeTicks
 from nautilus_trader.data.messages import SubscribeQuoteTicks
 from nautilus_trader.data.messages import SubscribeTradeTicks
 from nautilus_trader.data.messages import UnsubscribeQuoteTicks
 from nautilus_trader.data.messages import UnsubscribeTradeTicks
-# from nautilus_trader.model.data import Bar
-# from nautilus_trader.model.data import BarType
-# from nautilus_trader.model.data import CustomData
-# from nautilus_trader.model.data import DataType
-# from nautilus_trader.model.data import OrderBookDeltas
+from nautilus_trader.live.data_client import LiveMarketDataClient
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
-# from nautilus_trader.model.enums import PriceType
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
-from nautilus_trader.cache.cache import Cache
-from nautilus_trader.common.component import LiveClock
-from nautilus_trader.common.component import MessageBus
-from nautilus_trader.core.message import Request
-from nautilus_trader.model.instruments import Instrument
+
+
+from nautilus_trader.adapters.gate.common.constants import GATE_VENUE
+from nautilus_trader.adapters.gate.common.enums import GateEnumParser
+from nautilus_trader.adapters.gate.common.enums import GateProductType
+from nautilus_trader.adapters.gate.common.parsing import parse_aggressor_side
+from nautilus_trader.adapters.gate.common.symbol import GateSymbol
+from nautilus_trader.adapters.gate.config import GateDataClientConfig
+from nautilus_trader.adapters.gate.http.client import GateHttpClient
+from nautilus_trader.adapters.gate.providers import GateInstrumentProvider
+from nautilus_trader.adapters.gate.schemas.market.ticker import GateTickerData
+from nautilus_trader.adapters.gate.websocket.client import GateWebSocketClient
 
 
 class GateDataClient(LiveMarketDataClient):
@@ -169,7 +154,7 @@ class GateDataClient(LiveMarketDataClient):
         symbol = GateSymbol(f"{symbol}-{product_type.upper()}")
         return symbol.to_instrument_id()
 
-    def _handle_ws_message(self, msg: dict) -> None:
+    async def _handle_ws_message(self, msg: dict) -> None:
         try:
             if msg['event'] in {'subscribe', 'unsubscribe'}:
                 return
@@ -179,12 +164,10 @@ class GateDataClient(LiveMarketDataClient):
                 self.handle_trade_tick(product_type, msg)
             elif topic == 'book_ticker':
                 self.handle_quote_tickers(product_type, msg)
-            # elif "kline" in ws_message.topic:
-            #     self._handle_kline(raw)
             else:
                 raise ValueError(f"Unknown websocket channel: {channel}")
         except Exception as e:
-            self._log.error(f"Failed to parse websocket message with: {e}")
+            self._log.error(f"Failed to handle websocket message with: {e}")
 
     def handle_quote_tickers(self, product_type: str, msg: dict) -> None:
         try:
@@ -226,7 +209,7 @@ class GateDataClient(LiveMarketDataClient):
             self._last_quotes[quote.instrument_id] = quote
             self._handle_data(quote)
         except Exception as e:
-            self._log.error(f"Failed to parse quote ticker: {msg} with error {e}")
+            self._log.error(f"Failed to handle quote ticker: {msg} with error {e}")
 
     def handle_trade_tick(self, product_type: str, msg: dict) -> None:
         try:
@@ -250,7 +233,7 @@ class GateDataClient(LiveMarketDataClient):
             # print('trade tick:', trade)
             self._handle_data(trade)
         except Exception as e:
-            self._log.error(f"Failed to parse trade tick: {msg} with error {e}")
+            self._log.error(f"Failed to handle trade tick: {msg} with error {e}")
 
 
     async def _request(self, request: RequestData) -> None:

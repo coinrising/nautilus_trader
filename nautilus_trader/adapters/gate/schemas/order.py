@@ -1,21 +1,14 @@
 from decimal import Decimal
-from typing import Any
 
 import msgspec
+import random
+import time
+from typing import Any
 
-from nautilus_trader.adapters.gate.common.enums import GateEnumParser
-from nautilus_trader.adapters.gate.common.enums import GateOrderSide
-from nautilus_trader.adapters.gate.common.enums import GateOrderStatus
-from nautilus_trader.adapters.gate.common.enums import GateOrderType
-from nautilus_trader.adapters.gate.common.enums import GateProductType
-from nautilus_trader.adapters.gate.common.enums import GateStopOrderType
-from nautilus_trader.adapters.gate.common.enums import GateTimeInForce
 from nautilus_trader.core.datetime import millis_to_nanos
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.reports import OrderStatusReport
 from nautilus_trader.model.enums import ContingencyType
-from nautilus_trader.model.enums import OrderStatus
-from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import TrailingOffsetType
 from nautilus_trader.model.identifiers import AccountId
 from nautilus_trader.model.identifiers import ClientOrderId
@@ -24,10 +17,9 @@ from nautilus_trader.model.identifiers import VenueOrderId
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
 
-import time
-import random
-from nautilus_trader.model.identifiers import ClientOrderId
-# from nautilus_trader.core.nautilus_pyo3 import ClientOrderId
+from nautilus_trader.adapters.gate.common.enums import GateEnumParser, GateOrderSide, GateOrderStatus, GateOrderType, GateTimeInForce
+
+
 def gate_client_order_id() -> ClientOrderId:
     ts = int(time.time() * 1000)
     rand = '%04d' % random.randint(1, 9999)
@@ -63,6 +55,22 @@ class GateOrder(msgspec.Struct, omit_defaults=True, kw_only=True):
     gtDiscount: str  # gt_discount": false,
     rebateFee: str  # rebated_fee": "0",
     rebateFeeCurrency: str  # rebated_fee_currency": "USDT",
+
+    @staticmethod
+    def from_dict(order):
+        return GateOrder(orderId=order['id'], orderLinkId=order['text'], createdTime=order['create_time_ms'], updatedTime=order['update_time_ms'],
+                         symbol=order['currency_pair'], orderType=GateOrderType(order['type']), price=order['price'], qty=order['amount'],
+                         side=GateOrderSide(order['side']), orderStatus=GateOrderStatus(order['status']),
+                         timeInForce=GateTimeInForce(order['time_in_force']),
+                         cancelType=order['cancel_type'],
+                         avgPrice=order['avg_deal_price'],
+                         leavesQty=order['left'], cumExecQty=order['filled_amount'], cumExecValue=order['filled_total'],
+                         cumExecFee=order['fee'], cumExecFeeCurrency=order['fee_currency'],
+                         pointFee=order['point_fee'], gtFee=order['gt_fee'], gtMakerFee=order['gt_maker_fee'], gtTakerFee=order['gt_taker_fee'],
+                         gtDiscount=order['gt_discount'],
+                         rebatedFee=order['rebated_fee'], rebatedFeeCurrency=order['rebated_fee_currency'],
+                         account=order['account'], iceberg=order.get('iceberg', '0'),
+                         )
 
     def parse_to_order_status_report(
         self,
