@@ -156,6 +156,6 @@ class GateAccountHttpAPI:
         print('fetch position info:', resp)
         coins = []
         for r in resp:
-            coins.append(GateCoinBalance(currency=r['currency'], available=r['available'], locked=r['locked'])
+            coins.append(GateCoinBalance(coin=r['currency'], available=r['available'], locked=r['locked'])
             )
         return GateWalletBalance(coins=coins)
