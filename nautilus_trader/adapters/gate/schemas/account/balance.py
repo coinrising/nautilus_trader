@@ -19,7 +19,7 @@ class GateCoinBalance(msgspec.Struct):
         locked = Decimal(self.locked)
         return AccountBalance(
             total=Money(available + locked, currency),
-            available=Money(available, currency),
+            free=Money(available, currency),
             locked=Money(locked, currency),
         )
 
