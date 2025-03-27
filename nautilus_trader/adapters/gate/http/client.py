@@ -65,11 +65,9 @@ class GateHttpClient:
             resp = requests.request(method, self.base_url + url + '?' + query_string, headers=sign_headers, json=payload)
         else:
             resp = requests.request(method, self.base_url + url + query_string, headers=sign_headers, json=payload)
-
         data = resp.json()
-        if resp.status_code != 200:
-            self._log.error(f'gate request failed, res: {resp.text}')
-            raise RuntimeError(data['message'])
+        if resp.status_code // 100 != 2:
+            raise RuntimeError(f'gate request {url} failed, res: {resp.text}')
         return data
 
     """
