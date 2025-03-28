@@ -443,6 +443,7 @@ class GateExecutionClient(LiveExecutionClient):
         try:
             if msg['event'] in {'subscribe', 'unsubscribe'}:
                 return
+            # print('\n\n\nmsg:', msg)
             channel = msg['channel']  # 目前看到的channel的格式都是 spot.*
             product_type, topic = channel.split('.')
             if topic == 'balances':
@@ -458,6 +459,7 @@ class GateExecutionClient(LiveExecutionClient):
     def _handle_account_order_update(self, product_type: str, msg: dict) -> None:
         try:
             result = msg['result']
+            # print('\n\n\nresult:', result)
             for order in result:
                 gate_order = GateOrder.from_ws_dict(order)
                 instrument_id = self._get_cached_instrument_id(gate_order.symbol, GateProductType(product_type))
@@ -488,8 +490,9 @@ class GateExecutionClient(LiveExecutionClient):
                     exception_text = traceback.format_exc()
                     self._log.error(f"Cannot find {report.client_order_id!r}")
                     return
-
-                if gate_order.status == OrderStatus.ACCEPTED:  # ok
+                
+                if order['event'] == 'put':
+                    # print('\n\n\naccepted: ', cache_order, report)
                     self.generate_order_accepted(
                         strategy_id=strategy_id,
                         instrument_id=report.instrument_id,
@@ -497,7 +500,9 @@ class GateExecutionClient(LiveExecutionClient):
                         venue_order_id=report.venue_order_id,
                         ts_event=report.ts_last,
                     )
-                elif gate_order.status in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}:  # ok
+                # elif gate_order.status in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}:  # ok
+                elif order['event'] == 'update' or order['finish_as'] == 'filled':
+                    # print('\n\n\nfilled: ', cache_order, report)
                     instrument = self._cache.instrument(instrument_id)
                     quote_currency = instrument.quote_currency
                     commission: Money = Money(gate_order.cumExecFee, quote_currency)
@@ -517,23 +522,26 @@ class GateExecutionClient(LiveExecutionClient):
                         liquidity_side=LiquiditySide.MAKER,
                         ts_event=report.ts_last,
                     )
-                elif gate_order.status == OrderStatus.CANCELED:  # ok
-                    self.generate_order_canceled(
-                        strategy_id=strategy_id,
-                        instrument_id=report.instrument_id,
-                        client_order_id=report.client_order_id,
-                        venue_order_id=report.venue_order_id,
-                        ts_event=report.ts_last,
-                    )
-                elif gate_order.status == OrderStatus.REJECTED:  # ok
-                    self.generate_order_rejected(
-                        strategy_id=strategy_id,
-                        instrument_id=report.instrument_id,
-                        client_order_id=report.client_order_id,
-                        venue_order_id=report.venue_order_id,
-                        reason=gate_order.finishAs.value,
-                        ts_event=report.ts_last,
-                    )
+                elif order['event'] == 'finish':
+                    if order['finish_as'] == 'cancelled':
+                        # print('\n\n\ncancel: ', cache_order, report)
+                        self.generate_order_canceled(
+                            strategy_id=strategy_id,
+                            instrument_id=report.instrument_id,
+                            client_order_id=report.client_order_id,
+                            venue_order_id=report.venue_order_id,
+                            ts_event=report.ts_last,
+                        )
+                    else:
+                        # print('\n\n\nreject: ', cache_order, report)
+                        self.generate_order_rejected(
+                            strategy_id=strategy_id,
+                            instrument_id=report.instrument_id,
+                            client_order_id=report.client_order_id,
+                            venue_order_id=report.venue_order_id,
+                            reason=order['finish_as'],
+                            ts_event=report.ts_last,
+                        )
         except Exception:
             exception_text = traceback.format_exc()
             self._log.error(f'Failed to handle order update: {exception_text}')
