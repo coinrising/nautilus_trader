@@ -176,8 +176,7 @@ class GateAmendOrder(msgspec.Struct):
 # Cancel all order
 ################################################################################
 class GateCancelAllOrder(msgspec.Struct):
-    orderId: str
-    orderLinkId: str
+    cancelList: list[GateCancelOrder]
 
 ################################################################################
 # Set trading stop
