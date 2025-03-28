@@ -137,7 +137,7 @@ class GateHttpClient:
 
     async def cancel_order(self, product_type, symbol, venue_order_id, client_order_id):
         # https://www.gate.io/docs/developers/apiv4/zh_CN/#%E6%92%A4%E9%94%80%E5%8D%95%E4%B8%AA%E8%AE%A2%E5%8D%95
-        params= {'currency': symbol} if symbol else None
+        params= {'currency_pair': symbol} if symbol else None
         return self._sign_request('DELETE', f'/api/v4/spot/orders/{venue_order_id}', params)
 
     async def cancel_all_orders(self, product_type, symbol):
