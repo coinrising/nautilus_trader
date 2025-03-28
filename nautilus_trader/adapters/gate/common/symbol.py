@@ -27,21 +27,7 @@ from nautilus_trader.model.identifiers import Symbol
 VALID_SUFFIXES: Final[list[str]] = ["-SPOT", "-LINEAR", "-INVERSE", "-OPTION"]
 
 
-def has_valid_bybit_suffix(symbol: str) -> bool:
-    """
-    Return whether the given `symbol` string contains a valid Bybit suffix.
-
-    Parameters
-    ----------
-    symbol : str
-        The symbol string value to check.
-
-    Returns
-    -------
-    bool
-        True if contains a valid suffix, else False.
-
-    """
+def has_valid_gate_suffix(symbol: str) -> bool:
     for suffix in VALID_SUFFIXES:
         if suffix in symbol:
             return True
@@ -49,13 +35,9 @@ def has_valid_bybit_suffix(symbol: str) -> bool:
 
 
 class GateSymbol(str):
-    """
-    Represents a Bybit specific symbol containing a product type suffix.
-    """
-
     def __new__(cls, symbol: str) -> GateSymbol:  # noqa: PYI034
         PyCondition.valid_string(symbol, "symbol")
-        if not has_valid_bybit_suffix(symbol):
+        if not has_valid_gate_suffix(symbol):
             raise ValueError(
                 f"Invalid symbol '{symbol}': "
                 f"does not contain a valid suffix from {VALID_SUFFIXES}",

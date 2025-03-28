@@ -67,7 +67,7 @@ class GateHttpClient:
             resp = requests.request(method, self.base_url + url + query_string, headers=sign_headers, json=payload)
         data = resp.json()
         if resp.status_code // 100 != 2:
-            raise RuntimeError(f'gate request {url} failed on [HTTP {resp.status_code}]: {resp.text}')
+            raise RuntimeError(f'gate request {method} {url} failed on [HTTP {resp.status_code}]: {resp.text}')
         return data
 
     """
@@ -100,18 +100,18 @@ class GateHttpClient:
 
     async def fetch_trade_history(self, product_type, symbol):
         # https://www.gate.io/docs/developers/apiv4/zh_CN/#%E6%9F%A5%E8%AF%A2%E4%B8%AA%E4%BA%BA%E6%88%90%E4%BA%A4%E8%AE%B0%E5%BD%95
-        params= {'currency': symbol} if symbol else None
+        params= {'currency_pair': symbol} if symbol else None
         return self._sign_request('GET', '/api/v4/spot/my_trades', params)
 
     async def fetch_order(self, product_type, symbol, client_order_id, order_id):
         # https://www.gate.io/docs/developers/apiv4/zh_CN/#%E6%9F%A5%E8%AF%A2%E5%8D%95%E4%B8%AA%E8%AE%A2%E5%8D%95%E8%AF%A6%E6%83%85
-        params= {'currency': symbol} if symbol else None
-        try:
-            return self._sign_request('GET', f'/api/v4/spot/orders/{client_order_id}', params)
-        except:
+        params= {'currency_pair': symbol} if symbol else None
+        if order_id:
             return self._sign_request('GET', f'/api/v4/spot/orders/{order_id}', params)
+        else:
+            return self._sign_request('GET', f'/api/v4/spot/orders/{client_order_id}', params)
 
-    async def place_order(self, product_type, symbol, side, order_type, quantity, price, time_in_force, text):
+    async def place_order(self, product_type, symbol, side, order_type, quantity, price, time_in_force, text, auto_borrow):
         # https://www.gate.io/docs/developers/apiv4/zh_CN/#%E4%B8%8B%E5%8D%95
         params= {
             'account': product_type,
@@ -122,9 +122,8 @@ class GateHttpClient:
             'price': price,
             'time_in_force': time_in_force,
             'text': text,
-            'auto_borrow': True
+            'auto_borrow': auto_borrow,
         }
-        # print(params)
         return self._sign_request('POST', f'/api/v4/spot/orders', payload=params)
 
     async def amend_order(self, product_type, symbol, venue_order_id, client_order_id, quantity, price):

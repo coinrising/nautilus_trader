@@ -35,7 +35,8 @@ class GateWalletBalance(msgspec.Struct):
     coins: list[GateCoinBalance]
 
     def parse_to_account_balance(self) -> list[AccountBalance]:
-        return [coin.parse_to_account_balance() for coin in self.coins]
+        return [coin.parse_to_account_balance() for coin in self.coins if Decimal(coin.available) >= 0]
+        # return [coin.parse_to_account_balance() for coin in self.coins]
 
     def parse_to_margin_balance(self) -> list[MarginBalance]:
         return [coin.parse_to_margin_balance() for coin in self.coins]

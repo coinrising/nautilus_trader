@@ -1,18 +1,3 @@
-# -------------------------------------------------------------------------------------------------
-#  Copyright (C) 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
-#  https://nautechsystems.io
-#
-#  Licensed under the GNU Lesser General Public License Version 3.0 (the "License");
-#  You may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at https://www.gnu.org/licenses/lgpl-3.0.en.html
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-# -------------------------------------------------------------------------------------------------
-
 from __future__ import annotations
 
 from enum import Enum
@@ -128,19 +113,24 @@ class GateOrderType(Enum):
 
 
 @unique
-class GateStopOrderType(Enum):
-    NONE = ""  # Default
-    UNKNOWN = "UNKNOWN"  # Classic account value
-    TAKE_PROFIT = "TakeProfit"
-    STOP_LOSS = "StopLoss"
-    TRAILING_STOP = "TrailingStop"
-    STOP = "Stop"
-    PARTIAL_TAKE_PROFIT = "PartialTakeProfit"
-    PARTIAL_STOP_LOSS = "PartialStopLoss"
-    TPSL_ORDER = "tpslOrder"
-    OCO_ORDER = "OcoOrder"  # Spot only
-    MM_RATE_CLOSE = "MmRateClose"
-    BIDIRECTIONAL_TPSL_ORDER = "BidirectionalTpslOrder"
+class GateOrderEvent(Enum):
+    PUT = "put"
+    UPDATE = "update"
+    FINISH = "finish"
+
+
+@unique
+class GateOrderFinishAs(Enum):
+    UNKNOWN = "-"  # Default
+    OPEN = 'open'
+    FILLED = 'filled'
+    CANCELLED = 'cancelled'
+    IOC = 'ioc'
+    FOK = 'fok'
+    POC = 'poc'
+    SMALL = 'small'
+    TRADER_NOT_ENOUGH = 'trader_not_enough'
+    DEPTH_NOT_ENOUGH = 'depth_not_enough'
 
 
 @unique
@@ -170,36 +160,8 @@ class GateEnumParser:
             b: a for a, b in self.gate_to_nautilus_order_side.items()
         }
         self.gate_to_nautilus_order_type = {
-            (
-                GateOrderType.MARKET,
-                GateStopOrderType.NONE,
-                GateOrderSide.BUY,
-            ): OrderType.MARKET,
-            (
-                GateOrderType.MARKET,
-                GateStopOrderType.NONE,
-                GateOrderSide.SELL,
-            ): OrderType.MARKET,
-            (
-                GateOrderType.LIMIT,
-                GateStopOrderType.NONE,
-                GateOrderSide.BUY,
-            ): OrderType.LIMIT,
-            (
-                GateOrderType.LIMIT,
-                GateStopOrderType.NONE,
-                GateOrderSide.SELL,
-            ): OrderType.LIMIT,
-            (
-                GateOrderType.LIMIT,
-                GateStopOrderType.STOP,
-                GateOrderSide.BUY,
-            ): OrderType.STOP_LIMIT,
-            (
-                GateOrderType.LIMIT,
-                GateStopOrderType.STOP,
-                GateOrderSide.SELL,
-            ): OrderType.STOP_LIMIT,
+            (GateOrderType.LIMIT): OrderType.LIMIT,
+            (GateOrderType.MARKET): OrderType.MARKET,
         }
 
         # TODO check time in force mapping
@@ -217,13 +179,15 @@ class GateEnumParser:
 
         # fmt: off
         self.gate_to_nautilus_order_status = {
-            (OrderType.MARKET, GateOrderStatus.OPEN): OrderStatus.ACCEPTED,
-            (OrderType.MARKET, GateOrderStatus.CANCELLED): OrderStatus.CANCELED,
-            (OrderType.MARKET, GateOrderStatus.CLOSED): OrderStatus.FILLED,
-
-            (OrderType.LIMIT, GateOrderStatus.OPEN): OrderStatus.ACCEPTED,
-            (OrderType.LIMIT, GateOrderStatus.CANCELLED): OrderStatus.CANCELED,
-            (OrderType.LIMIT, GateOrderStatus.CLOSED): OrderStatus.FILLED,
+            (GateOrderStatus.OPEN, GateOrderFinishAs.OPEN): OrderStatus.ACCEPTED,
+            (GateOrderStatus.CLOSED, GateOrderFinishAs.FILLED): OrderStatus.FILLED,
+            (GateOrderStatus.CANCELLED, GateOrderFinishAs.CANCELLED): OrderStatus.CANCELED,
+            (GateOrderStatus.CANCELLED, GateOrderFinishAs.IOC): OrderStatus.REJECTED,
+            (GateOrderStatus.CANCELLED, GateOrderFinishAs.POC): OrderStatus.REJECTED,
+            (GateOrderStatus.CANCELLED, GateOrderFinishAs.FOK): OrderStatus.REJECTED,
+            (GateOrderStatus.CANCELLED, GateOrderFinishAs.SMALL): OrderStatus.REJECTED,
+            (GateOrderStatus.CANCELLED, GateOrderFinishAs.TRADER_NOT_ENOUGH): OrderStatus.REJECTED,
+            (GateOrderStatus.CANCELLED, GateOrderFinishAs.DEPTH_NOT_ENOUGH): OrderStatus.REJECTED,
         }
 
         # klines
@@ -254,13 +218,6 @@ class GateEnumParser:
             TimeInForce.FOK,
         }
 
-    def parse_gate_order_status(
-        self,
-        order_type: OrderType,
-        order_status: GateOrderStatus,
-    ) -> OrderStatus:
-        return check_dict_keys((order_type, order_status), self.gate_to_nautilus_order_status)
-
     def parse_gate_time_in_force(self, time_in_force: GateTimeInForce) -> TimeInForce:
         return check_dict_keys(time_in_force, self.gate_to_nautilus_time_in_force)
 
@@ -270,14 +227,18 @@ class GateEnumParser:
     def parse_nautilus_order_side(self, order_side: OrderSide) -> GateOrderSide:
         return check_dict_keys(order_side, self.nautilus_to_gate_order_side)
 
+    def parse_gate_order_status(self, order_status: GateOrderStatus, order_finish_as: GateOrderFinishAs) -> OrderStatus:
+        return check_dict_keys(
+            (order_status, order_finish_as),
+            self.gate_to_nautilus_order_status,
+        )
+
     def parse_gate_order_type(
         self,
         order_type: GateOrderType,
-        stop_order_type: GateStopOrderType,
-        order_side: GateOrderSide,
     ) -> OrderType:
         return check_dict_keys(
-            (order_type, stop_order_type, order_side),
+            (order_type),
             self.gate_to_nautilus_order_type,
         )
 

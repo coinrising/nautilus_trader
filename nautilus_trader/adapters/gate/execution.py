@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import asyncio
-
+import traceback
 
 from nautilus_trader.cache.cache import Cache
 from nautilus_trader.common.component import LiveClock
@@ -28,7 +28,9 @@ from nautilus_trader.live.retry import RetryManagerPool
 from nautilus_trader.model.enums import AccountType
 from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.enums import OrderType
+from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.model.enums import TimeInForce
+from nautilus_trader.model.enums import LiquiditySide
 from nautilus_trader.model.enums import account_type_to_str
 from nautilus_trader.model.identifiers import AccountId
 from nautilus_trader.model.identifiers import ClientId
@@ -55,7 +57,7 @@ from nautilus_trader.adapters.gate.http.client import GateHttpClient
 from nautilus_trader.adapters.gate.http.errors import GateError
 from nautilus_trader.adapters.gate.http.errors import should_retry
 from nautilus_trader.adapters.gate.providers import GateInstrumentProvider
-from nautilus_trader.adapters.gate.schemas.order import GateOrder, GateOrderStatus
+from nautilus_trader.adapters.gate.schemas.order import GateOrder, GateOrderEvent
 from nautilus_trader.adapters.gate.websocket.client import GateWebSocketClient
 
 class GateExecutionClient(LiveExecutionClient):
@@ -188,6 +190,8 @@ class GateExecutionClient(LiveExecutionClient):
                     client_order_id = ClientOrderId(order.orderLinkId) if order.orderLinkId else None
                     if client_order_id is None:
                         client_order_id = self._cache.client_order_id(VenueOrderId(order.orderId))
+                    if not repr(client_order_id).startswith("t-"):
+                        continue
                     report = order.parse_to_order_status_report(
                         client_order_id=client_order_id,
                         account_id=self.account_id,
@@ -198,8 +202,9 @@ class GateExecutionClient(LiveExecutionClient):
                     )
                     reports.append(report)
                     self._log.debug(f"Received {report}", LogColor.MAGENTA)
-        except Exception as e:
-            self._log.error(f"Failed to generate OrderStatusReports: {e}")
+        except Exception:
+            exception_text = traceback.format_exc()
+            self._log.error(f"Failed to generate OrderStatusReports: {exception_text}")
 
         len_reports = len(reports)
         plural = "" if len_reports == 1 else "s"
@@ -242,7 +247,8 @@ class GateExecutionClient(LiveExecutionClient):
             product_type = gate_symbol.product_type
             target_order = await self._http_clt.query_order(
                 product_type=product_type,
-                symbol=instrument_id.symbol.value,
+                symbol=gate_symbol.raw_symbol,
+                # symbol=instrument_id.symbol.value,
                 client_order_id=client_order_id.value if client_order_id else None,
                 order_id=venue_order_id.value if venue_order_id else None,
             )
@@ -263,7 +269,8 @@ class GateExecutionClient(LiveExecutionClient):
             self._log.debug(f"Received {order_report}", LogColor.MAGENTA)
             return order_report
         except Exception as e:
-            self._log.error(f"Failed to generate OrderStatusReport: {e}")
+            exception_text = traceback.format_exc()
+            self._log.error(f"Failed to generate OrderStatusReport: {exception_text}")
         return None
 
     async def generate_fill_reports(self, command: GenerateFillReports) -> list[FillReport]:
@@ -271,17 +278,17 @@ class GateExecutionClient(LiveExecutionClient):
 
         self._log.debug("Requesting FillReports...")
         reports: list[FillReport] = []
+        if instrument_id is None:
+            return reports
 
         try:
-            _symbol = instrument_id.symbol.value if instrument_id is not None else None
-            symbol = GateSymbol(_symbol) if _symbol is not None else None
+            # _symbol = instrument_id.symbol.value if instrument_id is not None else None
+            # symbol = GateSymbol(_symbol).raw_symbol if _symbol is not None else None
+            gate_symbol = GateSymbol(instrument_id.symbol.value)
             for product_type in self._product_types:
-                gate_fills = await self._http_clt.query_trade_history(product_type, symbol)
+                gate_fills = await self._http_clt.query_trade_history(product_type, gate_symbol.raw_symbol)
                 for fill in gate_fills:
                     # Uncomment for development
-                    gate_symbol = GateSymbol(
-                        fill.symbol + f"-{product_type.value.upper()}",
-                    )
                     report = fill.parse_to_fill_report(
                         account_id=self.account_id,
                         instrument_id=gate_symbol.to_instrument_id(),
@@ -292,7 +299,8 @@ class GateExecutionClient(LiveExecutionClient):
                     reports.append(report)
                     self._log.debug(f"Received {report}")
         except Exception as e:
-            self._log.error(f"Failed to generate FillReports: {e}")
+            exception_text = traceback.format_exc()
+            self._log.error(f"Failed to generate FillReports: {repr(exception_text)}")
 
         len_reports = len(reports)
         plural = "" if len_reports == 1 else "s"
@@ -340,7 +348,8 @@ class GateExecutionClient(LiveExecutionClient):
                         self._log.debug(f"Received {position_report}")
                         reports.append(position_report)
         except Exception as e:
-            self._log.error(f"Failed to generate PositionReports: {e}")
+            exception_text = traceback.format_exc()
+            self._log.error(f"Failed to generate PositionReports: {exception_text}")
 
         len_reports = len(reports)
         plural = "" if len_reports == 1 else "s"
@@ -371,7 +380,8 @@ class GateExecutionClient(LiveExecutionClient):
                 ts_event=millis_to_nanos(ts),
             )
         except Exception as e:
-            self._log.error(f"Failed to generate AccountState: {e}")
+            exception_text = traceback.format_exc()
+            self._log.error(f"Failed to generate AccountState: {repr(exception_text)}")
 
     # -- COMMAND HANDLERS -------------------------------------------------------------------------
 
@@ -414,7 +424,7 @@ class GateExecutionClient(LiveExecutionClient):
         gate_symbol = GateSymbol(order.instrument_id.symbol.value)
         time_in_force = self._determine_time_in_force(order)
         order_side = self._enum_parser.parse_nautilus_order_side(order.side)
-        await self._http_clt.place_order(
+        return await self._http_clt.place_order(
             product_type=gate_symbol.product_type,
             symbol=gate_symbol.raw_symbol,
             side=order_side,
@@ -423,6 +433,7 @@ class GateExecutionClient(LiveExecutionClient):
             price=str(order.price),
             time_in_force=time_in_force,
             client_order_id=str(order.client_order_id),
+            auto_borrow=False,  # 调试用
         )
 
 
@@ -434,21 +445,21 @@ class GateExecutionClient(LiveExecutionClient):
                 return
             channel = msg['channel']  # 目前看到的channel的格式都是 spot.*
             product_type, topic = channel.split('.')
-            if topic == 'spot.balances':
+            if topic == 'balances':
                 await self._update_account_state()
-            elif topic == 'spot.orders':
+            elif topic == 'orders':
                 self._handle_account_order_update(product_type, msg)
             else:
                 raise ValueError(f"Unknown websocket channel: {channel}")
         except Exception as e:
-            self._log.error(f"Failed to handle websocket msg {msg} with: {e}")
+            exception_text = traceback.format_exc()
+            self._log.error(f"Failed to handle websocket msg {msg} with: {exception_text}")
 
     def _handle_account_order_update(self, product_type: str, msg: dict) -> None:
         try:
             result = msg['result']
-            event = msg['event']
             for order in result:
-                gate_order = GateOrder.from_dict(order)
+                gate_order = GateOrder.from_ws_dict(order)
                 instrument_id = self._get_cached_instrument_id(gate_order.symbol, GateProductType(product_type))
                 client_order_id = ClientOrderId(gate_order.orderLinkId) if gate_order.orderLinkId else None
                 venue_order_id = VenueOrderId(gate_order.orderId)
@@ -472,12 +483,13 @@ class GateExecutionClient(LiveExecutionClient):
                     self._send_order_status_report(report)
                     return
 
-                order = self._cache.order(report.client_order_id)
-                if order is None:
+                cache_order = self._cache.order(report.client_order_id)
+                if cache_order is None:
+                    exception_text = traceback.format_exc()
                     self._log.error(f"Cannot find {report.client_order_id!r}")
                     return
 
-                if event == 'put':
+                if gate_order.status == OrderStatus.ACCEPTED:  # ok
                     self.generate_order_accepted(
                         strategy_id=strategy_id,
                         instrument_id=report.instrument_id,
@@ -485,7 +497,27 @@ class GateExecutionClient(LiveExecutionClient):
                         venue_order_id=report.venue_order_id,
                         ts_event=report.ts_last,
                     )
-                elif event == 'finish':
+                elif gate_order.status in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}:  # ok
+                    instrument = self._cache.instrument(instrument_id)
+                    quote_currency = instrument.quote_currency
+                    commission: Money = Money(gate_order.cumExecFee, quote_currency)
+                    self.generate_order_filled(
+                        strategy_id=strategy_id,
+                        instrument_id=report.instrument_id,
+                        client_order_id=report.client_order_id,
+                        venue_order_id=report.venue_order_id,
+                        venue_position_id=None,
+                        trade_id=None,
+                        order_side=report.order_side,
+                        order_type=report.order_type,
+                        last_qty=report.filled_qty,
+                        last_px=report.avg_px,
+                        quote_currency=quote_currency,
+                        commission=commission,
+                        liquidity_side=LiquiditySide.MAKER,
+                        ts_event=report.ts_last,
+                    )
+                elif gate_order.status == OrderStatus.CANCELED:  # ok
                     self.generate_order_canceled(
                         strategy_id=strategy_id,
                         instrument_id=report.instrument_id,
@@ -493,9 +525,18 @@ class GateExecutionClient(LiveExecutionClient):
                         venue_order_id=report.venue_order_id,
                         ts_event=report.ts_last,
                     )
-                
-        except Exception as e:
-            self._log.error('Failed to handle order update: ' + repr(e))
+                elif gate_order.status == OrderStatus.REJECTED:  # ok
+                    self.generate_order_rejected(
+                        strategy_id=strategy_id,
+                        instrument_id=report.instrument_id,
+                        client_order_id=report.client_order_id,
+                        venue_order_id=report.venue_order_id,
+                        reason=gate_order.finishAs.value,
+                        ts_event=report.ts_last,
+                    )
+        except Exception:
+            exception_text = traceback.format_exc()
+            self._log.error(f'Failed to handle order update: {exception_text}')
 
     # -- PRIVATTE FUNCIONS -------------------------------------------------------------------------
 
@@ -504,13 +545,6 @@ class GateExecutionClient(LiveExecutionClient):
         if order.is_post_only and order.order_type != OrderType.LIMIT:
             self._log.error(
                 f"Cannot submit {order} has invalid post only {order.is_post_only}, unsupported on Gate",
-            )
-            return False
-
-        # Check reduce only
-        if order.is_reduce_only and product_type == GateProductType.SPOT:
-            self._log.error(
-                f"Cannot submit {order} is reduce_only, unsupported on Gate SPOT",
             )
             return False
 
@@ -565,7 +599,9 @@ class GateExecutionClient(LiveExecutionClient):
                 symbol=gate_symbol.raw_symbol,
             )
             if not retry_manager.result:
-                orders_open = self._cache.orders_open(instrument_id=command.instrument_id)
+                orders_open = self._cache.orders_open(
+                    venue=None,
+                    instrument_id=command.instrument_id)
                 for order in orders_open:
                     if order.is_closed:
                         continue

@@ -41,7 +41,7 @@ class GateExecution(msgspec.Struct, omit_defaults=True, kw_only=True):
         enum_parser: GateEnumParser,
         ts_init: int,
     ) -> OrderStatusReport:
-        client_order_id = ClientOrderId(self.orderId) if self.orderId else None
+        client_order_id = ClientOrderId(self.clientOrderId) if self.clientOrderId else None
         return FillReport(
             client_order_id=client_order_id,
             venue_order_id=VenueOrderId(str(self.execId)),

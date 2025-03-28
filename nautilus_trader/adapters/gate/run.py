@@ -28,12 +28,13 @@ api_secret = os.getenv('GATE_API_SECRET')
 product_types = [GateProductType.SPOT]
 testnet = False
 symbol = f"BTC_USDT"
-trade_size = Decimal("0.010")
+trade_size = Decimal("0.00004")
 
 base_url_http = 'https://api.gateio.ws'
 base_urls_ws: dict[GateProductType, str] = {}
 for product_type in product_types:
     base_urls_ws[product_type] = get_ws_base_url(product_type)
+
 
 symbols = frozenset(['BTC_USDT'])
 # symbols = ['BTC_USDT', 'ETH_USDT', 'SOL_USDT', 'XRP_USDT', 'DOGE_USDT']

@@ -1,3 +1,4 @@
+import time
 from decimal import Decimal
 
 from nautilus_trader.adapters.gate.schemas.order import gate_client_order_id
@@ -46,10 +47,7 @@ class VolatilityMarketMaker(Strategy):
 
         # Create the indicators for the strategy
         self.atr = AverageTrueRange(config.atr_period)
-
-        # Users order management variables
-        self.buy_order: LimitOrder | None = None
-        self.sell_order: LimitOrder | None = None
+        self.last_place_order = 0
 
     def on_start(self) -> None:
         """
@@ -64,11 +62,11 @@ class VolatilityMarketMaker(Strategy):
         self.subscribe_trade_ticks(self.config.instrument_id, client_id=self.client_id)
 
     def on_data(self, data: Data) -> None:
-        print('on data:', repr(data))
+        pass
         # self.log.info(repr(data), LogColor.CYAN)
 
     def on_instrument(self, instrument: Instrument) -> None:
-        print('on instrument:', repr(instrument))
+        pass
         # self.log.info(repr(instrument), LogColor.CYAN)
 
     def on_quote_tick(self, tick: QuoteTick) -> None:
@@ -87,14 +85,16 @@ class VolatilityMarketMaker(Strategy):
         if last is None:
             self.log.info("No quotes yet")
             return
-        # self.log.info('on event:' + repr(last))
 
-        if self.buy_order and (self.buy_order.is_emulated or self.buy_order.is_open):
-            self.cancel_order(self.buy_order)
+        open_orders = self.cache.orders_open()
+        # print('strategy open orders:', open_orders)
+
+        # if buy_order:
+        #     self.cancel_order(buy_order)
         self.create_buy_order(last)
 
-        if self.sell_order and (self.sell_order.is_emulated or self.sell_order.is_open):
-            self.cancel_order(self.sell_order)
+        # if self.sell_order:
+        #     self.cancel_order(self.sell_order)
         self.create_sell_order(last)
         return
 
@@ -106,10 +106,12 @@ class VolatilityMarketMaker(Strategy):
         if not self.instrument:
             self.log.error("No instrument loaded")
             return
+        if time.time() - self.last_place_order < 10:
+            return
 
-        print(last.bid_price, (self.atr.value * self.config.atr_multiple))
+        print('buying:', last.bid_price, self.atr.value, self.config.atr_multiple)
         # price: Decimal = last.bid_price - (self.atr.value * self.config.atr_multiple)
-        price: Decimal = last.bid_price - 50
+        price: Decimal = last.bid_price - 500
         order: LimitOrder = self.order_factory.limit(
             instrument_id=self.config.instrument_id,
             order_side=OrderSide.BUY,
@@ -120,17 +122,19 @@ class VolatilityMarketMaker(Strategy):
             emulation_trigger=TriggerType[self.config.emulation_trigger],
             client_order_id=gate_client_order_id(),
         )
-        self.buy_order = order
         self.submit_order(order, client_id=self.client_id)
+        self.last_place_order = time.time()
 
     def create_sell_order(self, last: QuoteTick) -> None:
         if not self.instrument:
             self.log.error("No instrument loaded")
             return
+        if time.time() - self.last_place_order < 10:
+            return
 
-        print(last.ask_price, (self.atr.value * self.config.atr_multiple))
+        print('selling:', last.ask_price, self.atr.value, self.config.atr_multiple)
         # price: Decimal = last.ask_price + (self.atr.value * self.config.atr_multiple)
-        price: Decimal = last.ask_price + 50
+        price: Decimal = last.ask_price + 500
         order: LimitOrder = self.order_factory.limit(
             instrument_id=self.config.instrument_id,
             order_side=OrderSide.SELL,
@@ -143,6 +147,7 @@ class VolatilityMarketMaker(Strategy):
         )
         self.sell_order = order
         self.submit_order(order, client_id=self.client_id)
+        self.last_place_order = time.time()
 
     def on_event(self, event: Event) -> None:
         # print('on event:' + repr(event))
