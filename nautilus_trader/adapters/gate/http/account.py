@@ -90,7 +90,7 @@ class GateAccountHttpAPI:
         except:
             exception_text = traceback.format_exc()
             if 'POC' in exception_text:
-                self._log.warning(f"Failed to submit [{side}-{symbol} {quantity} on {price}] due to POC: {exception_text}")
+                print(f"Failed to submit [{side}-{symbol} {quantity} on {price}] due to POC: {exception_text}")
             else:
                 raise
 
@@ -106,7 +106,7 @@ class GateAccountHttpAPI:
         except Exception as e:
             exception_text = traceback.format_exc()
             if 'not found' in exception_text:
-                self._log.warning(f"Failed to cancel {client_order_id}({venue_order_id}) due to : {repr(e)}")
+                print(f"Failed to cancel {client_order_id}({venue_order_id}) due to : {repr(e)}")
             else:
                 raise
 
