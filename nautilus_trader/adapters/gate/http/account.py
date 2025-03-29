@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import traceback
 
 from nautilus_trader.common.component import LiveClock
 from nautilus_trader.core.correctness import PyCondition
@@ -83,8 +84,15 @@ class GateAccountHttpAPI:
 
     async def place_order(self, product_type: GateProductType, symbol: str, side: GateOrderSide, order_type: GateOrderType, quantity: str,
                           price: str=None, time_in_force: GateTimeInForce=None, client_order_id: str=None, auto_borrow: bool=True) -> GatePlaceOrder:
-        resp = await self.client.place_order(product_type.value, symbol, side.value, order_type.value, quantity, price, time_in_force.value, client_order_id, auto_borrow)
-        return GatePlaceOrder(orderId=resp['id'], orderLinkId=resp['text'])
+        try:
+            resp = await self.client.place_order(product_type.value, symbol, side.value, order_type.value, quantity, price, time_in_force.value, client_order_id, auto_borrow)
+            return GatePlaceOrder(orderId=resp['id'], orderLinkId=resp['text'])
+        except:
+            exception_text = traceback.format_exc()
+            if 'POC' in exception_text:
+                self._log.warning(f"Failed to submit [{side}-{symbol} {quantity} on {price}] due to POC: {exception_text}")
+            else:
+                raise
 
     async def amend_order(self, product_type: GateProductType, symbol: str, venue_order_id: str=None, client_order_id: str=None,
                           quantity: str=None, price: str=None) -> GateAmendOrder:
@@ -92,8 +100,16 @@ class GateAccountHttpAPI:
         return GateAmendOrder(orderId=resp['id'], orderLinkId=resp['text'])
 
     async def cancel_order(self, product_type: GateProductType, symbol: str, venue_order_id: str=None, client_order_id: str=None) -> GateCancelOrder:
-        resp = await self.client.cancel_order(product_type.value, symbol, venue_order_id, client_order_id)
-        return GateCancelOrder(orderId=resp['id'], orderLinkId=resp['text'])
+        try:
+            resp = await self.client.cancel_order(product_type.value, symbol, venue_order_id, client_order_id)
+            return GateCancelOrder(orderId=resp['id'], orderLinkId=resp['text'])
+        except Exception as e:
+            exception_text = traceback.format_exc()
+            if 'not found' in exception_text:
+                self._log.warning(f"Failed to cancel {client_order_id}({venue_order_id}) due to : {repr(e)}")
+            else:
+                raise
+
 
     async def cancel_all_orders(self, product_type: GateProductType, symbol: str) -> list[Any]:
         resp = await self.client.cancel_all_orders(product_type.value, symbol)

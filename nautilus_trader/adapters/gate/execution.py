@@ -424,7 +424,7 @@ class GateExecutionClient(LiveExecutionClient):
         gate_symbol = GateSymbol(order.instrument_id.symbol.value)
         time_in_force = self._determine_time_in_force(order)
         order_side = self._enum_parser.parse_nautilus_order_side(order.side)
-        return await self._http_clt.place_order(
+        await self._http_clt.place_order(
             product_type=gate_symbol.product_type,
             symbol=gate_symbol.raw_symbol,
             side=order_side,
@@ -504,6 +504,8 @@ class GateExecutionClient(LiveExecutionClient):
                 elif order['event'] == 'update' or order['finish_as'] == 'filled':
                     # print('\n\n\nfilled: ', cache_order, report)
                     instrument = self._cache.instrument(instrument_id)
+                    last_qty: Quantity = instrument.make_qty(str(report.filled_qty))
+                    last_px: Price = instrument.make_price(str(report.avg_px))
                     quote_currency = instrument.quote_currency
                     commission: Money = Money(gate_order.cumExecFee, quote_currency)
                     self.generate_order_filled(
@@ -515,8 +517,8 @@ class GateExecutionClient(LiveExecutionClient):
                         trade_id=None,
                         order_side=report.order_side,
                         order_type=report.order_type,
-                        last_qty=report.filled_qty,
-                        last_px=report.avg_px,
+                        last_qty=last_qty,
+                        last_px=last_px,
                         quote_currency=quote_currency,
                         commission=commission,
                         liquidity_side=LiquiditySide.MAKER,
