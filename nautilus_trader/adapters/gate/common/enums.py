@@ -110,6 +110,7 @@ class GateOrderSide(Enum):
 class GateOrderType(Enum):
     MARKET = "market"
     LIMIT = "limit"
+    LIMIT_BORROW = "limit_borrow"
 
 
 @unique
@@ -161,6 +162,7 @@ class GateEnumParser:
         }
         self.gate_to_nautilus_order_type = {
             (GateOrderType.LIMIT): OrderType.LIMIT,
+            (GateOrderType.LIMIT_BORROW): OrderType.LIMIT,
             (GateOrderType.MARKET): OrderType.MARKET,
         }
 
