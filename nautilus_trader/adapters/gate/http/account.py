@@ -63,8 +63,15 @@ class GateAccountHttpAPI:
         order_id: str | None,
     ) -> GateOrder:
         print('query order: ', client_order_id, order_id, symbol)
-        order = await self.client.fetch_order(product_type, symbol, client_order_id, order_id)
-        return GateOrder.from_dict(order)
+        try:
+            order = await self.client.fetch_order(product_type, symbol, client_order_id, order_id)
+            return GateOrder.from_dict(order)
+        except Exception as e:
+            exception_text = traceback.format_exc()
+            if 'not found' in exception_text:
+                print(f"Order {client_order_id} is has been closed due to : {repr(e)}")
+            else:
+                raise
 
     async def query_trade_history(
         self,
@@ -90,7 +97,7 @@ class GateAccountHttpAPI:
         except:
             exception_text = traceback.format_exc()
             if 'POC' in exception_text:
-                print(f"Failed to submit [{side}-{symbol} {quantity} on {price}] due to POC: {exception_text}")
+                print(f"Failed to submit [{side}-{symbol} {quantity} on {price}] due to POC")
             else:
                 raise
 

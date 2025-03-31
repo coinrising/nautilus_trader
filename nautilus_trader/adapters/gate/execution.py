@@ -252,6 +252,9 @@ class GateExecutionClient(LiveExecutionClient):
                 client_order_id=client_order_id.value if client_order_id else None,
                 order_id=venue_order_id.value if venue_order_id else None,
             )
+            if target_order is None:
+                self._log.error(f"Order {client_order_id} not found")
+                return None
             order_link_id = target_order.orderLinkId
             client_order_id = ClientOrderId(order_link_id) if order_link_id else None
             venue_order_id = VenueOrderId(target_order.orderId)
@@ -514,7 +517,7 @@ class GateExecutionClient(LiveExecutionClient):
                         client_order_id=report.client_order_id,
                         venue_order_id=report.venue_order_id,
                         venue_position_id=None,
-                        trade_id=None,
+                        trade_id=TradeId(f"{self._clock.timestamp_ns()}"),
                         order_side=report.order_side,
                         order_type=report.order_type,
                         last_qty=last_qty,
