@@ -70,7 +70,7 @@ class GateWebSocketClient:
                     await self._subscribe_all()
                 try:
                     raw = await asyncio.wait_for(self._client.recv(), timeout=5)
-                except asyncio.TimeoutError | websockets.exceptions.ConnectionClosedError:
+                except asyncio.TimeoutError:
                     continue
                 msg = json.loads(raw)
                 self._log.debug(f"ws received {msg['channel']}")
@@ -82,12 +82,13 @@ class GateWebSocketClient:
                 await self._handler(msg)
             except:
                 exception_text = traceback.format_exc()
-                self._log.error(exception_text)
-                if self._client is not None:
-                    try:
-                        await self._client.close()
-                    except:
-                        pass
+                if 'ConnectionClosedError' not in exception_text:
+                    self._log.error(exception_text)
+                    if self._client is not None:
+                        try:
+                            await self._client.close()
+                        except:
+                            pass
                 self._client = None
 
     async def _heartbeat(self):
