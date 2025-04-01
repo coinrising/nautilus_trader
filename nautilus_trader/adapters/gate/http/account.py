@@ -14,7 +14,7 @@ from nautilus_trader.adapters.gate.http.client import GateHttpClient
 from nautilus_trader.adapters.gate.schemas.account.balance import GateWalletBalance, GateCoinBalance
 from nautilus_trader.adapters.gate.schemas.account.fee_rate import GateFeeRate
 from nautilus_trader.adapters.gate.schemas.order import GateOrder, GatePlaceOrder, GateAmendOrder, GateCancelOrder, GateCancelAllOrder
-from nautilus_trader.adapters.gate.schemas.trade import GateExecution
+from nautilus_trader.adapters.gate.schemas.trade import GateTrade
 from nautilus_trader.adapters.gate.schemas.position import GatePosition
 
 
@@ -62,7 +62,7 @@ class GateAccountHttpAPI:
         client_order_id: str | None,
         order_id: str | None,
     ) -> GateOrder:
-        print('query order: ', client_order_id, order_id, symbol)
+        print('querying order: ', client_order_id, order_id, symbol)
         try:
             order = await self.client.fetch_order(product_type, symbol, client_order_id, order_id)
             return GateOrder.from_dict(order)
@@ -77,15 +77,11 @@ class GateAccountHttpAPI:
         self,
         product_type: GateProductType,
         symbol: str=None,
-    ) -> list[GateExecution]:
+    ) -> list[GateTrade]:
         trade_history = await self.client.fetch_trade_history(product_type, symbol)
         trades = []
         for trade in trade_history:
-            trades.append(GateExecution(execId=trade['id'], orderId=trade['order_id'], clientOrderId=trade['text'],
-                                        side=GateOrderSide(trade['side']), execPrice=trade['price'], execQty=trade['amount'],
-                                        execFee=trade['fee'], feeCurrency=trade['fee_currency'], execTime=trade['create_time_ms'],
-                                        isMaker=(trade['role'] == 'maker'), seq=trade['sequence_id']
-                                        ))
+            trades.append(GateTrade.from_dict(trade))
         return trades
 
 

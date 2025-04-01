@@ -70,7 +70,7 @@ class GateWebSocketClient:
                     await self._subscribe_all()
                 try:
                     raw = await asyncio.wait_for(self._client.recv(), timeout=5)
-                except asyncio.TimeoutError:
+                except asyncio.TimeoutError | websockets.exceptions.ConnectionClosedError:
                     continue
                 msg = json.loads(raw)
                 self._log.debug(f"ws received {msg['channel']}")
@@ -179,4 +179,8 @@ class GateWebSocketClient:
 
     async def subscribe_orders_update(self, symbol: str=None) -> None:
         subscription = {'channel': 'spot.orders', 'payload': [symbol or '!all']}
+        await self._subscribe(subscription, True)
+
+    async def subscribe_trades_update(self, symbol: str=None) -> None:
+        subscription = {'channel': 'spot.usertrades', 'payload': [symbol or '!all']}
         await self._subscribe(subscription, True)

@@ -28,7 +28,7 @@ from nautilus_trader.live.retry import RetryManagerPool
 from nautilus_trader.model.enums import AccountType
 from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.enums import OrderType
-from nautilus_trader.model.enums import OrderStatus
+from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.enums import LiquiditySide
 from nautilus_trader.model.enums import account_type_to_str
@@ -57,7 +57,8 @@ from nautilus_trader.adapters.gate.http.client import GateHttpClient
 from nautilus_trader.adapters.gate.http.errors import GateError
 from nautilus_trader.adapters.gate.http.errors import should_retry
 from nautilus_trader.adapters.gate.providers import GateInstrumentProvider
-from nautilus_trader.adapters.gate.schemas.order import GateOrder, GateOrderEvent
+from nautilus_trader.adapters.gate.schemas.order import GateOrder
+from nautilus_trader.adapters.gate.schemas.trade import GateTrade
 from nautilus_trader.adapters.gate.websocket.client import GateWebSocketClient
 
 class GateExecutionClient(LiveExecutionClient):
@@ -158,6 +159,7 @@ class GateExecutionClient(LiveExecutionClient):
             await ws_client.connect()
             await ws_client.subscribe_balances_update()
             await ws_client.subscribe_orders_update()
+            await ws_client.subscribe_trades_update()
 
     async def _disconnect(self):
         for ws_client in self._ws_clients.values():
@@ -453,6 +455,8 @@ class GateExecutionClient(LiveExecutionClient):
                 await self._update_account_state()
             elif topic == 'orders':
                 self._handle_account_order_update(product_type, msg)
+            elif topic == 'usertrades':
+                self._handle_account_trade_update(product_type, msg)
             else:
                 raise ValueError(f"Unknown websocket channel: {channel}")
         except Exception as e:
@@ -462,7 +466,6 @@ class GateExecutionClient(LiveExecutionClient):
     def _handle_account_order_update(self, product_type: str, msg: dict) -> None:
         try:
             result = msg['result']
-            # print('\n\n\nresult:', result)
             for order in result:
                 gate_order = GateOrder.from_ws_dict(order)
                 instrument_id = self._get_cached_instrument_id(gate_order.symbol, GateProductType(product_type))
@@ -495,7 +498,7 @@ class GateExecutionClient(LiveExecutionClient):
                     return
                 
                 if order['event'] == 'put':
-                    # print('\n\n\naccepted: ', cache_order, report)
+                    self._log('order accepted: ', cache_order, report)
                     self.generate_order_accepted(
                         strategy_id=strategy_id,
                         instrument_id=report.instrument_id,
@@ -503,33 +506,9 @@ class GateExecutionClient(LiveExecutionClient):
                         venue_order_id=report.venue_order_id,
                         ts_event=report.ts_last,
                     )
-                # elif gate_order.status in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}:  # ok
-                elif order['event'] == 'update' or order['finish_as'] == 'filled':
-                    # print('\n\n\nfilled: ', cache_order, report)
-                    instrument = self._cache.instrument(instrument_id)
-                    last_qty: Quantity = instrument.make_qty(str(report.filled_qty))
-                    last_px: Price = instrument.make_price(str(report.avg_px))
-                    quote_currency = instrument.quote_currency
-                    commission: Money = Money(gate_order.cumExecFee, quote_currency)
-                    self.generate_order_filled(
-                        strategy_id=strategy_id,
-                        instrument_id=report.instrument_id,
-                        client_order_id=report.client_order_id,
-                        venue_order_id=report.venue_order_id,
-                        venue_position_id=None,
-                        trade_id=TradeId(f"{self._clock.timestamp_ns()}"),
-                        order_side=report.order_side,
-                        order_type=report.order_type,
-                        last_qty=last_qty,
-                        last_px=last_px,
-                        quote_currency=quote_currency,
-                        commission=commission,
-                        liquidity_side=LiquiditySide.MAKER,
-                        ts_event=report.ts_last,
-                    )
                 elif order['event'] == 'finish':
                     if order['finish_as'] == 'cancelled':
-                        # print('\n\n\ncancel: ', cache_order, report)
+                        self._log('order cancelled: ', cache_order, report)
                         self.generate_order_canceled(
                             strategy_id=strategy_id,
                             instrument_id=report.instrument_id,
@@ -538,7 +517,7 @@ class GateExecutionClient(LiveExecutionClient):
                             ts_event=report.ts_last,
                         )
                     else:
-                        # print('\n\n\nreject: ', cache_order, report)
+                        self._log('order rejected: ', cache_order, report)
                         self.generate_order_rejected(
                             strategy_id=strategy_id,
                             instrument_id=report.instrument_id,
@@ -547,6 +526,64 @@ class GateExecutionClient(LiveExecutionClient):
                             reason=order['finish_as'],
                             ts_event=report.ts_last,
                         )
+        except Exception:
+            exception_text = traceback.format_exc()
+            self._log.error(f'Failed to handle order update: {exception_text}')
+
+    def _handle_account_trade_update(self, product_type: str, msg: dict) -> None:
+        try:
+            result = msg['result']
+            for raw_trade in result:
+                gate_trade = GateTrade.from_dict(raw_trade)
+                instrument_id = self._get_cached_instrument_id(gate_trade.symbol, GateProductType(product_type))
+                client_order_id = ClientOrderId(gate_trade.orderLinkId) if gate_trade.orderLinkId else None
+                venue_order_id = VenueOrderId(gate_trade.orderId)
+
+                order_side: OrderSide = self._enum_parser.parse_gate_order_side(gate_trade.side)
+                if client_order_id is None:
+                    client_order_id = self._cache.client_order_id(venue_order_id)
+                if client_order_id is None:
+                    self._log.debug(
+                        f"Cannot process order execution for {venue_order_id!r}: no `ClientOrderId` found (most likely due to being an external order)",
+                    )
+                    return
+                order = self._cache.order(client_order_id)
+                if order is None:
+                    self._log.debug(
+                        f"Cannot process order execution for {venue_order_id!r}: no `order` found (most likely due to being an external order)",
+                    )
+                    return
+                else:
+                    strategy_id = order.strategy_id
+                    order_type = order.order_type
+
+                instrument = self._cache.instrument(instrument_id)
+                if instrument is None:
+                    raise ValueError(f"Cannot handle trade event: instrument {instrument_id} not found")
+
+                quote_currency = instrument.quote_currency
+                is_maker = gate_trade.isMaker
+
+                last_qty: Quantity = instrument.make_qty(gate_trade.execQty)
+                last_px: Price = instrument.make_price(gate_trade.execPrice)
+                commission: Money = Money(gate_trade.execFee, quote_currency)
+
+                self.generate_order_filled(
+                    strategy_id=strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=client_order_id,
+                    venue_order_id=venue_order_id,
+                    venue_position_id=None,
+                    trade_id=TradeId(gate_trade.execId),
+                    order_side=order_side,
+                    order_type=order_type,
+                    last_qty=last_qty,
+                    last_px=last_px,
+                    quote_currency=quote_currency,
+                    commission=commission,
+                    liquidity_side=LiquiditySide.MAKER if is_maker else LiquiditySide.TAKER,
+                    ts_event=millis_to_nanos(float(gate_trade.execTime)),
+                )
         except Exception:
             exception_text = traceback.format_exc()
             self._log.error(f'Failed to handle order update: {exception_text}')

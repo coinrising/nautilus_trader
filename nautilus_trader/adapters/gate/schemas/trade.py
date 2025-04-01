@@ -20,10 +20,10 @@ from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
 
 
-class GateExecution(msgspec.Struct, omit_defaults=True, kw_only=True):
+class GateTrade(msgspec.Struct, omit_defaults=True, kw_only=True):
     execId: str  # "id": "1232893232",
     orderId: str  # "order_id": "4128442423",
-    clientOrderId: str  # "text": "t-test"
+    orderLinkId: str  # "text": "t-test"
     side: GateOrderSide  # "side": "buy",
     execFee: str  # "fee": "0.0005",
     execPrice: str  # "price": "0.03",
@@ -33,6 +33,14 @@ class GateExecution(msgspec.Struct, omit_defaults=True, kw_only=True):
     isMaker: bool  # "role": "maker",
     seq: int  # "sequence_id": "588018",
 
+    @staticmethod
+    def from_dict(trade):
+        return GateTrade(execId=trade['id'], orderId=trade['order_id'], orderLinkId=trade['text'],
+                         side=GateOrderSide(trade['side']), execPrice=trade['price'], execQty=trade['amount'],
+                         execFee=trade['fee'], feeCurrency=trade['fee_currency'], execTime=trade['create_time_ms'],
+                         isMaker=(trade['role'] == 'maker'), seq=trade['sequence_id']
+                         )
+
     def parse_to_fill_report(
         self,
         account_id: AccountId,
@@ -41,7 +49,7 @@ class GateExecution(msgspec.Struct, omit_defaults=True, kw_only=True):
         enum_parser: GateEnumParser,
         ts_init: int,
     ) -> OrderStatusReport:
-        client_order_id = ClientOrderId(self.clientOrderId) if self.clientOrderId else None
+        client_order_id = ClientOrderId(self.orderLinkId) if self.orderLinkId else None
         return FillReport(
             client_order_id=client_order_id,
             venue_order_id=VenueOrderId(str(self.execId)),
