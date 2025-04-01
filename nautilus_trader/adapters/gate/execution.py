@@ -516,6 +516,8 @@ class GateExecutionClient(LiveExecutionClient):
                             venue_order_id=report.venue_order_id,
                             ts_event=report.ts_last,
                         )
+                    elif order['finish_as'] == 'filled':
+                        self._log.info(f'order filled: {cache_order}, {report}')
                     else:
                         self._log.info(f'order rejected: {cache_order}, {report}')
                         self.generate_order_rejected(
