@@ -35,7 +35,7 @@ class GateTrade(msgspec.Struct, omit_defaults=True, kw_only=True):
 
     @staticmethod
     def from_dict(trade):
-        return GateTrade(execId=trade['id'], orderId=trade['order_id'], orderLinkId=trade['text'],
+        return GateTrade(execId=str(trade['id']), orderId=trade['order_id'], orderLinkId=trade['text'],
                          side=GateOrderSide(trade['side']), execPrice=trade['price'], execQty=trade['amount'],
                          execFee=trade['fee'], feeCurrency=trade['fee_currency'], execTime=trade['create_time_ms'],
                          isMaker=(trade['role'] == 'maker'), seq=trade['sequence_id']
@@ -43,7 +43,7 @@ class GateTrade(msgspec.Struct, omit_defaults=True, kw_only=True):
 
     @staticmethod
     def from_ws_dict(trade):
-        return GateTrade(execId=trade['id'], orderId=trade['order_id'], orderLinkId=trade['text'],
+        return GateTrade(execId=str(trade['id']), orderId=trade['order_id'], orderLinkId=trade['text'],
                          side=GateOrderSide(trade['side']), execPrice=trade['price'], execQty=trade['amount'],
                          execFee=trade['fee'], feeCurrency=trade['fee_currency'], execTime=trade['create_time_ms'],
                          isMaker=(trade['role'] == 'maker'), seq=None

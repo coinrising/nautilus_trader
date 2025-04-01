@@ -255,7 +255,7 @@ class GateExecutionClient(LiveExecutionClient):
                 order_id=venue_order_id.value if venue_order_id else None,
             )
             if target_order is None:
-                self._log.error(f"Order {client_order_id} not found")
+                self._log.info(f"Order {client_order_id} not found")
                 return None
             order_link_id = target_order.orderLinkId
             client_order_id = ClientOrderId(order_link_id) if order_link_id else None
@@ -603,7 +603,7 @@ class GateExecutionClient(LiveExecutionClient):
     async def _cancel_order(self, command: CancelOrder) -> None:
         order: Order | None = self._cache.order(command.client_order_id)
         if order is None:
-            self._log.error(f"{command.client_order_id!r} not found in cache")
+            self._log.info(f"{command.client_order_id!r} not found in cache")
             return
 
         if order.is_closed:
