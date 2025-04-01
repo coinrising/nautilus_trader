@@ -498,7 +498,7 @@ class GateExecutionClient(LiveExecutionClient):
                     return
                 
                 if order['event'] == 'put':
-                    self._log.info('order accepted: ', cache_order, report)
+                    self._log.info(f'order accepted: {cache_order}, {report}')
                     self.generate_order_accepted(
                         strategy_id=strategy_id,
                         instrument_id=report.instrument_id,
@@ -508,7 +508,7 @@ class GateExecutionClient(LiveExecutionClient):
                     )
                 elif order['event'] == 'finish':
                     if order['finish_as'] == 'cancelled':
-                        self._log.info('order cancelled: ', cache_order, report)
+                        self._log.info(f'order cancelled: {cache_order}, {report}')
                         self.generate_order_canceled(
                             strategy_id=strategy_id,
                             instrument_id=report.instrument_id,
@@ -517,7 +517,7 @@ class GateExecutionClient(LiveExecutionClient):
                             ts_event=report.ts_last,
                         )
                     else:
-                        self._log.info('order rejected: ', cache_order, report)
+                        self._log.info(f'order rejected: {cache_order}, {report}')
                         self.generate_order_rejected(
                             strategy_id=strategy_id,
                             instrument_id=report.instrument_id,
