@@ -41,6 +41,14 @@ class GateTrade(msgspec.Struct, omit_defaults=True, kw_only=True):
                          isMaker=(trade['role'] == 'maker'), seq=trade['sequence_id']
                          )
 
+    @staticmethod
+    def from_ws_dict(trade):
+        return GateTrade(execId=trade['id'], orderId=trade['order_id'], orderLinkId=trade['text'],
+                         side=GateOrderSide(trade['side']), execPrice=trade['price'], execQty=trade['amount'],
+                         execFee=trade['fee'], feeCurrency=trade['fee_currency'], execTime=trade['create_time_ms'],
+                         isMaker=(trade['role'] == 'maker'), seq=None
+                         )
+
     def parse_to_fill_report(
         self,
         account_id: AccountId,
