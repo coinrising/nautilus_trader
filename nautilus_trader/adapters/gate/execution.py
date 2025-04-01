@@ -522,7 +522,6 @@ class GateExecutionClient(LiveExecutionClient):
                             strategy_id=strategy_id,
                             instrument_id=report.instrument_id,
                             client_order_id=report.client_order_id,
-                            venue_order_id=report.venue_order_id,
                             reason=order['finish_as'],
                             ts_event=report.ts_last,
                         )
