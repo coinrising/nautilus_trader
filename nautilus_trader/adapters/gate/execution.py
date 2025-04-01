@@ -534,7 +534,7 @@ class GateExecutionClient(LiveExecutionClient):
             result = msg['result']
             for raw_trade in result:
                 gate_trade = GateTrade.from_ws_dict(raw_trade)
-                instrument_id = self._get_cached_instrument_id(gate_trade.symbol, GateProductType(product_type))
+                instrument_id = self._get_cached_instrument_id(raw_trade["currency_pair"], GateProductType(product_type))
                 client_order_id = ClientOrderId(gate_trade.orderLinkId) if gate_trade.orderLinkId else None
                 venue_order_id = VenueOrderId(gate_trade.orderId)
 
