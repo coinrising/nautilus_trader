@@ -12,7 +12,16 @@ from typing import Any
 from nautilus_trader.common.component import LiveClock
 from nautilus_trader.common.component import Logger
 from nautilus_trader.common.enums import LogColor
-
+from nautilus_trader.adapters.gate.common.enums import GateOrderSide
+from nautilus_trader.adapters.gate.common.enums import GateOrderType
+from nautilus_trader.adapters.gate.common.enums import GateProductType
+from nautilus_trader.adapters.gate.common.enums import GateTimeInForce
+# from nautilus_trader.adapters.gate.http.client import GateHttpClient
+# from nautilus_trader.adapters.gate.schemas.account.balance import GateWalletBalance, GateCoinBalance
+# from nautilus_trader.adapters.gate.schemas.account.fee_rate import GateFeeRate
+# from nautilus_trader.adapters.gate.schemas.order import GateOrder, GatePlaceOrder, GateAmendOrder, GateCancelOrder, GateCancelAllOrder
+# from nautilus_trader.adapters.gate.schemas.trade import GateTrade
+# from nautilus_trader.adapters.gate.schemas.position import GatePosition
 
 class GateWebSocketClient:
     def __init__(
@@ -173,7 +182,7 @@ class GateWebSocketClient:
     ################################################################################
     # Private
     ################################################################################
-
+    # status update
     async def subscribe_balances_update(self) -> None:
         subscription = {'channel': 'spot.balances'}
         await self._subscribe(subscription, True)
@@ -185,3 +194,63 @@ class GateWebSocketClient:
     async def subscribe_trades_update(self, symbol: str=None) -> None:
         subscription = {'channel': 'spot.usertrades', 'payload': [symbol or '!all']}
         await self._subscribe(subscription, True)
+
+    # order action
+    async def api_login(self) -> None:
+        LoginDict = {
+            'time': int(time.time()),
+            'channel': 'spot.login', 
+            "event": "api",
+            "payload": {
+                "req_id": f"login_{time.time()}",
+                'req_param': {
+                    "req_id": f"login_{time.time()}",
+                    "api_key": self.api_key,
+                    "req_header": None, #!TODO
+                    "signature": self._gen_sign("spot.login", "api", int(time.time())),
+                    "timestamp": str(int(time.time())),
+                }
+            }
+        }
+        await self._send(LoginDict)
+
+    async def place_order(self, product_type: GateProductType, symbol: str, side: GateOrderSide, order_type: GateOrderType, quantity: str,
+                          price: str=None, time_in_force: GateTimeInForce=None, client_order_id: str=None, auto_borrow: bool=True) -> None:
+        PlaceOrderDict = {
+            'time': int(time.time()),
+            'channel': 'spot.order_place', 
+            "event": "api",
+            "payload": {
+                "req_id": str(time.time()),
+                'req_param': {
+                    'account': product_type,
+                    'currency_pair': symbol,
+                    'side': side,
+                    'type': order_type,
+                    'amount': quantity,
+                    'price': price,
+                    'time_in_force': time_in_force,
+                    'text': client_order_id,
+                    'auto_borrow': auto_borrow,
+                    "auto_repay": False,
+                }
+            }
+        }
+        await self._send(PlaceOrderDict)
+
+    async def cancel_order(self, product_type: GateProductType, symbol: str, venue_order_id: str=None, client_order_id: str=None) -> None:
+        CancelOrderDict = {
+            'time': int(time.time()),
+            'channel': 'spot.order_cancel', 
+            "event": "api",
+            "payload": {
+                "req_id": str(time.time()),
+                'req_param': {
+                    "currency_pair": symbol,
+                    "order_id": venue_order_id if venue_order_id else client_order_id,
+                }
+            }
+        }
+        await self._send(CancelOrderDict)
+
+    

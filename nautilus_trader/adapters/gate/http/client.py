@@ -123,8 +123,7 @@ class GateHttpClient:
             'time_in_force': time_in_force,
             'text': text,
             'auto_borrow': auto_borrow,
-            "auto_repay": True
-
+            "auto_repay": False,
         }
         return self._sign_request('POST', f'/api/v4/spot/orders', payload=params)
 

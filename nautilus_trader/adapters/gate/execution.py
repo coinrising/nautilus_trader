@@ -97,14 +97,10 @@ class GateExecutionClient(LiveExecutionClient):
         # Configuration
         self._product_types = product_types
         self._use_ws_trade_api = config.use_ws_trade_api
-        self._use_ws_execution_fast = config.use_ws_execution_fast
-        self._use_http_batch_api = config.use_http_batch_api
 
         self._log.info(f"Account type: {account_type_to_str(account_type)}", LogColor.BLUE)
         self._log.info(f"Product types: {[p.value for p in product_types]}", LogColor.BLUE)
-        self._log.info(f"{config.use_ws_execution_fast=}", LogColor.BLUE)
         self._log.info(f"{config.use_ws_trade_api=}", LogColor.BLUE)
-        self._log.info(f"{config.use_http_batch_api=}", LogColor.BLUE)
         self._log.info(f"{config.max_retries=}", LogColor.BLUE)
         self._log.info(f"{config.retry_delay=}", LogColor.BLUE)
         self._log.info(f"{config.recv_window_ms=:_}", LogColor.BLUE)
@@ -160,6 +156,8 @@ class GateExecutionClient(LiveExecutionClient):
             await ws_client.subscribe_balances_update()
             await ws_client.subscribe_orders_update()
             await ws_client.subscribe_trades_update()
+            if self._use_ws_trade_api:
+                ws_client.login()
 
     async def _disconnect(self):
         for ws_client in self._ws_clients.values():
@@ -429,18 +427,29 @@ class GateExecutionClient(LiveExecutionClient):
         gate_symbol = GateSymbol(order.instrument_id.symbol.value)
         time_in_force = self._determine_time_in_force(order)
         order_side = self._enum_parser.parse_nautilus_order_side(order.side)
-        await self._http_clt.place_order(
-            product_type=gate_symbol.product_type,
-            symbol=gate_symbol.raw_symbol,
-            side=order_side,
-            order_type=GateOrderType.LIMIT,
-            quantity=str(order.quantity),
-            price=str(order.price),
-            time_in_force=time_in_force,
-            client_order_id=str(order.client_order_id),
-            auto_borrow=True,  # 调试用
-        )
-
+        if not self._use_ws_trade_api:
+            await self._http_clt.place_order(
+                product_type=gate_symbol.product_type,
+                symbol=gate_symbol.raw_symbol,
+                side=order_side,
+                order_type=GateOrderType.LIMIT,
+                quantity=str(order.quantity),
+                price=str(order.price),
+                time_in_force=time_in_force,
+                client_order_id=str(order.client_order_id),
+                auto_borrow=True,  # 调试用
+            )
+        else:
+            # 通过websocket下单
+            await self._ws_clients[gate_symbol.product_type].place_order(
+                symbol=gate_symbol.raw_symbol,
+                side=order_side,
+                order_type=GateOrderType.LIMIT,
+                quantity=str(order.quantity),
+                price=str(order.price),
+                time_in_force=time_in_force,
+                client_order_id=str(order.client_order_id),
+            )
 
     # -- WEBSOCKET HANDLERS -------------------------------------------------------------------------
 
@@ -457,11 +466,21 @@ class GateExecutionClient(LiveExecutionClient):
                 self._handle_account_order_update(product_type, msg)
             elif topic == 'usertrades':
                 self._handle_account_trade_update(product_type, msg)
+            elif topic == "order_place":
+                self._handle_order_place(product_type, msg)
+            elif topic == "order_cancel":
+                self._handle_order_cancel(product_type, msg)
             else:
                 raise ValueError(f"Unknown websocket channel: {channel}")
         except Exception as e:
             exception_text = traceback.format_exc()
             self._log.error(f"Failed to handle websocket msg {msg} with: {exception_text}")
+
+    def _handle_order_cancel(self, product_type: str, msg: dict) -> None:
+        pass
+
+    def _handle_order_place(self, product_type: str, msg: dict) -> None:
+        pass
 
     def _handle_account_order_update(self, product_type: str, msg: dict) -> None:
         try:
@@ -617,27 +636,34 @@ class GateExecutionClient(LiveExecutionClient):
         symbol = GateSymbol(command.instrument_id.symbol.value)
         client_order_id = command.client_order_id.value
         venue_order_id = str(command.venue_order_id) if command.venue_order_id else None
-
-        async with self._retry_manager_pool as retry_manager:
-            await retry_manager.run(
-                "cancel_order",
-                [client_order_id, venue_order_id],
-                self._http_clt.cancel_order,
-                symbol.product_type,
-                symbol.raw_symbol,
-                venue_order_id=venue_order_id,
-                client_order_id=client_order_id,
-            )
-            if not retry_manager.result:
-                self.generate_order_cancel_rejected(
-                    order.strategy_id,
-                    order.instrument_id,
-                    order.client_order_id,
-                    order.venue_order_id,
-                    retry_manager.message,
-                    self._clock.timestamp_ns(),
+        
+        if not self._use_ws_trade_api:
+            async with self._retry_manager_pool as retry_manager:
+                await retry_manager.run(
+                    "cancel_order",
+                    [client_order_id, venue_order_id],
+                    self._http_clt.cancel_order,
+                    symbol.product_type,
+                    symbol.raw_symbol,
+                    venue_order_id=venue_order_id,
+                    client_order_id=client_order_id,
                 )
-
+                if not retry_manager.result:
+                    self.generate_order_cancel_rejected(
+                        order.strategy_id,
+                        order.instrument_id,
+                        order.client_order_id,
+                        order.venue_order_id,
+                        retry_manager.message,
+                        self._clock.timestamp_ns(),
+                    )
+        else:
+            # 通过websocket取消订单
+            await self._ws_clients[symbol.product_type].cancel_order(
+                symbol=symbol.raw_symbol,
+                client_order_id=client_order_id,
+                order_id=venue_order_id,
+            )
     async def _cancel_all_orders(self, command: CancelAllOrders) -> None:
         gate_symbol = GateSymbol(command.instrument_id.symbol.value)
 
