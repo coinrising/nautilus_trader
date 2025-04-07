@@ -451,7 +451,7 @@ class GateExecutionClient(LiveExecutionClient):
             )
         else:
             # 通过websocket下单
-            self._log.error(f"通过websocket下单: {order}")
+            # self._log.error(f"通过websocket下单: {order}")
             await self._ws_clients[gate_symbol.product_type].place_order(
                 product_type=gate_symbol.product_type,
                 symbol=gate_symbol.raw_symbol,
