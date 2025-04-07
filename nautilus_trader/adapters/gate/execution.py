@@ -157,7 +157,7 @@ class GateExecutionClient(LiveExecutionClient):
             await ws_client.subscribe_orders_update()
             await ws_client.subscribe_trades_update()
             if self._use_ws_trade_api:
-                ws_client.login()
+                await ws_client.api_login()
 
     async def _disconnect(self):
         for ws_client in self._ws_clients.values():
@@ -442,6 +442,7 @@ class GateExecutionClient(LiveExecutionClient):
         else:
             # 通过websocket下单
             await self._ws_clients[gate_symbol.product_type].place_order(
+                product_type=gate_symbol.product_type,
                 symbol=gate_symbol.raw_symbol,
                 side=order_side,
                 order_type=GateOrderType.LIMIT,

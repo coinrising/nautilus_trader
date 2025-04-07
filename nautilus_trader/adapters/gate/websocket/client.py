@@ -82,7 +82,7 @@ class GateWebSocketClient:
                 except asyncio.TimeoutError:
                     continue
                 msg = json.loads(raw)
-                self._log.debug(f"ws received {msg['channel']}")
+                print(f"ws received {msg}")
                 if msg['channel'] == 'spot.pong':
                     continue
                 if msg.get('error'):
@@ -197,22 +197,18 @@ class GateWebSocketClient:
 
     # order action
     async def api_login(self) -> None:
-        LoginDict = {
+        login_dict = {
             'time': int(time.time()),
             'channel': 'spot.login', 
             "event": "api",
             "payload": {
-                "req_id": f"login_{time.time()}",
-                'req_param': {
-                    "req_id": f"login_{time.time()}",
-                    "api_key": self.api_key,
-                    "req_header": None, #!TODO
-                    "signature": self._gen_sign("spot.login", "api", int(time.time())),
-                    "timestamp": str(int(time.time())),
-                }
+                "req_id": f"login_{int(time.time() * 1000)}",
+                "api_key": self.api_key,
+                "signature": self._gen_sign("spot.login", "api", int(time.time())),
+                "timestamp": str(int(time.time())),
             }
         }
-        await self._send(LoginDict)
+        await self._send(login_dict)
 
     async def place_order(self, product_type: GateProductType, symbol: str, side: GateOrderSide, order_type: GateOrderType, quantity: str,
                           price: str=None, time_in_force: GateTimeInForce=None, client_order_id: str=None, auto_borrow: bool=True) -> None:
@@ -223,13 +219,13 @@ class GateWebSocketClient:
             "payload": {
                 "req_id": str(time.time()),
                 'req_param': {
-                    'account': product_type,
+                    'account': product_type.value,
                     'currency_pair': symbol,
-                    'side': side,
-                    'type': order_type,
+                    'side': side.value,
+                    'type': order_type.value,
                     'amount': quantity,
                     'price': price,
-                    'time_in_force': time_in_force,
+                    'time_in_force': time_in_force.value,
                     'text': client_order_id,
                     'auto_borrow': auto_borrow,
                     "auto_repay": False,
