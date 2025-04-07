@@ -459,7 +459,7 @@ class GateExecutionClient(LiveExecutionClient):
         try:
             if msg.get('event') in {'subscribe', 'unsubscribe'}:
                 return
-            print('\n\n\nmsg:', msg)
+            # print('\n\n\nmsg:', msg)
             if msg.get("channel"):
                 channel = msg['channel']  # 目前看到的channel的格式都是 spot.*
             else:
@@ -490,6 +490,10 @@ class GateExecutionClient(LiveExecutionClient):
 
     def _handle_order_cancel(self, product_type: str, msg: dict) -> None:
         try:
+            if "errs" in msg["data"]:
+                error_message = msg["data"]["errs"]["message"]
+                self._log.error(f"WebSocket order cancel failed: {error_message}")
+                return
             return GateCancelOrder(orderId=msg['header']['client_id'], orderLinkId=msg["data"]["result"]["req_param"]['text'])
         except Exception:
             exception_text = traceback.format_exc()
@@ -497,13 +501,17 @@ class GateExecutionClient(LiveExecutionClient):
 
     def _handle_order_place(self, product_type: str, msg: dict) -> None:
         try:
+            if "errs" in msg["data"]:
+                error_message = msg["data"]["errs"]["message"]
+                self._log.error(f"WebSocket order place failed: {error_message}")
+                return
             return GatePlaceOrder(orderId=msg['header']['client_id'], orderLinkId=msg["data"]["result"]["req_param"]['text'])
         except Exception:
             exception_text = traceback.format_exc()
-            self._log.error(f'Failed to handle order place: {exception_text}')
             if 'POC' in exception_text:
-                print(f"Failed to submit due to POC")
+                self._log.info(f"Failed to submit due to POC")
             else:
+                self._log.error(f'Failed to handle order place: {exception_text}')
                 raise
 
     def _handle_account_order_update(self, product_type: str, msg: dict) -> None:

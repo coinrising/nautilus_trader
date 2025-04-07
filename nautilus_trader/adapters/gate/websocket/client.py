@@ -82,7 +82,7 @@ class GateWebSocketClient:
                 except asyncio.TimeoutError:
                     continue
                 msg = json.loads(raw)
-                print(f"ws received {msg}")
+                # print(f"ws received {msg}")
                 if msg.get('channel') == 'spot.pong':
                     continue
                 if msg.get('error'):
