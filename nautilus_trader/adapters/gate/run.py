@@ -1,6 +1,7 @@
 import os
 import sys
 sys.path.append(os.path.dirname(os.getcwd()))
+sys.path.append(os.getcwd())
 from decimal import Decimal
 
 from nautilus_trader.adapters.gate.common.enums import GateProductType
@@ -19,8 +20,6 @@ from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.data import BarType
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
-
-
 
 api_key = os.getenv('GATE_API_KEY')
 api_secret = os.getenv('GATE_API_SECRET')

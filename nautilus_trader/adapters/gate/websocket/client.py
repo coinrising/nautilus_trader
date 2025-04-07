@@ -83,7 +83,7 @@ class GateWebSocketClient:
                     continue
                 msg = json.loads(raw)
                 print(f"ws received {msg}")
-                if msg['channel'] == 'spot.pong':
+                if msg.get('channel') == 'spot.pong':
                     continue
                 if msg.get('error'):
                     self._log.error(f"ws received error {msg['error']}")
@@ -197,6 +197,8 @@ class GateWebSocketClient:
 
     # order action
     async def api_login(self) -> None:
+        signature = self._gen_sign("spot.login", "api", int(time.time()))
+        print(f"signature: {signature}")
         login_dict = {
             'time': int(time.time()),
             'channel': 'spot.login', 
@@ -204,7 +206,8 @@ class GateWebSocketClient:
             "payload": {
                 "req_id": f"login_{int(time.time() * 1000)}",
                 "api_key": self.api_key,
-                "signature": self._gen_sign("spot.login", "api", int(time.time())),
+                # "req_header": None,
+                "signature": signature["SIGN"],
                 "timestamp": str(int(time.time())),
             }
         }

@@ -456,10 +456,14 @@ class GateExecutionClient(LiveExecutionClient):
 
     async def _handle_ws_message(self, msg: dict) -> None:
         try:
-            if msg['event'] in {'subscribe', 'unsubscribe'}:
+            if msg.get('event') in {'subscribe', 'unsubscribe'}:
                 return
-            # print('\n\n\nmsg:', msg)
-            channel = msg['channel']  # 目前看到的channel的格式都是 spot.*
+            print('\n\n\nmsg:', msg)
+            if msg.get("channel"):
+                channel = msg['channel']  # 目前看到的channel的格式都是 spot.*
+            else:
+                channel = msg.get('header').get('channel')
+
             product_type, topic = channel.split('.')
             if topic == 'balances':
                 await self._update_account_state()
