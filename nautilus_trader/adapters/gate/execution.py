@@ -60,6 +60,7 @@ from nautilus_trader.adapters.gate.providers import GateInstrumentProvider
 from nautilus_trader.adapters.gate.schemas.order import GateOrder
 from nautilus_trader.adapters.gate.schemas.trade import GateTrade
 from nautilus_trader.adapters.gate.websocket.client import GateWebSocketClient
+from nautilus_trader.adapters.gate.schemas.order import GateOrder, GatePlaceOrder, GateAmendOrder, GateCancelOrder, GateCancelAllOrder
 
 class GateExecutionClient(LiveExecutionClient):
     def __init__(
@@ -475,6 +476,12 @@ class GateExecutionClient(LiveExecutionClient):
                 self._handle_order_place(product_type, msg)
             elif topic == "order_cancel":
                 self._handle_order_cancel(product_type, msg)
+            elif topic == "login":
+                if not "errs" in msg["data"]:
+                    self._log.info(f"WebSocket login success: {msg}")
+                else:
+                    self._log.error(f"WebSocket login failed: {msg}")
+                    raise GateError(400, f"WebSocket login failed: {msg}")
             else:
                 raise ValueError(f"Unknown websocket channel: {channel}")
         except Exception as e:
@@ -482,10 +489,22 @@ class GateExecutionClient(LiveExecutionClient):
             self._log.error(f"Failed to handle websocket msg {msg} with: {exception_text}")
 
     def _handle_order_cancel(self, product_type: str, msg: dict) -> None:
-        pass
+        try:
+            return GateCancelOrder(orderId=msg['header']['client_id'], orderLinkId=msg["data"]["result"]["req_param"]['text'])
+        except Exception:
+            exception_text = traceback.format_exc()
+            self._log.error(f'Failed to handle order cancel: {exception_text}')
 
     def _handle_order_place(self, product_type: str, msg: dict) -> None:
-        pass
+        try:
+            return GatePlaceOrder(orderId=msg['header']['client_id'], orderLinkId=msg["data"]["result"]["req_param"]['text'])
+        except Exception:
+            exception_text = traceback.format_exc()
+            self._log.error(f'Failed to handle order place: {exception_text}')
+            if 'POC' in exception_text:
+                print(f"Failed to submit due to POC")
+            else:
+                raise
 
     def _handle_account_order_update(self, product_type: str, msg: dict) -> None:
         try:

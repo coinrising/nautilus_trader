@@ -158,6 +158,12 @@ class GateWebSocketClient:
         s = 'channel=%s&event=%s&time=%d' % (channel, event, timestamp)
         sign = hmac.new(self.api_secret.encode('utf-8'), s.encode('utf-8'), hashlib.sha512).hexdigest()
         return {'method': 'api_key', 'KEY': self.api_key, 'SIGN': sign}
+    
+    def _gen_sign_ws(self, channel, event, timestamp, req_param=""):
+        # s = 'channel=%s&event=%s&time=%d' % (channel, event, timestamp)
+        s = f'{event}\n{channel}\n{req_param}\n{timestamp}'
+        sign = hmac.new(self.api_secret.encode('utf-8'), s.encode('utf-8'), hashlib.sha512).hexdigest()
+        return {'method': 'api_key', 'KEY': self.api_key, 'SIGN': sign}
 
     ################################################################################
     # Public
@@ -197,7 +203,7 @@ class GateWebSocketClient:
 
     # order action
     async def api_login(self) -> None:
-        signature = self._gen_sign("spot.login", "api", int(time.time()))
+        signature = self._gen_sign_ws("spot.login", "api", int(time.time()))
         print(f"signature: {signature}")
         login_dict = {
             'time': int(time.time()),
