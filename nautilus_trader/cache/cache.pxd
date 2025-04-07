@@ -30,6 +30,8 @@ from nautilus_trader.core.rust.model cimport PositionSide
 from nautilus_trader.model.book cimport OrderBook
 from nautilus_trader.model.data cimport Bar
 from nautilus_trader.model.data cimport BarType
+from nautilus_trader.model.data cimport IndexPriceUpdate
+from nautilus_trader.model.data cimport MarkPriceUpdate
 from nautilus_trader.model.data cimport QuoteTick
 from nautilus_trader.model.data cimport TradeTick
 from nautilus_trader.model.identifiers cimport AccountId
@@ -128,6 +130,11 @@ cdef class Cache(CacheFacade):
     cpdef void build_index(self)
     cpdef bint check_integrity(self)
     cpdef bint check_residuals(self)
+    cpdef void purge_closed_orders(self, uint64_t ts_now, uint64_t buffer_secs=*)
+    cpdef void purge_closed_positions(self, uint64_t ts_now, uint64_t buffer_secs=*)
+    cpdef void purge_order(self, ClientOrderId client_order_id)
+    cpdef void purge_position(self, PositionId position_id)
+    cpdef void purge_account_events(self, uint64_t ts_now, uint64_t lookback_secs=*)
     cpdef void clear_index(self)
     cpdef void reset(self)
     cpdef void dispose(self)
@@ -157,9 +164,8 @@ cdef class Cache(CacheFacade):
     cpdef void add_own_order_book(self, own_order_book)
     cpdef void add_quote_tick(self, QuoteTick tick)
     cpdef void add_trade_tick(self, TradeTick tick)
-    cpdef void add_mark_price(self, InstrumentId instrument_id, Price price)
-    cpdef void add_mark_price_v2(self, mark_price)
-    cpdef void add_index_price(self, index_price)
+    cpdef void add_mark_price(self, MarkPriceUpdate mark_price)
+    cpdef void add_index_price(self, IndexPriceUpdate index_price)
     cpdef void add_bar(self, Bar bar)
     cpdef void add_quote_ticks(self, list ticks)
     cpdef void add_trade_ticks(self, list ticks)
