@@ -38,7 +38,7 @@ from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.identifiers import VenueOrderId
-from nautilus_trader.model.orders import LimitOrder
+from nautilus_trader.model.orders import LimitOrder, MarketOrder
 from nautilus_trader.model.orders import Order
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
@@ -134,6 +134,7 @@ class GateExecutionClient(LiveExecutionClient):
         # Order submission
         self._submit_order_methods = {
             OrderType.LIMIT: self._submit_limit_order,
+            OrderType.MARKET: self._submit_market_order,
         }
 
         # Hot caches
@@ -407,7 +408,7 @@ class GateExecutionClient(LiveExecutionClient):
             client_order_id=order.client_order_id,
             ts_event=self._clock.timestamp_ns(),
         )
-
+        
         async with self._retry_manager_pool as retry_manager:
             await retry_manager.run(
                 "submit_order",
@@ -423,6 +424,14 @@ class GateExecutionClient(LiveExecutionClient):
                     reason=retry_manager.message,
                     ts_event=self._clock.timestamp_ns(),
                 )
+            else:
+                pass
+                # self.generate_order_accepted(
+                #     strategy_id=order.strategy_id,
+                #     instrument_id=order.instrument_id,
+                #     client_order_id=order.client_order_id,
+                #     ts_event=self._clock.timestamp_ns(),
+                # )
 
     async def _submit_limit_order(self, order: LimitOrder) -> None:
         gate_symbol = GateSymbol(order.instrument_id.symbol.value)
@@ -449,6 +458,32 @@ class GateExecutionClient(LiveExecutionClient):
                 order_type=GateOrderType.LIMIT,
                 quantity=str(order.quantity),
                 price=str(order.price),
+                time_in_force=time_in_force,
+                client_order_id=str(order.client_order_id),
+            )
+
+    async def _submit_market_order(self, order: MarketOrder) -> None:
+        gate_symbol = GateSymbol(order.instrument_id.symbol.value)
+        time_in_force = self._determine_time_in_force(order)
+        order_side = self._enum_parser.parse_nautilus_order_side(order.side)
+        if not self._use_ws_trade_api:
+            await self._http_clt.place_order(
+                product_type=gate_symbol.product_type,
+                symbol=gate_symbol.raw_symbol,
+                side=order_side,
+                order_type=GateOrderType.MARKET,
+                quantity=str(order.quantity),
+                time_in_force=time_in_force,
+                client_order_id=str(order.client_order_id),
+            )
+        else:
+            # 通过websocket下单
+            await self._ws_clients[gate_symbol.product_type].place_order(
+                product_type=gate_symbol.product_type,
+                symbol=gate_symbol.raw_symbol,
+                side=order_side,
+                order_type=GateOrderType.MARKET,
+                quantity=str(order.quantity),
                 time_in_force=time_in_force,
                 client_order_id=str(order.client_order_id),
             )
