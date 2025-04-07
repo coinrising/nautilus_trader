@@ -451,6 +451,7 @@ class GateExecutionClient(LiveExecutionClient):
             )
         else:
             # 通过websocket下单
+            self._log.error(f"通过websocket下单: {order}")
             await self._ws_clients[gate_symbol.product_type].place_order(
                 product_type=gate_symbol.product_type,
                 symbol=gate_symbol.raw_symbol,
@@ -584,7 +585,7 @@ class GateExecutionClient(LiveExecutionClient):
                     return
                 
                 if order['event'] == 'put':
-                    self._log.info(f'order accepted: {cache_order}, {report}')
+                    # self._log.info(f'order accepted: {cache_order}, {report}')
                     self.generate_order_accepted(
                         strategy_id=strategy_id,
                         instrument_id=report.instrument_id,
@@ -594,7 +595,7 @@ class GateExecutionClient(LiveExecutionClient):
                     )
                 elif order['event'] == 'finish':
                     if order['finish_as'] == 'cancelled':
-                        self._log.info(f'order cancelled: {cache_order}, {report}')
+                        # self._log.info(f'order cancelled: {cache_order}, {report}')
                         self.generate_order_canceled(
                             strategy_id=strategy_id,
                             instrument_id=report.instrument_id,
@@ -603,9 +604,10 @@ class GateExecutionClient(LiveExecutionClient):
                             ts_event=report.ts_last,
                         )
                     elif order['finish_as'] == 'filled':
-                        self._log.info(f'order filled: {cache_order}, {report}')
+                        pass
+                        # self._log.info(f'order filled: {cache_order}, {report}')
                     else:
-                        self._log.info(f'order rejected: {cache_order}, {report}')
+                        # self._log.info(f'order rejected: {cache_order}, {report}')
                         self.generate_order_rejected(
                             strategy_id=strategy_id,
                             instrument_id=report.instrument_id,
