@@ -525,6 +525,8 @@ class GateExecutionClient(LiveExecutionClient):
             self._log.error(f"Failed to handle websocket msg {msg} with: {exception_text}")
 
     def _handle_order_cancel(self, product_type: str, msg: dict) -> None:
+        self._log.info(f"WebSocket order cancel result: {msg}")
+
         #     if "errs" in msg["data"]:
         #         error_message = msg["data"]["errs"]["message"]
         #         self._log.error(f"WebSocket order cancel failed: {error_message}")
@@ -536,7 +538,7 @@ class GateExecutionClient(LiveExecutionClient):
         pass
 
     def _handle_order_place(self, product_type: str, msg: dict) -> None:
-        self._log.info(f"WebSocket order place: {msg}")
+        self._log.info(f"WebSocket order place result: {msg}")
 
     def _handle_account_order_update(self, product_type: str, msg: dict) -> None:
         try:
