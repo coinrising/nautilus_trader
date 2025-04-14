@@ -78,7 +78,7 @@ class GateWebSocketClient:
                     self._log.info(f"Connected to {self._base_url}", LogColor.BLUE)
                     await self._subscribe_all()
                 try:
-                    self._log.info("Waiting for message...")
+                    # self._log.info("Waiting for message...")
                     raw = await asyncio.wait_for(self._client.recv(), timeout=5)
                 except asyncio.TimeoutError:
                     continue
