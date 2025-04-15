@@ -52,6 +52,8 @@ class GateWebSocketClient:
         self._public_subscriptions: set[str] = set()
         self._private_subscriptions: set[str] = set()
 
+        self.enable_login = False
+
     @property
     def subscriptions(self) -> set:
         return self._public_subscriptions | self._private_subscriptions
@@ -63,6 +65,7 @@ class GateWebSocketClient:
 
         self._loop.create_task(self._heartbeat())
         self._loop.create_task(self._keep_listening())
+        self._loop.create_task(self._keep_login())
 
     async def disconnect(self) -> None:
         if self._client is not None:
@@ -109,6 +112,22 @@ class GateWebSocketClient:
                     await asyncio.sleep(30)
                 else:
                     await asyncio.sleep(5)
+            except:
+                exception_text = traceback.format_exc()
+                self._log.error(exception_text)
+
+    async def _keep_login(self):
+        next_login_time = 0
+        while self.running:
+            try:
+                if not self.enable_login:
+                    continue
+                if self._client is not None:
+                    if time.time() > next_login_time:
+                        await self.api_login()
+                        next_login_time = time.time() + 300
+                else:
+                    next_login_time = 0
             except:
                 exception_text = traceback.format_exc()
                 self._log.error(exception_text)

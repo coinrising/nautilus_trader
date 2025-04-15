@@ -159,7 +159,8 @@ class GateExecutionClient(LiveExecutionClient):
             await ws_client.subscribe_orders_update()
             await ws_client.subscribe_trades_update()
             if self._use_ws_trade_api:
-                await ws_client.api_login()
+                ws_client.enable_login = True
+                # await ws_client.api_login()
 
     async def _disconnect(self):
         for ws_client in self._ws_clients.values():
@@ -526,19 +527,24 @@ class GateExecutionClient(LiveExecutionClient):
 
     def _handle_order_cancel(self, product_type: str, msg: dict) -> None:
         self._log.info(f"WebSocket order cancel result: {msg}")
-
-        #     if "errs" in msg["data"]:
-        #         error_message = msg["data"]["errs"]["message"]
-        #         self._log.error(f"WebSocket order cancel failed: {error_message}")
-        #         return
-        #     return GateCancelOrder(orderId=msg['header']['client_id'], orderLinkId=msg["data"]["result"]['text'])
-        # except Exception:
-        #     exception_text = traceback.format_exc()
-        #     self._log.error(f'Failed to handle order cancel: {exception_text}')
-        pass
+        try: 
+            if "errs" in msg["data"] and  "Not login" in msg["data"]["errs"]["mesaage"]:
+                self._log.error("Relogin")
+                for ws_client in self._ws_clients.values():
+                    asyncio.run(ws_client.api_login()) 
+        except:
+            return 
 
     def _handle_order_place(self, product_type: str, msg: dict) -> None:
         self._log.info(f"WebSocket order place result: {msg}")
+        try: 
+            if "errs" in msg["data"] and  "Not login" in msg["data"]["errs"]["mesaage"]:
+                self._log.error("Relogin")
+                for ws_client in self._ws_clients.values():
+                    asyncio.run(ws_client.api_login()) 
+        except:
+            return 
+
 
     def _handle_account_order_update(self, product_type: str, msg: dict) -> None:
         try:
