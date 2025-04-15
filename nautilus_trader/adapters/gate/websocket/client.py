@@ -121,6 +121,7 @@ class GateWebSocketClient:
         while self.running:
             try:
                 if not self.enable_login:
+                    await asyncio.sleep(10)
                     continue
                 if self._client is not None:
                     if time.time() > next_login_time:
@@ -128,6 +129,7 @@ class GateWebSocketClient:
                         next_login_time = time.time() + 300
                 else:
                     next_login_time = 0
+                await asyncio.sleep(60)    
             except:
                 exception_text = traceback.format_exc()
                 self._log.error(exception_text)
@@ -224,7 +226,7 @@ class GateWebSocketClient:
     # order action
     async def api_login(self) -> None:
         signature = self._gen_sign_ws("spot.login", "api", int(time.time()))
-        print(f"signature: {signature}")
+        self._log.info(f"signature: {signature}")
         login_dict = {
             'time': int(time.time()),
             'channel': 'spot.login', 
@@ -232,7 +234,6 @@ class GateWebSocketClient:
             "payload": {
                 "req_id": f"login_{int(time.time() * 1000)}",
                 "api_key": self.api_key,
-                # "req_header": None,
                 "signature": signature["SIGN"],
                 "timestamp": str(int(time.time())),
             }
