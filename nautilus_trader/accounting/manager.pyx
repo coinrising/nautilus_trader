@@ -63,7 +63,7 @@ cdef class AccountsManager:
         self._log = logger
         self._cache = cache
 
-    cdef AccountState update_balances(
+    cpdef AccountState update_balances(
         self,
         Account account,
         Instrument instrument,
@@ -136,7 +136,7 @@ cdef class AccountsManager:
             ts_event=fill.ts_event,
         )
 
-    cdef AccountState update_orders(
+    cpdef AccountState update_orders(
         self,
         Account account,
         Instrument instrument,
@@ -201,12 +201,13 @@ cdef class AccountsManager:
         base_xrate  = Decimal(0)
 
         cdef Currency currency = instrument.get_cost_currency()
+
         cdef:
             Order order
         for order in orders_open:
             assert order.instrument_id == instrument.id
 
-            if not order.is_open_c() or (not order.has_price_c() and not order.has_trigger_price_c()):
+            if not order.is_open_c() or order.is_reduce_only or (not order.has_price_c() and not order.has_trigger_price_c()):
                 # Does not contribute to locked balance
                 continue
 
@@ -290,11 +291,12 @@ cdef class AccountsManager:
 
         cdef Currency currency = instrument.get_cost_currency()
 
-        cdef Order order
+        cdef:
+            Order order
         for order in orders_open:
             assert order.instrument_id == instrument.id, f"order not for instrument {instrument}"
 
-            if not order.is_open_c() or (not order.has_price_c() and not order.has_trigger_price_c()):
+            if not order.is_open_c() or order.is_reduce_only or (not order.has_price_c() and not order.has_trigger_price_c()):
                 # Does not contribute to initial margin
                 continue
 
@@ -342,7 +344,7 @@ cdef class AccountsManager:
             ts_event=ts_event,
         )
 
-    cdef AccountState update_positions(
+    cpdef AccountState update_positions(
         self,
         MarginAccount account,
         Instrument instrument,
