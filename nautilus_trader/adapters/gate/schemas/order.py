@@ -21,10 +21,10 @@ from nautilus_trader.model.enums import OrderStatus
 from nautilus_trader.adapters.gate.common.enums import GateEnumParser, GateOrderStatus, GateOrderType, GateOrderSide, GateTimeInForce, GateOrderEvent, GateOrderFinishAs
 
 
-def gate_client_order_id() -> ClientOrderId:
+def gate_client_order_id(tag="") -> ClientOrderId:
     ts = int(time.time() * 1000)
     rand = '%04d' % random.randint(1, 9999)
-    return ClientOrderId(f"t-{ts}-{rand}")
+    return ClientOrderId(f"t-{ts}-{rand}-{tag}")
 
 class GateOrder(msgspec.Struct, omit_defaults=True, kw_only=True):
     orderId: str  # id
