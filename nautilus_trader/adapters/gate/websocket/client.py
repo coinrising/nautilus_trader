@@ -24,6 +24,8 @@ from nautilus_trader.adapters.gate.common.enums import GateTimeInForce
 # from nautilus_trader.adapters.gate.schemas.position import GatePosition
 
 class GateWebSocketClient:
+    req_header = {'X-Gate-Channel-Id': 'zerodivision'}
+
     def __init__(
         self,
         clock: LiveClock,
@@ -47,12 +49,12 @@ class GateWebSocketClient:
 
         self.api_key = api_key
         self.api_secret = api_secret
+        self.enable_login = False
         self.running = False
 
         self._public_subscriptions: set[str] = set()
         self._private_subscriptions: set[str] = set()
 
-        self.enable_login = False
 
     @property
     def subscriptions(self) -> set:
@@ -232,6 +234,7 @@ class GateWebSocketClient:
             'channel': 'spot.login', 
             "event": "api",
             "payload": {
+                "req_header": self.req_header,
                 "req_id": f"login_{int(time.time() * 1000)}",
                 "api_key": self.api_key,
                 "signature": signature["SIGN"],
@@ -247,6 +250,7 @@ class GateWebSocketClient:
             'channel': 'spot.order_place', 
             "event": "api",
             "payload": {
+                "req_header": self.req_header,
                 "req_id": str(time.time()),
                 'req_param': {
                     'account': product_type.value,

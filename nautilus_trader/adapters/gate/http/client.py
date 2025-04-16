@@ -12,6 +12,8 @@ from nautilus_trader.core.nautilus_pyo3 import Quota
 
 
 class GateHttpClient:
+    req_header = {'X-Gate-Channel-Id': 'zerodivision'}
+
     def __init__(
         self,
         clock: LiveClock,
@@ -49,8 +51,9 @@ class GateHttpClient:
         return {'KEY': self.api_key, 'Timestamp': str(ts), 'SIGN': sign}
 
 
-    def _sign_request(self, method, url, params={}, payload=None):
+    def _sign_request(self, method, url, params={}, payload=None, headers={}):
         common_headers = {'Accept': 'application/json', 'Content-Type': 'application/json'}
+        common_headers.update(headers)
         if params:
             query_string = '&'.join([f'{k}={v}' for k, v in params.items()])
         else:
@@ -125,7 +128,7 @@ class GateHttpClient:
             'auto_borrow': auto_borrow,
             "auto_repay": False,
         }
-        return self._sign_request('POST', f'/api/v4/spot/orders', payload=params)
+        return self._sign_request('POST', f'/api/v4/spot/orders', payload=params, headers=self.req_header)
 
     async def amend_order(self, product_type, symbol, venue_order_id, client_order_id, quantity, price):
         # https://www.gate.io/docs/developers/apiv4/zh_CN/#%E4%BF%AE%E6%94%B9%E5%8D%95%E4%B8%AA%E8%AE%A2%E5%8D%95
