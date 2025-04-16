@@ -19,6 +19,7 @@ from cpython.datetime cimport datetime
 from cpython.datetime cimport timedelta
 from cpython.datetime cimport tzinfo
 from libc.stdint cimport int64_t
+from libc.stdint cimport uint32_t
 from libc.stdint cimport uint64_t
 
 from nautilus_trader.core.fsm cimport FiniteStateMachine
@@ -166,6 +167,8 @@ cpdef LogGuard init_logging(
     bint colors=*,
     bint bypass=*,
     bint print_config=*,
+    uint64_t max_file_size=*,
+    uint32_t max_backup_count=*,
 )
 
 # Global static to flag if pyo3 based logging is initialized
@@ -262,6 +265,7 @@ cdef class MessageBus:
     cdef Clock _clock
     cdef Logger _log
     cdef object _database
+    cdef list[object] _listeners
     cdef dict[Subscription, list[str]] _subscriptions
     cdef dict[str, Subscription[:]] _patterns
     cdef dict[str, object] _endpoints
@@ -297,6 +301,7 @@ cdef class MessageBus:
     cpdef void register(self, str endpoint, handler)
     cpdef void deregister(self, str endpoint, handler)
     cpdef void add_streaming_type(self, type cls)
+    cpdef void add_listener(self, listener)
     cpdef void send(self, str endpoint, msg)
     cpdef void request(self, str endpoint, Request request)
     cpdef void response(self, Response response)
