@@ -105,7 +105,6 @@ class GateOrderSide(Enum):
     BUY = "buy"
     SELL = "sell"
 
-
 @unique
 class GateOrderType(Enum):
     MARKET = "market"
