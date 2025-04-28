@@ -38,7 +38,7 @@ from nautilus_trader.model.identifiers import ClientOrderId
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.identifiers import VenueOrderId
-from nautilus_trader.model.orders import LimitOrder, MarketOrder
+from nautilus_trader.model.orders import LimitOrder, MarketOrder, StopLimitOrder
 from nautilus_trader.model.orders import Order
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
@@ -135,6 +135,7 @@ class GateExecutionClient(LiveExecutionClient):
         self._submit_order_methods = {
             OrderType.LIMIT: self._submit_limit_order,
             OrderType.MARKET: self._submit_market_order,
+            OrderType.STOP_LIMIT: self._submit_stop_limit_order,
         }
 
         # Hot caches
@@ -463,6 +464,22 @@ class GateExecutionClient(LiveExecutionClient):
                 time_in_force=time_in_force,
                 client_order_id=str(order.client_order_id),
             )
+
+    async def _submit_stop_limit_order(self, order: StopLimitOrder) -> None:
+        gate_symbol = GateSymbol(order.instrument_id.symbol.value)
+        time_in_force = self._determine_time_in_force(order)
+        order_side = self._enum_parser.parse_nautilus_order_side(order.side)
+        await self._http_clt.place_trigger_order(
+            product_type=gate_symbol.product_type,
+            symbol=gate_symbol.raw_symbol,
+            side=order_side,
+            order_type=GateOrderType.LIMIT,
+            quantity=str(order.quantity),
+            price=str(order.price),
+            time_in_force=time_in_force,
+            client_order_id=str(order.client_order_id),
+            trigger_price=str(order.trigger_price),
+        )
 
     async def _submit_market_order(self, order: MarketOrder) -> None:
         gate_symbol = GateSymbol(order.instrument_id.symbol.value)

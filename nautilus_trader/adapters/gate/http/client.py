@@ -9,7 +9,10 @@ from nautilus_trader.common.component import LiveClock
 from nautilus_trader.common.component import Logger
 # from nautilus_trader.core.nautilus_pyo3 import HttpClient
 from nautilus_trader.core.nautilus_pyo3 import Quota
-
+from nautilus_trader.adapters.gate.common.enums import GateOrderSide
+from nautilus_trader.adapters.gate.common.enums import GateOrderType
+from nautilus_trader.adapters.gate.common.enums import GateProductType
+from nautilus_trader.adapters.gate.common.enums import GateTimeInForce
 
 class GateHttpClient:
     req_header = {'X-Gate-Channel-Id': 'zerodivision'}
@@ -129,6 +132,33 @@ class GateHttpClient:
             "auto_repay": False,
         }
         return self._sign_request('POST', f'/api/v4/spot/orders', payload=params, headers=self.req_header)
+    
+    async def place_trigger_order(self, product_type: GateProductType, symbol: str, side: GateOrderSide, order_type: GateOrderType, quantity: str,
+        price: str=None, time_in_force: GateTimeInForce=None, client_order_id: str=None, trigger_price=None) -> None:
+        if side == GateOrderSide.BUY:
+            rule = ">="
+        elif side == GateOrderSide.SELL:
+            rule = "<="
+        params = {
+            "trigger": {
+                "price": str(trigger_price),
+                "rule": rule,
+                "expiration": 3600
+            },
+            "put": {
+                "type": "limit",
+                "side": side.value,
+                "price": price,
+                "amount": quantity,
+                "account": product_type.value,
+                "time_in_force": "gtc",
+                "text": client_order_id,
+                "auto_borrow": True,
+            },
+            "market": symbol,
+        }
+        return self._sign_request('POST', f'/api/v4/spot/price_orders', payload=params, headers=self.req_header)
+
 
     async def amend_order(self, product_type, symbol, venue_order_id, client_order_id, quantity, price):
         # https://www.gate.io/docs/developers/apiv4/zh_CN/#%E4%BF%AE%E6%94%B9%E5%8D%95%E4%B8%AA%E8%AE%A2%E5%8D%95
