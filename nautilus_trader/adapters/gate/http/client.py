@@ -139,6 +139,8 @@ class GateHttpClient:
             rule = ">="
         elif side == GateOrderSide.SELL:
             rule = "<="
+        else:
+            raise ValueError(f"Invalid side: {side}")
         params = {
             "trigger": {
                 "price": str(trigger_price),
