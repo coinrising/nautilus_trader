@@ -97,6 +97,16 @@ class GateAccountHttpAPI:
             else:
                 raise
 
+    async def place_trigger_order(self, product_type: GateProductType, symbol: str, side: GateOrderSide, order_type: GateOrderType, quantity: str,
+                          price: str=None, time_in_force: GateTimeInForce=None, client_order_id: str=None, trigger_price=None) -> GatePlaceOrder:
+        try:
+            resp = await self.client.place_trigger_order(product_type.value, symbol, side.value, order_type.value, quantity, price, time_in_force.value, client_order_id, trigger_price)
+            return GatePlaceOrder(orderId=resp['id'], orderLinkId=resp['text'])
+        except:
+            exception_text = traceback.format_exc()
+            raise
+
+
     async def amend_order(self, product_type: GateProductType, symbol: str, venue_order_id: str=None, client_order_id: str=None,
                           quantity: str=None, price: str=None) -> GateAmendOrder:
         resp = await self.client.amend_order(product_type.value, symbol, venue_order_id, client_order_id, quantity, price)
