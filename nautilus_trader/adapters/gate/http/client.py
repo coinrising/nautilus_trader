@@ -135,9 +135,9 @@ class GateHttpClient:
     
     async def place_trigger_order(self, product_type: GateProductType, symbol: str, side: GateOrderSide, order_type: GateOrderType, quantity: str,
         price: str=None, time_in_force: GateTimeInForce=None, client_order_id: str=None, trigger_price=None) -> None:
-        if side.value == "buy":
+        if side == "buy":
             rule = ">="
-        elif side.value == "sell":
+        elif side == "sell":
             rule = "<="
         else:
             raise ValueError(f"Invalid side: {side}")
