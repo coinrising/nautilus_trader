@@ -187,6 +187,12 @@ class GateHttpClient:
             'currency_pair': symbol,
         }
         return self._sign_request('DELETE', f'/api/v4/spot/orders', params)
+    
+    async def cancel_all_trigger_orders(self):
+        # https://www.gate.io/docs/developers/apiv4/en/#cancel-all-price-triggered-orders
+        params = None
+        return self._sign_request('DELETE', f'/api/v4/spot/price_orders', params)
+
 
     async def fetch_position_info(self, product_type=None, symbol=None):
         # https://www.gate.io/docs/developers/apiv4/zh_CN/#%E8%8E%B7%E5%8F%96%E7%8E%B0%E8%B4%A7%E4%BA%A4%E6%98%93%E8%B4%A6%E6%88%B7%E5%88%97%E8%A1%A8

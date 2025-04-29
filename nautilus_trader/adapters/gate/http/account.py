@@ -126,6 +126,7 @@ class GateAccountHttpAPI:
 
     async def cancel_all_orders(self, product_type: GateProductType, symbol: str) -> list[Any]:
         resp = await self.client.cancel_all_orders(product_type.value, symbol)
+        tmp = await self.client.cancel_all_trigger_orders()
         cancel_list = []
         for c in resp:
             cancel_list.append(GateCancelOrder(orderId=c['id'], orderLinkId=c['text']))
