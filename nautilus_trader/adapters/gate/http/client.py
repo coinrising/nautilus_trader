@@ -135,6 +135,7 @@ class GateHttpClient:
     
     async def place_trigger_order(self, product_type: GateProductType, symbol: str, side: GateOrderSide, order_type: GateOrderType, quantity: str,
         price: str=None, time_in_force: GateTimeInForce=None, client_order_id: str=None, trigger_price=None) -> None:
+        print(f"{type(side)}:{side}")
         if side == "buy":
             rule = ">="
         elif side == "sell":
@@ -149,7 +150,7 @@ class GateHttpClient:
             },
             "put": {
                 "type": "limit",
-                "side": side.value,
+                "side": side,
                 "price": price,
                 "amount": quantity,
                 "account": product_type.value,
