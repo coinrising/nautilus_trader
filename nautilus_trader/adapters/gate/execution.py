@@ -238,12 +238,13 @@ class GateExecutionClient(LiveExecutionClient):
         if client_order_id:
             order = self._cache.order(client_order_id)
             if order and order.order_type in (
-                OrderType.TRAILING_STOP_MARKET,
-                OrderType.TRAILING_STOP_LIMIT,
+                # OrderType.TRAILING_STOP_MARKET,
+                # OrderType.TRAILING_STOP_LIMIT,
                 OrderType.STOP_LIMIT,
             ):
-                self._log.warning("Cannot query with client order ID for trailing stops")
+                self._log.warning("Cannot query with client order ID for stop limit")
                 client_order_id = None
+                return
 
         self._log.info(
             f"Generating OrderStatusReport for {repr(client_order_id) if client_order_id else ''} {repr(venue_order_id) if venue_order_id else ''}",
