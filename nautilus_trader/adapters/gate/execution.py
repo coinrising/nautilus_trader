@@ -158,6 +158,7 @@ class GateExecutionClient(LiveExecutionClient):
             await ws_client.connect()
             await ws_client.subscribe_balances_update()
             await ws_client.subscribe_orders_update()
+            await self._ws_private_client.subscribe_priceorders_update()
             await ws_client.subscribe_trades_update()
             if self._use_ws_trade_api:
                 ws_client.enable_login = True
@@ -239,6 +240,7 @@ class GateExecutionClient(LiveExecutionClient):
             if order and order.order_type in (
                 OrderType.TRAILING_STOP_MARKET,
                 OrderType.TRAILING_STOP_LIMIT,
+                OrderType.STOP_LIMIT,
             ):
                 self._log.warning("Cannot query with client order ID for trailing stops")
                 client_order_id = None
@@ -536,11 +538,94 @@ class GateExecutionClient(LiveExecutionClient):
                 else:
                     self._log.error(f"WebSocket login failed: {msg}")
                     raise GateError(400, f"WebSocket login failed: {msg}")
+            elif topic == "priceorders":
+                self._handle_priceorder_place(product_type, msg)
             else:
                 raise ValueError(f"Unknown websocket channel: {channel}")
         except Exception as e:
             exception_text = traceback.format_exc()
             self._log.error(f"Failed to handle websocket msg {msg} with: {exception_text}")
+
+    def _handle_priceorder_place(self, product_type: str, msg: dict) -> None:
+            # {
+            # "time": 1691847986,
+            # "time_ms": 1691847986454,
+            # "channel": "spot.priceorders",
+            # "event": "update",
+            # "result": {
+            #     "market": "ETH_USDT",
+            #     "uid": "13679450",
+            #     "id": "247480109",
+            #     "currency_type": "ETH",
+            #     "exchange_type": "USDT",
+            #     "reason": "",
+            #     "err_msg": "",
+            #     "fired_order_id": 0,
+            #     "instant_cancel": false,
+            #     "trigger_price": "0.00302",
+            #     "trigger_rule": "<=",
+            #     "trigger_expiration": 900,
+            #     "price": "0.00300",
+            #     "amount": "26666.667",
+            #     "source": "",
+            #     "order_type": "limit",
+            #     "side": "buy",
+            #     "engine_type": "normal",
+            #     "is_stop_order": false,
+            #     "stop_trigger_price": "",
+            #     "stop_trigger_rule": "",
+            #     "stop_price": "",
+            #     "ctime": "1691517983131",
+            #     "ftime": "1691517983131"
+            #   }
+            # }
+        try:
+            result = msg['result']
+            self._log.info(f"WebSocket price order result: {result}")
+            # for order in result:
+            #     gate_order = GateOrder.from_ws_dict(order)
+            #     instrument_id = self._get_cached_instrument_id(gate_order.symbol, GateProductType(product_type))
+            #     client_order_id = ClientOrderId(gate_order.orderLinkId) if gate_order.orderLinkId else None
+            #     venue_order_id = VenueOrderId(gate_order.orderId)
+            #     if client_order_id is None:
+            #         client_order_id = self._cache.client_order_id(venue_order_id)
+
+            #     report = gate_order.parse_to_order_status_report(
+            #         client_order_id=client_order_id,
+            #         account_id=self.account_id,
+            #         instrument_id=instrument_id,
+            #         report_id=UUID4(),
+            #         enum_parser=self._enum_parser,
+            #         ts_init=self._clock.timestamp_ns(),
+            #     )
+
+            #     strategy_id = None
+            #     if report.client_order_id:
+            #         strategy_id = self._cache.strategy_id_for_order(report.client_order_id)
+            #     if strategy_id is None:
+            #         # External order
+            #         self._send_order_status_report(report)
+            #         return
+
+            #     cache_order = self._cache.order(report.client_order_id)
+            #     if cache_order is None:
+            #         exception_text = traceback.format_exc()
+            #         self._log.error(f"Cannot find {report.client_order_id!r}")
+            #         return
+                
+            #     if order['event'] == 'put':
+            #         # self._log.info(f'order accepted: {cache_order}, {report}')
+            #         self.generate_order_accepted(
+            #             strategy_id=strategy_id,
+            #             instrument_id=report.instrument_id,
+            #             client_order_id=report.client_order_id,
+            #             venue_order_id=report.venue_order_id,
+            #             ts_event=report.ts_last,
+                    # )
+
+        except Exception:
+            exception_text = traceback.format_exc()
+            self._log.error(f'Failed to handle order update: {exception_text}')
 
     def _handle_order_cancel(self, product_type: str, msg: dict) -> None:
         self._log.info(f"WebSocket order cancel result: {msg}")

@@ -225,6 +225,10 @@ class GateWebSocketClient:
         subscription = {'channel': 'spot.usertrades', 'payload': [symbol or '!all']}
         await self._subscribe(subscription, True)
 
+    async def subscribe_priceorders_update(self, symbol: str=None) -> None:
+        subscription = {'channel': 'spot.priceorders', 'payload': [symbol or '!all']}
+        await self._subscribe(subscription, True)
+
     # order action
     async def api_login(self) -> None:
         signature = self._gen_sign_ws("spot.login", "api", int(time.time()))
