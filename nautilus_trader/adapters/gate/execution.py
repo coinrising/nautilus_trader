@@ -158,7 +158,7 @@ class GateExecutionClient(LiveExecutionClient):
             await ws_client.connect()
             await ws_client.subscribe_balances_update()
             await ws_client.subscribe_orders_update()
-            await self._ws_private_client.subscribe_priceorders_update()
+            await ws_client.subscribe_priceorders_update()
             await ws_client.subscribe_trades_update()
             if self._use_ws_trade_api:
                 ws_client.enable_login = True
