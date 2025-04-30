@@ -73,6 +73,7 @@ class GateWebSocketClient:
         if self._client is not None:
             await self._client.close()
             self._client = None
+        self._log.info(f"Disconnected from {self._base_url}", LogColor.BLUE)
         self.running = False
 
     async def _keep_listening(self):
@@ -97,7 +98,7 @@ class GateWebSocketClient:
                 await self._handler(msg)
             except:
                 exception_text = traceback.format_exc()
-                if 'ConnectionClosedError' not in exception_text:
+                if not ('ConnectionClosedError' in exception_text or 'ConnectionClosedOK' in exception_text):
                     self._log.error(exception_text)
                     if self._client is not None:
                         try:
