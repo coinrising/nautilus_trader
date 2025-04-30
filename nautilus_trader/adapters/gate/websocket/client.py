@@ -73,7 +73,7 @@ class GateWebSocketClient:
         if self._client is not None:
             await self._client.close()
             self._client = None
-            self.running = False
+        self.running = False
 
     async def _keep_listening(self):
         while self.running:
