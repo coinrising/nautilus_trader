@@ -71,9 +71,12 @@ class GateHttpClient:
             resp = requests.request(method, self.base_url + url + '?' + query_string, headers=sign_headers, json=payload)
         else:
             resp = requests.request(method, self.base_url + url + query_string, headers=sign_headers, json=payload)
-        data = resp.json()
+        if "Trigger.Price must" in resp.text:
+            return None
         if resp.status_code // 100 != 2:
-            raise RuntimeError(f'gate request {method} {url} failed on [HTTP {resp.status_code}]: {resp.text}')
+            # raise RuntimeError(f'gate request {method} {url} failed on [HTTP {resp.status_code}]: {resp.text}')
+            raise requests.exceptions.HTTPError(f'gate request {method} {url} failed [HTTP {resp.status_code}]: {resp.text}', response=resp)
+        data = resp.json()
         return data
 
     """

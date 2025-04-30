@@ -101,6 +101,8 @@ class GateAccountHttpAPI:
                           price: str=None, time_in_force: GateTimeInForce=None, client_order_id: str=None, trigger_price=None) -> GatePlaceOrder:
         try:
             resp = await self.client.place_trigger_order(product_type.value, symbol, side.value, order_type.value, quantity, price, time_in_force.value, client_order_id, trigger_price)
+            if resp is None: # "invalid argument: Trigger.Price must < last_price"
+                return 
             return GatePlaceOrder(orderId=resp['id'], orderLinkId=client_order_id)
         except:
             exception_text = traceback.format_exc()
