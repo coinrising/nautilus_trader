@@ -17,6 +17,7 @@ use bytes::Bytes;
 use nautilus_core::UUID4;
 use nautilus_model::identifiers::TraderId;
 use serde::{Deserialize, Serialize};
+use ustr::Ustr;
 
 use crate::enums::SerializationEncoding;
 
@@ -143,13 +144,16 @@ impl Default for MessageBusConfig {
 pub trait MessageBusDatabaseAdapter {
     type DatabaseType;
 
+    /// # Errors
+    ///
+    /// Returns an error if initializing the database connection fails.
     fn new(
         trader_id: TraderId,
         instance_id: UUID4,
         config: MessageBusConfig,
     ) -> anyhow::Result<Self::DatabaseType>;
     fn is_closed(&self) -> bool;
-    fn publish(&self, topic: String, payload: Bytes);
+    fn publish(&self, topic: Ustr, payload: Bytes);
     fn close(&mut self);
 }
 

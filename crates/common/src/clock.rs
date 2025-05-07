@@ -17,6 +17,7 @@
 
 use std::{
     collections::{BTreeMap, BinaryHeap, HashMap},
+    fmt::Debug,
     ops::Deref,
     pin::Pin,
     sync::Arc,
@@ -42,7 +43,7 @@ use crate::timer::{
 /// # Notes
 ///
 /// An active timer is one which has not expired (`timer.is_expired == False`).
-pub trait Clock {
+pub trait Clock: Debug {
     /// Returns the current date and time as a timezone-aware `DateTime<UTC>`.
     fn utc_now(&self) -> DateTime<Utc> {
         DateTime::from_timestamp_nanos(self.timestamp_ns().as_i64())
@@ -77,6 +78,10 @@ pub trait Clock {
 
     /// Set a `Timer` to alert at a particular time. Optional
     /// callback gets used to handle generated events.
+    /// # Errors
+    ///
+    /// Returns an error if `name` is invalid, `alert_time_ns` is non-positive when not allowed,
+    /// or any predicate check fails.
     fn set_time_alert_ns(
         &mut self,
         name: &str,
@@ -88,6 +93,10 @@ pub trait Clock {
     /// Set a `Timer` to start alerting at every interval
     /// between start and stop time. Optional callback gets
     /// used to handle generated event.
+    /// # Errors
+    ///
+    /// Returns an error if `name` is invalid, `interval_ns` is not positive,
+    /// or if any predicate check fails.
     fn set_timer_ns(
         &mut self,
         name: &str,
@@ -100,11 +109,16 @@ pub trait Clock {
 
     /// Returns the time interval in which the timer `name` is triggered.
     ///
-    /// If the timer doesn't exist 0 is returned.
-    fn next_time_ns(&self, name: &str) -> UnixNanos;
+    /// If the timer doesn't exist `None` is returned.
+    fn next_time_ns(&self, name: &str) -> Option<UnixNanos>;
+
+    /// Cancels the timer with `name`.
     fn cancel_timer(&mut self, name: &str);
+
+    /// Cancels all timers.
     fn cancel_timers(&mut self);
 
+    /// Resets the clock by clearing it's internal state.
     fn reset(&mut self);
 }
 
@@ -114,8 +128,7 @@ pub trait Clock {
 #[derive(Debug)]
 pub struct TestClock {
     time: AtomicTime,
-    // use btree map to ensure stable ordering when scanning for timers
-    // in `advance_time`
+    // Use btree map to ensure stable ordering when scanning for timers in `advance_time`
     timers: BTreeMap<Ustr, TestTimer>,
     default_callback: Option<TimeEventCallback>,
     callbacks: HashMap<Ustr, TimeEventCallback>,
@@ -404,19 +417,16 @@ impl Clock for TestClock {
         Ok(())
     }
 
-    fn next_time_ns(&self, name: &str) -> UnixNanos {
-        let timer = self.timers.get(&Ustr::from(name));
-        match timer {
-            None => 0.into(),
-            Some(timer) => timer.next_time_ns(),
-        }
+    fn next_time_ns(&self, name: &str) -> Option<UnixNanos> {
+        self.timers
+            .get(&Ustr::from(name))
+            .map(|timer| timer.next_time_ns())
     }
 
     fn cancel_timer(&mut self, name: &str) {
         let timer = self.timers.remove(&Ustr::from(name));
-        match timer {
-            None => {}
-            Some(mut timer) => timer.cancel(),
+        if let Some(mut timer) = timer {
+            timer.cancel();
         }
     }
 
@@ -424,7 +434,8 @@ impl Clock for TestClock {
         for timer in &mut self.timers.values_mut() {
             timer.cancel();
         }
-        self.timers = BTreeMap::new();
+
+        self.timers.clear();
     }
 
     fn reset(&mut self) {
@@ -706,21 +717,16 @@ impl Clock for LiveClock {
         Ok(())
     }
 
-    fn next_time_ns(&self, name: &str) -> UnixNanos {
-        let timer = self.timers.get(&Ustr::from(name));
-        match timer {
-            None => 0.into(),
-            Some(timer) => timer.next_time_ns(),
-        }
+    fn next_time_ns(&self, name: &str) -> Option<UnixNanos> {
+        self.timers
+            .get(&Ustr::from(name))
+            .map(|timer| timer.next_time_ns())
     }
 
     fn cancel_timer(&mut self, name: &str) {
         let timer = self.timers.remove(&Ustr::from(name));
-        match timer {
-            None => {}
-            Some(mut timer) => {
-                timer.cancel();
-            }
+        if let Some(mut timer) = timer {
+            timer.cancel();
         }
     }
 
@@ -728,6 +734,7 @@ impl Clock for LiveClock {
         for timer in &mut self.timers.values_mut() {
             timer.cancel();
         }
+
         self.timers.clear();
     }
 
@@ -938,7 +945,7 @@ mod tests {
         assert_eq!(test_clock.timer_names(), vec!["past_timer"]);
 
         // Next time should be at or after current time, not in the past
-        let next_time = test_clock.next_time_ns("past_timer");
+        let next_time = test_clock.next_time_ns("past_timer").unwrap();
         assert!(next_time >= current_time);
     }
 
@@ -946,7 +953,7 @@ mod tests {
     fn test_allow_past_parameter_false(mut test_clock: TestClock) {
         test_clock.set_time(UnixNanos::from(2000));
         let current_time = test_clock.timestamp_ns();
-        let past_time = (current_time - 1000).into();
+        let past_time = current_time - 1000;
 
         // With allow_past=false, should fail for past times
         let result = test_clock.set_time_alert_ns("past_timer", past_time, None, Some(false));
@@ -964,8 +971,8 @@ mod tests {
     fn test_invalid_stop_time_validation(mut test_clock: TestClock) {
         test_clock.set_time(UnixNanos::from(2000));
         let current_time = test_clock.timestamp_ns();
-        let start_time = (current_time + 1000).into();
-        let stop_time = (current_time + 500).into(); // Stop time before start time
+        let start_time = current_time + 1000;
+        let stop_time = current_time + 500; // Stop time before start time
 
         // Should fail because stop_time < start_time
         let result = test_clock.set_timer_ns(

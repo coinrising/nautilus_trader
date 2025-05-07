@@ -22,7 +22,7 @@ use std::{
 use futures::StreamExt;
 use nautilus_common::{
     clock::{Clock, LiveClock},
-    messages::data::{DataCommand, DataResponse, SubscribeCommand},
+    messages::data::{CustomDataResponse, DataCommand, SubscribeCommand},
     runner::{DataEvent, DataQueue, GlobalDataQueue, RunnerEvent, SyncDataQueue},
     runtime::get_runtime,
 };
@@ -103,7 +103,7 @@ pub trait Runner {
 }
 
 pub trait SendResponse {
-    fn send(&self, resp: DataResponse);
+    fn send(&self, resp: CustomDataResponse);
 }
 
 pub type DataResponseQueue = Rc<RefCell<SyncDataQueue>>;
@@ -130,7 +130,7 @@ impl Runner for LiveRunner {
 
         loop {
             while let Some(cmd) = msgbus_cmd.borrow_mut().pop_front() {
-                engine.execute(DataCommand::Subscribe(cmd)); // TODO: We shouldn't need the enum?
+                engine.execute(&DataCommand::Subscribe(cmd));
             }
 
             // Collect the next event to process
@@ -175,10 +175,11 @@ mod tests {
         let alert_time = live_clock.borrow().get_time_ns() + 100;
 
         // component/actor adding an alert
-        get_clock().borrow_mut().set_time_alert_ns(
+        let _ = get_clock().borrow_mut().set_time_alert_ns(
             "hola",
             alert_time,
-            Some(TimeEventCallback::Rust(Rc::new(|event: TimeEvent| {}))),
+            Some(TimeEventCallback::Rust(Rc::new(|_event: TimeEvent| {}))),
+            None,
         );
 
         // runner pulling from event

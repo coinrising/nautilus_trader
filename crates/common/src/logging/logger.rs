@@ -94,6 +94,9 @@ impl LoggerConfig {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the spec string is invalid.
     pub fn from_spec(spec: &str) -> anyhow::Result<Self> {
         let mut config = Self::default();
         for kv in spec.split(';') {
@@ -159,6 +162,8 @@ pub enum LogEvent {
     Log(LogLine),
     /// A command to flush all logger buffers.
     Flush,
+    /// A command to close the logger.
+    Close,
 }
 
 /// Represents a log event which includes a message.
@@ -327,6 +332,11 @@ impl Log for Logger {
 
 #[allow(clippy::too_many_arguments)]
 impl Logger {
+    /// Initializes the logger based on the `NAUTILUS_LOG` environment variable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading the environment variable or parsing the configuration fails.
     pub fn init_with_env(
         trader_id: TraderId,
         instance_id: UUID4,
@@ -345,6 +355,11 @@ impl Logger {
     /// let file_config = FileWriterConfig::default();
     /// let log_guard = Logger::init_with_config(trader_id, instance_id, config, file_config);
     /// ```
+    /// Initializes the logger with the given `LoggerConfig` and `FileWriterConfig`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the logger fails to register or initialize the background thread.
     pub fn init_with_config(
         trader_id: TraderId,
         instance_id: UUID4,
@@ -353,8 +368,9 @@ impl Logger {
     ) -> anyhow::Result<LogGuard> {
         let (tx, rx) = std::sync::mpsc::channel::<LogEvent>();
 
+        let logger_tx = tx.clone();
         let logger = Self {
-            tx,
+            tx: logger_tx,
             config: config.clone(),
         };
 
@@ -392,7 +408,7 @@ impl Logger {
             }
         }
 
-        Ok(LogGuard::new(handle))
+        Ok(LogGuard::new(handle, Some(tx)))
     }
 
     fn handle_messages(
@@ -426,9 +442,6 @@ impl Logger {
         // Continue to receive and handle log events until channel is hung up
         while let Ok(event) = rx.recv() {
             match event {
-                LogEvent::Flush => {
-                    break;
-                }
                 LogEvent::Log(line) => {
                     let component_level = component_level.get(&line.component);
 
@@ -458,15 +471,33 @@ impl Logger {
                         }
                     }
 
-                    if let Some(ref mut writer) = file_writer_opt {
-                        if writer.enabled(&wrapper.line) {
-                            if writer.json_format {
-                                writer.write(&wrapper.get_json());
+                    if let Some(ref mut file_writer) = file_writer_opt {
+                        if file_writer.enabled(&wrapper.line) {
+                            if file_writer.json_format {
+                                file_writer.write(&wrapper.get_json());
                             } else {
-                                writer.write(wrapper.get_string());
+                                file_writer.write(wrapper.get_string());
                             }
                         }
                     }
+                }
+                LogEvent::Flush => {
+                    stdout_writer.flush();
+                    stderr_writer.flush();
+
+                    if let Some(ref mut file_writer) = file_writer_opt {
+                        file_writer.flush();
+                    }
+                }
+                LogEvent::Close => {
+                    // Final flush
+                    stdout_writer.flush();
+                    stderr_writer.flush();
+
+                    if let Some(ref mut file_writer) = file_writer_opt {
+                        file_writer.flush();
+                    }
+                    break;
                 }
             }
         }
@@ -503,26 +534,33 @@ pub fn log<T: AsRef<str>>(level: LogLevel, color: LogColor, component: Ustr, mes
 #[derive(Debug)]
 pub struct LogGuard {
     handle: Option<std::thread::JoinHandle<()>>,
+    tx: Option<std::sync::mpsc::Sender<LogEvent>>,
 }
 
 impl LogGuard {
     /// Creates a new [`LogGuard`] instance.
     #[must_use]
-    pub const fn new(handle: Option<std::thread::JoinHandle<()>>) -> Self {
-        Self { handle }
+    pub const fn new(
+        handle: Option<std::thread::JoinHandle<()>>,
+        tx: Option<std::sync::mpsc::Sender<LogEvent>>,
+    ) -> Self {
+        Self { handle, tx }
     }
 }
 
 impl Default for LogGuard {
     /// Creates a new default [`LogGuard`] instance.
     fn default() -> Self {
-        Self::new(None)
+        Self::new(None, None)
     }
 }
 
 impl Drop for LogGuard {
     fn drop(&mut self) {
-        log::logger().flush();
+        if let Some(tx) = self.tx.take() {
+            let _ = tx.send(LogEvent::Close);
+        }
+
         if let Some(handle) = self.handle.take() {
             handle.join().expect("Error joining logging handle");
         }
@@ -815,7 +853,7 @@ mod tests {
         let files: Vec<_> = std::fs::read_dir(&dir_path)
             .expect("Failed to read directory")
             .filter_map(Result::ok)
-            .filter(|entry| entry.path().extension().map_or(false, |ext| ext == "log"))
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "log"))
             .collect();
 
         // We should have multiple files due to rotation
@@ -832,7 +870,7 @@ mod tests {
         let files: Vec<_> = std::fs::read_dir(&dir_path)
             .expect("Failed to read directory")
             .filter_map(Result::ok)
-            .filter(|entry| entry.path().extension().map_or(false, |ext| ext == "log"))
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "log"))
             .collect();
 
         // We should have multiple files due to rotation
@@ -852,7 +890,7 @@ mod tests {
         let files: Vec<_> = std::fs::read_dir(&dir_path)
             .expect("Failed to read directory")
             .filter_map(Result::ok)
-            .filter(|entry| entry.path().extension().map_or(false, |ext| ext == "log"))
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "log"))
             .collect();
 
         // We should have at most max_backups + 1 files (current file + backups)

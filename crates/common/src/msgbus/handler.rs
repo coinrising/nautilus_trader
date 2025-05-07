@@ -18,7 +18,12 @@
 //! This module provides a trait and implementations for handling messages
 //! in a type-safe manner, enabling both typed and untyped message processing.
 
-use std::{any::Any, fmt::Debug, marker::PhantomData, rc::Rc};
+use std::{
+    any::{Any, type_name},
+    fmt::Debug,
+    marker::PhantomData,
+    rc::Rc,
+};
 
 use ustr::Ustr;
 
@@ -30,6 +35,14 @@ pub trait MessageHandler: Any {
     /// Returns this handler as a trait object.
     fn as_any(&self) -> &dyn Any;
 }
+
+impl PartialEq for dyn MessageHandler {
+    fn eq(&self, other: &Self) -> bool {
+        self.id() == other.id()
+    }
+}
+
+impl Eq for dyn MessageHandler {}
 
 #[derive(Debug)]
 pub struct TypedMessageHandler<T: 'static + ?Sized, F: Fn(&T) + 'static> {
@@ -66,6 +79,8 @@ impl<T: 'static, F: Fn(&T) + 'static> MessageHandler for TypedMessageHandler<T, 
     fn handle(&self, message: &dyn Any) {
         if let Some(typed_msg) = message.downcast_ref::<T>() {
             (self.callback)(typed_msg);
+        } else {
+            log::error!("Expected message of type {}", type_name::<T>());
         }
     }
 
@@ -123,6 +138,12 @@ fn generate_deterministic_handler_id<T: 'static + ?Sized, F: 'static + Fn(&T)>(
 #[repr(transparent)]
 #[derive(Clone)]
 pub struct ShareableMessageHandler(pub Rc<dyn MessageHandler>);
+
+impl ShareableMessageHandler {
+    pub fn id(&self) -> Ustr {
+        self.0.id()
+    }
+}
 
 impl Debug for ShareableMessageHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

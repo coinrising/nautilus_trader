@@ -290,6 +290,9 @@ pub fn currency_pair_ethusdt() -> CurrencyPair {
 }
 
 #[must_use]
+/// # Panics
+///
+/// Panics if `symbol` does not contain a '/' delimiter.
 pub fn default_fx_ccy(symbol: Symbol, venue: Option<Venue>) -> CurrencyPair {
     let target_venue = venue.unwrap_or(Venue::from("SIM"));
     let instrument_id = InstrumentId::new(symbol, target_venue);
@@ -328,6 +331,11 @@ pub fn audusd_sim() -> CurrencyPair {
 }
 
 #[fixture]
+pub fn gbpusd_sim() -> CurrencyPair {
+    default_fx_ccy(Symbol::from("GBP/USD"), Some(Venue::from("SIM")))
+}
+
+#[fixture]
 pub fn usdjpy_idealpro() -> CurrencyPair {
     default_fx_ccy(Symbol::from("USD/JPY"), Some(Venue::from("IDEALPRO")))
 }
@@ -363,6 +371,10 @@ pub fn equity_aapl() -> Equity {
 // FuturesContract
 ////////////////////////////////////////////////////////////////////////////////
 
+/// # Panics
+///
+/// Panics if constructing the activation or expiration timestamp fails,
+/// e.g., if the provided dates are invalid or timestamp conversion returns `None`.
 pub fn futures_contract_es(
     activation: Option<UnixNanos>,
     expiration: Option<UnixNanos>,

@@ -21,13 +21,14 @@ crate-type = ["rlib", "staticlib"]
 default = []
 extension-module = ["pyo3/extension-module"]
 ffi = ["cbindgen"]
-python = ["pyo3"]
+python = ["pyo3", "strum"]
 
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
+ahash = { workspace = true }
 anyhow = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
@@ -38,6 +39,7 @@ rand = { workspace = true }
 rmp-serde = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+strum = { workspace = true, optional = true }
 ustr = { workspace = true }
 uuid = { workspace = true }
 

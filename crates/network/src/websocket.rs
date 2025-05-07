@@ -42,6 +42,7 @@ use futures_util::{
 };
 use http::HeaderName;
 use nautilus_cryptography::providers::install_cryptographic_provider;
+#[cfg(feature = "python")]
 use pyo3::{prelude::*, types::PyBytes};
 use tokio::{
     net::TcpStream,
@@ -57,11 +58,13 @@ use crate::{
     mode::ConnectionMode,
     ratelimiter::{RateLimiter, clock::MonotonicClock, quota::Quota},
 };
+
 type MessageWriter = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 pub type MessageReader = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 
 #[derive(Debug, Clone)]
 pub enum Consumer {
+    #[cfg(feature = "python")]
     Python(Option<Arc<PyObject>>),
     Rust(Sender<Message>),
 }
@@ -91,6 +94,7 @@ pub struct WebSocketConfig {
     /// The optional heartbeat message.
     pub heartbeat_msg: Option<String>,
     /// The handler for incoming pings.
+    #[cfg(feature = "python")]
     pub ping_handler: Option<Arc<PyObject>>,
     /// The timeout (milliseconds) for reconnection attempts.
     pub reconnect_timeout_ms: Option<u64>,
@@ -151,6 +155,7 @@ impl WebSocketClientInner {
             heartbeat,
             headers,
             heartbeat_msg,
+            #[cfg(feature = "python")]
             ping_handler,
             reconnect_timeout_ms,
             reconnect_delay_initial_ms,
@@ -163,6 +168,7 @@ impl WebSocketClientInner {
         let connection_mode = Arc::new(AtomicU8::new(ConnectionMode::Active.as_u8()));
 
         let read_task = match &handler {
+            #[cfg(feature = "python")]
             Consumer::Python(handler) => handler.as_ref().map(|handler| {
                 Self::spawn_python_callback_task(
                     connection_mode.clone(),
@@ -261,6 +267,7 @@ impl WebSocketClientInner {
                 .store(ConnectionMode::Active.as_u8(), Ordering::SeqCst);
 
             self.read_task = match &self.config.handler {
+                #[cfg(feature = "python")]
                 Consumer::Python(handler) => handler.as_ref().map(|handler| {
                     Self::spawn_python_callback_task(
                         self.connection_mode.clone(),
@@ -345,6 +352,7 @@ impl WebSocketClientInner {
         })
     }
 
+    #[cfg(feature = "python")]
     fn spawn_python_callback_task(
         connection_state: Arc<AtomicU8>,
         mut reader: MessageReader,
@@ -599,7 +607,9 @@ impl WebSocketClient {
         let inner = WebSocketClientInner::connect_url(config).await?;
 
         let connection_mode = inner.connection_mode.clone();
+
         let rate_limiter = Arc::new(RateLimiter::new_with_quota(default_quota, keyed_quotas));
+
         let writer_tx = inner.writer_tx.clone();
         if let Err(e) = writer_tx.send(WriterCommand::Update(writer)) {
             tracing::error!("{e}");
@@ -609,7 +619,9 @@ impl WebSocketClient {
             inner,
             connection_mode.clone(),
             post_reconnect,
+            #[cfg(feature = "python")]
             None, // no post_reconnection
+            #[cfg(feature = "python")]
             None, // no post_disconnection
         );
 
@@ -634,9 +646,9 @@ impl WebSocketClient {
     /// Returns any websocket error.
     pub async fn connect(
         config: WebSocketConfig,
-        post_connection: Option<PyObject>,
-        post_reconnection: Option<PyObject>,
-        post_disconnection: Option<PyObject>,
+        #[cfg(feature = "python")] post_connection: Option<PyObject>,
+        #[cfg(feature = "python")] post_reconnection: Option<PyObject>,
+        #[cfg(feature = "python")] post_disconnection: Option<PyObject>,
         keyed_quotas: Vec<(String, Quota)>,
         default_quota: Option<Quota>,
     ) -> Result<Self, Error> {
@@ -648,12 +660,16 @@ impl WebSocketClient {
         let controller_task = Self::spawn_controller_task(
             inner,
             connection_mode.clone(),
-            None,               // Rust handler
-            post_reconnection,  // TODO: Deprecated
+            None, // Rust handler
+            #[cfg(feature = "python")]
+            post_reconnection, // TODO: Deprecated
+            #[cfg(feature = "python")]
             post_disconnection, // TODO: Deprecated
         );
+
         let rate_limiter = Arc::new(RateLimiter::new_with_quota(default_quota, keyed_quotas));
 
+        #[cfg(feature = "python")]
         if let Some(handler) = post_connection {
             Python::with_gil(|py| match handler.call0(py) {
                 Ok(_) => tracing::debug!("Called `post_connection` handler"),
@@ -752,6 +768,7 @@ impl WebSocketClient {
     }
 
     /// Sends the given text `data` to the server.
+    #[allow(unused_variables)]
     pub async fn send_text(&self, data: String, keys: Option<Vec<String>>) {
         self.rate_limiter.await_keys_ready(keys).await;
 
@@ -769,6 +786,7 @@ impl WebSocketClient {
     }
 
     /// Sends the given bytes `data` to the server.
+    #[allow(unused_variables)]
     pub async fn send_bytes(&self, data: Vec<u8>, keys: Option<Vec<String>>) {
         self.rate_limiter.await_keys_ready(keys).await;
 
@@ -802,8 +820,8 @@ impl WebSocketClient {
         mut inner: WebSocketClientInner,
         connection_mode: Arc<AtomicU8>,
         post_reconnection: Option<Arc<dyn Fn() + Send + Sync>>,
-        py_post_reconnection: Option<PyObject>, // TODO: Deprecated
-        py_post_disconnection: Option<PyObject>, // TODO: Deprecated
+        #[cfg(feature = "python")] py_post_reconnection: Option<PyObject>, // TODO: Deprecated
+        #[cfg(feature = "python")] py_post_disconnection: Option<PyObject>, // TODO: Deprecated
     ) -> tokio::task::JoinHandle<()> {
         tokio::task::spawn(async move {
             tracing::debug!("Started task 'controller'");
@@ -844,6 +862,7 @@ impl WebSocketClient {
 
                     tracing::debug!("Closed");
 
+                    #[cfg(feature = "python")]
                     if let Some(ref handler) = py_post_disconnection {
                         Python::with_gil(|py| match handler.call0(py) {
                             Ok(_) => tracing::debug!("Called `post_disconnection` handler"),
@@ -866,6 +885,7 @@ impl WebSocketClient {
                             }
 
                             // TODO: Python based websocket handlers deprecated (will be removed)
+                            #[cfg(feature = "python")]
                             if let Some(ref handler) = py_post_reconnection {
                                 Python::with_gil(|py| match handler.call0(py) {
                                     Ok(_) => {
@@ -900,6 +920,7 @@ impl WebSocketClient {
 ////////////////////////////////////////////////////////////////////////////////
 // Tests
 ////////////////////////////////////////////////////////////////////////////////
+#[cfg(feature = "python")]
 #[cfg(test)]
 #[cfg(target_os = "linux")] // Only run network tests on Linux (CI stability)
 mod tests {

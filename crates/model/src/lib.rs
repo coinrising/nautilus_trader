@@ -34,7 +34,8 @@
 #![deny(nonstandard_style)]
 #![deny(missing_debug_implementations)]
 #![deny(rustdoc::broken_intra_doc_links)]
-// #![deny(clippy::missing_errors_doc)]
+#![deny(clippy::missing_errors_doc)]
+#![deny(clippy::missing_panics_doc)]
 
 pub mod accounts;
 pub mod currencies;
@@ -58,3 +59,6 @@ pub mod python;
 
 #[cfg(feature = "stubs")]
 pub mod stubs;
+
+#[cfg(feature = "defi")]
+pub mod defi;

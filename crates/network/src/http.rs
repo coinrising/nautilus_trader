@@ -232,6 +232,7 @@ impl HttpClient {
             client,
             header_keys: Arc::new(header_keys),
         };
+
         let rate_limiter = Arc::new(RateLimiter::new_with_quota(default_quota, keyed_quotas));
 
         Self {
@@ -263,12 +264,12 @@ impl HttpClient {
         url: String,
         headers: Option<HashMap<String, String>>,
         body: Option<Vec<u8>>,
-        keys: Option<Vec<String>>,
         timeout_secs: Option<u64>,
+        keys: Option<Vec<String>>,
     ) -> Result<HttpResponse, HttpClientError> {
         let rate_limiter = self.rate_limiter.clone();
-
         rate_limiter.await_keys_ready(keys).await;
+
         self.client
             .send_request(method, url, headers, body, timeout_secs)
             .await

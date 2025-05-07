@@ -18,13 +18,24 @@ from decimal import Decimal
 import pandas as pd
 
 from nautilus_trader import TEST_DATA_DIR
+from nautilus_trader.adapters.databento.data_utils import databento_data
+from nautilus_trader.adapters.databento.data_utils import load_catalog
 from nautilus_trader.backtest.engine import BacktestEngine
 from nautilus_trader.backtest.engine import BacktestEngineConfig
 from nautilus_trader.backtest.engine import ExecEngineConfig
 from nautilus_trader.backtest.engine import RiskEngineConfig
 from nautilus_trader.backtest.modules import FXRolloverInterestConfig
 from nautilus_trader.backtest.modules import FXRolloverInterestModule
+from nautilus_trader.backtest.node import BacktestNode
+from nautilus_trader.common.enums import LogColor
+from nautilus_trader.config import BacktestDataConfig
+from nautilus_trader.config import BacktestRunConfig
+from nautilus_trader.config import BacktestVenueConfig
+from nautilus_trader.config import ImportableStrategyConfig
 from nautilus_trader.config import LoggingConfig
+from nautilus_trader.config import StrategyConfig
+from nautilus_trader.config import StreamingConfig
+from nautilus_trader.core.datetime import unix_nanos_to_iso8601
 from nautilus_trader.examples.algorithms.twap import TWAPExecAlgorithm
 from nautilus_trader.examples.strategies.ema_cross import EMACross
 from nautilus_trader.examples.strategies.ema_cross import EMACrossConfig
@@ -42,23 +53,32 @@ from nautilus_trader.model.currencies import BTC
 from nautilus_trader.model.currencies import GBP
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.currencies import USDT
+from nautilus_trader.model.data import Bar
 from nautilus_trader.model.data import BarType
 from nautilus_trader.model.data import OrderBookDelta
 from nautilus_trader.model.data import OrderBookDeltas
+from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
 from nautilus_trader.model.enums import AccountType
 from nautilus_trader.model.enums import BookType
 from nautilus_trader.model.enums import OmsType
+from nautilus_trader.model.enums import OrderSide
+from nautilus_trader.model.greeks_data import GreeksData
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.instruments.betting import BettingInstrument
 from nautilus_trader.model.objects import Money
+from nautilus_trader.model.objects import Price
+from nautilus_trader.model.objects import Quantity
+from nautilus_trader.persistence.catalog.types import CatalogWriteMode
+from nautilus_trader.persistence.config import DataCatalogConfig
 from nautilus_trader.persistence.wranglers import BarDataWrangler
 from nautilus_trader.persistence.wranglers import QuoteTickDataWrangler
 from nautilus_trader.persistence.wranglers import TradeTickDataWrangler
 from nautilus_trader.test_kit.mocks.data import setup_catalog
 from nautilus_trader.test_kit.providers import TestDataProvider
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
+from nautilus_trader.trading.strategy import Strategy
 from tests.integration_tests.adapters.betfair.test_kit import BetfairDataProvider
 
 
@@ -67,11 +87,16 @@ class TestBacktestAcceptanceTestsUSDJPY:
         # Fixture Setup
         config = BacktestEngineConfig(
             logging=LoggingConfig(bypass_logging=True),
+            exec_engine=ExecEngineConfig(
+                snapshot_orders=True,
+                snapshot_positions=True,
+                snapshot_positions_interval_secs=10,
+            ),
             run_analysis=False,
         )
         self.engine = BacktestEngine(config=config)
-
         self.venue = Venue("SIM")
+
         interest_rate_data = pd.read_csv(TEST_DATA_DIR / "short-term-interest.csv")
         config = FXRolloverInterestConfig(interest_rate_data)
         fx_rollover_interest = FXRolloverInterestModule(config)
@@ -117,9 +142,9 @@ class TestBacktestAcceptanceTestsUSDJPY:
 
         # Assert - Should return expected PnL
         assert strategy.fast_ema.count == 2689
-        assert self.engine.iteration == 115044
+        assert self.engine.iteration == 115_044
         assert self.engine.portfolio.account(self.venue).balance_total(USD) == Money(
-            996_814.33,
+            996_498.80,
             USD,
         )
 
@@ -179,9 +204,9 @@ class TestBacktestAcceptanceTestsUSDJPY:
         # Assert
         assert strategy1.fast_ema.count == 2689
         assert strategy2.fast_ema.count == 2689
-        assert self.engine.iteration == 115044
+        assert self.engine.iteration == 115_044
         assert self.engine.portfolio.account(self.venue).balance_total(USD) == Money(
-            1_023_530.50,
+            974_269.71,
             USD,
         )
 
@@ -191,6 +216,11 @@ class TestBacktestAcceptanceTestsGBPUSDBarsInternal:
         # Fixture Setup
         config = BacktestEngineConfig(
             logging=LoggingConfig(bypass_logging=True),
+            exec_engine=ExecEngineConfig(
+                snapshot_orders=True,
+                snapshot_positions=True,
+                snapshot_positions_interval_secs=10,
+            ),
             run_analysis=False,
         )
         self.engine = BacktestEngine(config=config)
@@ -241,9 +271,9 @@ class TestBacktestAcceptanceTestsGBPUSDBarsInternal:
 
         # Assert
         assert strategy.fast_ema.count == 8353
-        assert self.engine.iteration == 120468
+        assert self.engine.iteration == 120_468
         assert self.engine.portfolio.account(self.venue).balance_total(GBP) == Money(
-            961_069.95,
+            987_607.44,
             GBP,
         )
 
@@ -268,10 +298,10 @@ class TestBacktestAcceptanceTestsGBPUSDBarsInternal:
         self.engine.run()
 
         # Assert - Should return expected PnL
-        assert strategy.fast_ema.count == 8353
-        assert self.engine.iteration == 120468
+        assert strategy.fast_ema.count == 8_353
+        assert self.engine.iteration == 120_468
         assert self.engine.portfolio.account(self.venue).balance_total(GBP) == Money(
-            1_008_966.94,
+            998_967.44,
             GBP,
         )
 
@@ -297,9 +327,9 @@ class TestBacktestAcceptanceTestsGBPUSDBarsInternal:
 
         # Assert - Should return expected PnL
         assert strategy.fast_ema.count == 41761
-        assert self.engine.iteration == 120468
+        assert self.engine.iteration == 120_468
         assert self.engine.portfolio.account(self.venue).balance_total(GBP) == Money(
-            241_080.17,
+            850_143.71,
             GBP,
         )
 
@@ -377,10 +407,10 @@ class TestBacktestAcceptanceTestsGBPUSDBarsExternal:
         self.engine.run()
 
         # Assert
-        assert strategy.fast_ema.count == 30117
-        assert self.engine.iteration == 60234
+        assert strategy.fast_ema.count == 30_117
+        assert self.engine.iteration == 60_234
         ending_balance = self.engine.portfolio.account(self.venue).balance_total(USD)
-        assert ending_balance == Money(1_088_115.65, USD)
+        assert ending_balance == Money(953_220.61, USD)
 
 
 class TestBacktestAcceptanceTestsBTCUSDTEmaCrossTWAP:
@@ -389,7 +419,6 @@ class TestBacktestAcceptanceTestsBTCUSDTEmaCrossTWAP:
         config = BacktestEngineConfig(
             run_analysis=False,
             logging=LoggingConfig(bypass_logging=True),
-            exec_engine=ExecEngineConfig(),
             risk_engine=RiskEngineConfig(bypass=True),
         )
         self.engine = BacktestEngine(
@@ -495,6 +524,11 @@ class TestBacktestAcceptanceTestsAUDUSD:
         # Fixture Setup
         config = BacktestEngineConfig(
             logging=LoggingConfig(bypass_logging=True),
+            exec_engine=ExecEngineConfig(
+                snapshot_orders=True,
+                snapshot_positions=True,
+                snapshot_positions_interval_secs=10,
+            ),
             run_analysis=False,
         )
         self.engine = BacktestEngine(config=config)
@@ -544,7 +578,7 @@ class TestBacktestAcceptanceTestsAUDUSD:
         assert strategy.fast_ema.count == 1771
         assert self.engine.iteration == 100_000
         assert self.engine.portfolio.account(self.venue).balance_total(AUD) == Money(
-            991_881.44,
+            996_601.43,
             AUD,
         )
 
@@ -567,7 +601,7 @@ class TestBacktestAcceptanceTestsAUDUSD:
         assert strategy.fast_ema.count == 1_000
         assert self.engine.iteration == 100_000
         assert self.engine.portfolio.account(self.venue).balance_total(AUD) == Money(
-            996_361.60,
+            998_121.60,
             AUD,
         )
 
@@ -577,6 +611,11 @@ class TestBacktestAcceptanceTestsETHUSDT:
         # Fixture Setup
         config = BacktestEngineConfig(
             logging=LoggingConfig(bypass_logging=True),
+            exec_engine=ExecEngineConfig(
+                snapshot_orders=True,
+                snapshot_positions=True,
+                snapshot_positions_interval_secs=10,
+            ),
             run_analysis=False,
         )
         self.engine = BacktestEngine(config=config)
@@ -621,9 +660,9 @@ class TestBacktestAcceptanceTestsETHUSDT:
 
         # Assert
         assert strategy.fast_ema.count == 279
-        assert self.engine.iteration == 69806
+        assert self.engine.iteration == 69_806
         expected_commission = Money(127.56763570, USDT)
-        expected_usdt = Money(998_869.96375810, USDT)
+        expected_usdt = Money(999_764.32147162, USDT)
         assert self.engine.portfolio.account(self.venue).commission(USDT) == expected_commission
         assert self.engine.portfolio.account(self.venue).balance_total(USDT) == expected_usdt
 
@@ -745,4 +784,272 @@ class TestBacktestAcceptanceTestsMarketMaking:
 
         # Assert
         assert self.engine.iteration == 4216
-        assert self.engine.portfolio.account(self.venue).balance_total(GBP) == Money("924.64", GBP)
+        assert self.engine.portfolio.account(self.venue).balance_total(GBP) == Money(927.19, GBP)
+
+
+class TestBacktestNodeWithBacktestDataIterator:
+    def test_backtest_same_with_and_without_data_configs(self) -> None:
+        # Arrange
+        messages_with_data: list = []
+        messages_without_data: list = []
+
+        # Act
+        run_backtest(messages_with_data.append, with_data=True)
+        run_backtest(messages_without_data.append, with_data=False)
+
+        assert messages_with_data == messages_without_data
+
+
+def run_backtest(test_callback=None, with_data=True, log_path=None):
+    catalog_folder = "options_catalog"
+    catalog = load_catalog(catalog_folder)
+
+    future_symbols = ["ESM4"]
+    option_symbols = ["ESM4 P5230", "ESM4 P5250"]
+
+    start_time = "2024-05-09T10:00"
+    end_time = "2024-05-09T10:05"
+
+    _ = databento_data(
+        future_symbols,
+        start_time,
+        end_time,
+        "ohlcv-1m",
+        "futures",
+        catalog_folder,
+    )
+    _ = databento_data(
+        option_symbols,
+        start_time,
+        end_time,
+        "bbo-1m",
+        "options",
+        catalog_folder,
+    )
+
+    # for saving and loading custom data greeks, use True, False then False, True below
+    stream_data, load_greeks = False, False
+
+    # actors = [
+    #     ImportableActorConfig(
+    #         actor_path=InterestRateProvider.fully_qualified_name(),
+    #         config_path=InterestRateProviderConfig.fully_qualified_name(),
+    #         config={
+    #             "interest_rates_file": str(
+    #                 data_path(catalog_folder, "usd_short_term_rate.xml"),
+    #             ),
+    #         },
+    #     ),
+    # ]
+
+    strategies = [
+        ImportableStrategyConfig(
+            strategy_path=OptionStrategy.fully_qualified_name(),
+            config_path=OptionConfig.fully_qualified_name(),
+            config={
+                "future_id": InstrumentId.from_str(f"{future_symbols[0]}.GLBX"),
+                "option_id": InstrumentId.from_str(f"{option_symbols[0]}.GLBX"),
+                "option_id2": InstrumentId.from_str(f"{option_symbols[1]}.GLBX"),
+                "load_greeks": load_greeks,
+            },
+        ),
+    ]
+
+    streaming = StreamingConfig(
+        catalog_path=catalog.path,
+        fs_protocol="file",
+        include_types=[GreeksData],
+    )
+
+    logging = LoggingConfig(
+        bypass_logging=False,
+        log_colors=True,
+        log_level="WARN",
+        log_level_file="WARN",
+        log_directory=log_path,  # must be the same as conftest.py
+        log_file_format=None,  # "json" or None
+        log_file_name="test_logs",  # must be the same as conftest.py
+        clear_log_file=True,
+        print_config=False,
+        use_pyo3=False,
+    )
+
+    catalogs = [
+        DataCatalogConfig(
+            path=catalog.path,
+        ),
+    ]
+
+    engine_config = BacktestEngineConfig(
+        logging=logging,
+        # actors=actors,
+        strategies=strategies,
+        streaming=(streaming if stream_data else None),
+        catalogs=catalogs,
+    )
+
+    if with_data:
+        data = [
+            BacktestDataConfig(
+                data_cls=QuoteTick,
+                catalog_path=catalog.path,
+                instrument_id=InstrumentId.from_str(f"{option_symbols[0]}.GLBX"),
+            ),
+            BacktestDataConfig(
+                data_cls=QuoteTick,
+                catalog_path=catalog.path,
+                instrument_id=InstrumentId.from_str(f"{option_symbols[1]}.GLBX"),
+            ),
+            BacktestDataConfig(
+                data_cls=Bar,
+                catalog_path=catalog.path,
+                instrument_id=InstrumentId.from_str(f"{future_symbols[0]}.GLBX"),
+                bar_spec="1-MINUTE-LAST",
+            ),
+        ]
+    else:
+        data = []
+
+    if load_greeks:
+        data = [
+            BacktestDataConfig(
+                data_cls=GreeksData.fully_qualified_name(),
+                catalog_path=catalog.path,
+                client_id="GreeksDataProvider",
+                metadata={"instrument_id": "ES"},
+            ),
+            *data,
+        ]
+
+    venues = [
+        BacktestVenueConfig(
+            name="GLBX",
+            oms_type="NETTING",
+            account_type="MARGIN",
+            base_currency="USD",
+            starting_balances=["1_000_000 USD"],
+        ),
+    ]
+
+    configs = [
+        BacktestRunConfig(
+            engine=engine_config,
+            data=data,
+            venues=venues,
+            chunk_size=None,  # use None when loading custom data, else a value of 10_000 for example
+            start=start_time,
+            end=end_time,
+        ),
+    ]
+
+    node = BacktestNode(configs=configs)
+    node.build()
+
+    if test_callback:
+        node.get_engine(configs[0].id).kernel.msgbus.subscribe("test", test_callback)
+
+    results = node.run()
+
+    if stream_data:
+        catalog.convert_stream_to_data(
+            results[0].instance_id,
+            GreeksData,
+            mode=CatalogWriteMode.NEWFILE,
+        )
+
+    engine: BacktestEngine = node.get_engine(configs[0].id)
+    engine.trader.generate_order_fills_report()
+    engine.trader.generate_positions_report()
+    engine.trader.generate_account_report(Venue("GLBX"))
+    node.dispose()
+
+
+class OptionConfig(StrategyConfig, frozen=True):
+    future_id: InstrumentId
+    option_id: InstrumentId
+    option_id2: InstrumentId
+    load_greeks: bool = False
+
+
+class OptionStrategy(Strategy):
+    def __init__(self, config: OptionConfig):
+        super().__init__(config=config)
+        self.start_orders_done = False
+
+    def on_start(self):
+        self.bar_type = BarType.from_str(f"{self.config.future_id}-1-MINUTE-LAST-EXTERNAL")
+
+        self.request_instrument(self.config.option_id)
+        self.request_instrument(self.config.option_id2)
+        self.request_instrument(self.bar_type.instrument_id)
+
+        self.subscribe_quote_ticks(self.config.option_id2)
+        self.subscribe_quote_ticks(
+            self.config.option_id,
+            params={
+                "duration_seconds": pd.Timedelta(minutes=1).seconds,
+                "append_data": False,
+            },
+        )
+        self.subscribe_bars(self.bar_type)
+
+        if self.config.load_greeks:
+            self.greeks.subscribe_greeks("ES")
+
+    def on_quote_tick(self, data):
+        self.user_log(data)
+
+    def init_portfolio(self):
+        self.submit_market_order(instrument_id=self.config.option_id, quantity=-10)
+        self.submit_market_order(instrument_id=self.config.option_id2, quantity=10)
+        self.submit_market_order(instrument_id=self.config.future_id, quantity=1)
+
+        self.start_orders_done = True
+
+    # def on_bar(self, data):
+    #     self.user_log(data)
+
+    def on_bar(self, bar):
+        self.user_log(
+            f"bar ts_init = {unix_nanos_to_iso8601(bar.ts_init)}, bar close = {bar.close}",
+        )
+
+        if not self.start_orders_done:
+            self.user_log("Initializing the portfolio with some trades")
+            self.init_portfolio()
+            return
+
+        self.display_greeks()
+
+    def display_greeks(self, alert=None):
+        portfolio_greeks = self.greeks.portfolio_greeks(
+            use_cached_greeks=self.config.load_greeks,
+            publish_greeks=(not self.config.load_greeks),
+        )
+        self.user_log(f"{portfolio_greeks=}")
+
+    def submit_market_order(self, instrument_id, quantity):
+        order = self.order_factory.market(
+            instrument_id=instrument_id,
+            order_side=(OrderSide.BUY if quantity > 0 else OrderSide.SELL),
+            quantity=Quantity.from_int(abs(quantity)),
+        )
+
+        self.submit_order(order)
+
+    def submit_limit_order(self, instrument_id, price, quantity):
+        order = self.order_factory.limit(
+            instrument_id=instrument_id,
+            order_side=(OrderSide.BUY if quantity > 0 else OrderSide.SELL),
+            quantity=Quantity.from_int(abs(quantity)),
+            price=Price(price),
+        )
+
+        self.submit_order(order)
+
+    def user_log(self, msg):
+        self.log.warning(str(msg), color=LogColor.GREEN)
+        self.msgbus.publish(topic="test", msg=str(msg))
+
+    def on_stop(self):
+        self.unsubscribe_bars(self.bar_type)

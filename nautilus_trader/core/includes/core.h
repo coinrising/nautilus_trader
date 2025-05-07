@@ -119,8 +119,7 @@ const char *unix_nanos_to_iso8601_millis_cstr(uint64_t timestamp_ns);
  *
  * # Panics
  *
- * This function panics:
- * - If `ptr` is null.
+ * Panics if `ptr` is null.
  */
 uint8_t precision_from_cstr(const char *ptr);
 
@@ -133,8 +132,7 @@ uint8_t precision_from_cstr(const char *ptr);
  *
  * # Panics
  *
- * This function panics:
- * - If `ptr` is null.
+ * Panics if `ptr` is null.
  */
 uint8_t min_increment_precision_from_cstr(const char *ptr);
 
@@ -143,12 +141,11 @@ uint8_t min_increment_precision_from_cstr(const char *ptr);
  *
  * # Safety
  *
- * - Assumes `ptr` is a valid C string pointer.
+ * Assumes `ptr` is a valid C string pointer.
  *
  * # Panics
  *
- * This function panics:
- * - If `ptr` is null.
+ * Panics if `ptr` is null.
  */
 void cstr_drop(const char *ptr);
 
@@ -163,8 +160,7 @@ struct UUID4_t uuid4_new(void);
  *
  * # Panics
  *
- * This function panics:
- * - If `ptr` cannot be cast to a valid C string.
+ * Panics if `ptr` cannot be cast to a valid C string.
  */
 struct UUID4_t uuid4_from_cstr(const char *ptr);
 

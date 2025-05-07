@@ -51,7 +51,10 @@ impl ActorRegistry {
     }
 }
 
-// SAFETY: Actor registry is not meant to be passed between threads
+// SAFETY: ActorRegistry uses non-thread-safe internals (Rc, RefCell, UnsafeCell).
+// We mark it Sync + Send to satisfy `OnceLock<T>: Sync` for static initialization,
+// but all registry operations must still occur on a single thread. Moving or accessing
+// from multiple threads is undefined behavior.
 unsafe impl Sync for ActorRegistry {}
 unsafe impl Send for ActorRegistry {}
 
@@ -62,7 +65,9 @@ pub fn get_actor_registry() -> &'static ActorRegistry {
 }
 
 pub fn register_actor(actor: Rc<UnsafeCell<dyn Actor>>) {
-    let actor_id = unsafe { &mut *actor.get() }.id();
+    // SAFETY: We only immutably borrow the actor to call `id()`,
+    // which takes &self. This does not violate aliasing or mutable borrow rules.
+    let actor_id = unsafe { &*actor.get() }.id();
     get_actor_registry().insert(actor_id, actor);
 }
 
@@ -74,4 +79,11 @@ pub fn get_actor(id: &Ustr) -> Option<Rc<UnsafeCell<dyn Actor>>> {
 pub fn get_actor_unchecked<T: Actor>(id: &Ustr) -> &mut T {
     let actor = get_actor(id).unwrap_or_else(|| panic!("Actor for {id} not found"));
     unsafe { &mut *(actor.get() as *mut _ as *mut T) }
+}
+
+// Clears the global actor registry (for test isolation).
+#[cfg(test)]
+pub fn clear_actor_registry() {
+    // SAFETY: Clearing registry actors; tests should run single-threaded for actor registry
+    get_actor_registry().actors.borrow_mut().clear();
 }

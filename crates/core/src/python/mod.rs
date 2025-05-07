@@ -17,6 +17,7 @@
 
 pub mod casing;
 pub mod datetime;
+pub mod enums;
 pub mod serialization;
 pub mod uuid;
 pub mod version;
@@ -86,6 +87,7 @@ pub fn to_pyruntime_err(e: impl std::fmt::Display) -> PyErr {
 }
 
 #[pyfunction]
+#[allow(clippy::needless_pass_by_value)]
 fn is_pycapsule(obj: PyObject) -> bool {
     unsafe {
         // PyCapsule_CheckExact checks if the object is exactly a PyCapsule

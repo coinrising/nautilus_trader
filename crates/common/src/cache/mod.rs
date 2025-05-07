@@ -13,7 +13,12 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-//! A common in-memory `Cache` for market and execution related data.
+// Under development
+#![allow(clippy::missing_errors_doc)]
+
+//! In-memory cache for market and execution data, with optional persistent backing.
+//!
+//! Provides methods to load, query, and update cached data such as instruments, orders, and prices.
 
 pub mod config;
 pub mod database;
@@ -96,8 +101,11 @@ impl Default for Cache {
 }
 
 impl Cache {
-    /// Creates a new [`Cache`] instance.
+    /// Creates a new [`Cache`] instance with optional configuration and database adapter.
     #[must_use]
+    /// # Note
+    ///
+    /// Uses provided `CacheConfig` or defaults, and optional `CacheDatabaseAdapter` for persistence.
     pub fn new(
         config: Option<CacheConfig>,
         database: Option<Box<dyn CacheDatabaseAdapter>>,
@@ -136,7 +144,11 @@ impl Cache {
 
     // -- COMMANDS --------------------------------------------------------------------------------
 
-    /// Clears the current general cache and loads the general objects from the cache database.
+    /// Clears and reloads general entries from the database into the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading general cache data fails.
     pub fn cache_general(&mut self) -> anyhow::Result<()> {
         self.general = match &mut self.database {
             Some(db) => db.load()?,
@@ -150,7 +162,11 @@ impl Cache {
         Ok(())
     }
 
-    /// Loads all caches (currencies, instruments, synthetics, accounts, orders, positions) from the database.
+    /// Loads all core caches (currencies, instruments, accounts, orders, positions) from the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading all cache data fails.
     pub async fn cache_all(&mut self) -> anyhow::Result<()> {
         let cache_map = match &self.database {
             Some(db) => db.load_all().await?,
@@ -166,7 +182,11 @@ impl Cache {
         Ok(())
     }
 
-    /// Clears the current currencies cache and loads currencies from the cache database.
+    /// Clears and reloads the currency cache from the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading currencies cache fails.
     pub async fn cache_currencies(&mut self) -> anyhow::Result<()> {
         self.currencies = match &mut self.database {
             Some(db) => db.load_currencies().await?,
@@ -177,7 +197,11 @@ impl Cache {
         Ok(())
     }
 
-    /// Clears the current instruments cache and loads instruments from the cache database.
+    /// Clears and reloads the instrument cache from the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading instruments cache fails.
     pub async fn cache_instruments(&mut self) -> anyhow::Result<()> {
         self.instruments = match &mut self.database {
             Some(db) => db.load_instruments().await?,
@@ -188,8 +212,11 @@ impl Cache {
         Ok(())
     }
 
-    /// Clears the current synthetic instruments cache and loads synthetic instruments from the cache
-    /// database.
+    /// Clears and reloads the synthetic instrument cache from the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading synthetic instruments cache fails.
     pub async fn cache_synthetics(&mut self) -> anyhow::Result<()> {
         self.synthetics = match &mut self.database {
             Some(db) => db.load_synthetics().await?,
@@ -203,7 +230,11 @@ impl Cache {
         Ok(())
     }
 
-    /// Clears the current accounts cache and loads accounts from the cache database.
+    /// Clears and reloads the account cache from the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading accounts cache fails.
     pub async fn cache_accounts(&mut self) -> anyhow::Result<()> {
         self.accounts = match &mut self.database {
             Some(db) => db.load_accounts().await?,
@@ -217,7 +248,11 @@ impl Cache {
         Ok(())
     }
 
-    /// Clears the current orders cache and loads orders from the cache database.
+    /// Clears and reloads the order cache from the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading orders cache fails.
     pub async fn cache_orders(&mut self) -> anyhow::Result<()> {
         self.orders = match &mut self.database {
             Some(db) => db.load_orders().await?,
@@ -228,7 +263,11 @@ impl Cache {
         Ok(())
     }
 
-    /// Clears the current positions cache and loads positions from the cache database.
+    /// Clears and reloads the position cache from the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading positions cache fails.
     pub async fn cache_positions(&mut self) -> anyhow::Result<()> {
         self.positions = match &mut self.database {
             Some(db) => db.load_positions().await?,
@@ -1041,10 +1080,13 @@ impl Cache {
         }
     }
 
-    /// Adds a general object `value` (as bytes) to the cache at the given `key`.
+    /// Adds a raw bytes entry to the cache under the given key.
     ///
-    /// The cache is agnostic to what the bytes actually represent (and how it may be serialized),
-    /// which provides maximum flexibility.
+    /// The cache stores only raw bytes; interpretation is the caller's responsibility.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if persisting the entry to the backing database fails.
     pub fn add(&mut self, key: &str, value: Bytes) -> anyhow::Result<()> {
         check_valid_string(key, stringify!(key)).expect(FAILED);
         check_predicate_false(value.is_empty(), stringify!(value)).expect(FAILED);
@@ -1058,7 +1100,11 @@ impl Cache {
         Ok(())
     }
 
-    /// Adds the given order `book` to the cache.
+    /// Adds an `OrderBook` to the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if persisting the order book to the backing database fails.
     pub fn add_order_book(&mut self, book: OrderBook) -> anyhow::Result<()> {
         log::debug!("Adding `OrderBook` {}", book.instrument_id);
 
@@ -1072,7 +1118,11 @@ impl Cache {
         Ok(())
     }
 
-    /// Adds the given `own_book` to the cache.
+    /// Adds an `OwnOrderBook` to the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if persisting the own order book fails.
     pub fn add_own_order_book(&mut self, own_book: OwnOrderBook) -> anyhow::Result<()> {
         log::debug!("Adding `OwnOrderBook` {}", own_book.instrument_id);
 
@@ -1604,6 +1654,10 @@ impl Cache {
     }
 
     /// Updates the given `account` in the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if updating the account in the database fails.
     pub fn update_account(&mut self, account: AccountAny) -> anyhow::Result<()> {
         if let Some(database) = &mut self.database {
             database.update_account(&account)?;
@@ -1612,6 +1666,10 @@ impl Cache {
     }
 
     /// Updates the given `order` in the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if updating the order in the database fails.
     pub fn update_order(&mut self, order: &OrderAny) -> anyhow::Result<()> {
         let client_order_id = order.client_order_id();
 
@@ -1672,6 +1730,10 @@ impl Cache {
     }
 
     /// Updates the given `position` in the cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if updating the position in the database fails.
     pub fn update_position(&mut self, position: &Position) -> anyhow::Result<()> {
         // Update open/closed state
         if position.is_open() {
@@ -1694,6 +1756,10 @@ impl Cache {
 
     /// Creates a snapshot of the given position by cloning it, assigning a new ID,
     /// serializing it, and storing it in the position snapshots.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serializing or storing the position snapshot fails.
     pub fn snapshot_position(&mut self, position: &Position) -> anyhow::Result<()> {
         let position_id = position.id;
 
@@ -1719,6 +1785,11 @@ impl Cache {
         Ok(())
     }
 
+    /// Creates a snapshot of the given position state in the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if snapshotting the position state fails.
     pub fn snapshot_position_state(
         &mut self,
         position: &Position,
@@ -1751,6 +1822,11 @@ impl Cache {
         todo!()
     }
 
+    /// Snapshots the given order state in the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if snapshotting the order state fails.
     pub fn snapshot_order_state(&self, order: &OrderAny) -> anyhow::Result<()> {
         let database = if let Some(database) = &self.database {
             database
@@ -2590,6 +2666,10 @@ impl Cache {
     // -- GENERAL ---------------------------------------------------------------------------------
 
     /// Gets a reference to the general object value for the given `key` (if found).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `key` is invalid.
     pub fn get(&self, key: &str) -> anyhow::Result<Option<&Bytes>> {
         check_valid_string(key, stringify!(key)).expect(FAILED);
 
@@ -2883,7 +2963,7 @@ impl Cache {
     ///
     /// # Panics
     ///
-    /// This function panics if `xrate` is not positive.
+    /// Panics if `xrate` is not positive.
     pub fn set_mark_xrate(&mut self, from_currency: Currency, to_currency: Currency, xrate: f64) {
         assert!(xrate > 0.0, "xrate was zero");
         self.mark_xrates.insert((from_currency, to_currency), xrate);

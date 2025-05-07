@@ -67,6 +67,7 @@ from nautilus_trader.model.data cimport BarAggregation
 from nautilus_trader.model.data cimport BarType
 from nautilus_trader.model.data cimport BookOrder
 from nautilus_trader.model.data cimport InstrumentClose
+from nautilus_trader.model.data cimport OrderBookDepth10
 from nautilus_trader.model.data cimport QuoteTick
 from nautilus_trader.model.data cimport TradeTick
 from nautilus_trader.model.events.order cimport OrderAccepted
@@ -450,6 +451,26 @@ cdef class OrderMatchingEngine:
         #     raise RuntimeError(data.time_in_force)
 
         self.iterate(deltas.ts_init)
+
+    cpdef void process_order_book_depth10(self, OrderBookDepth10 depth):
+        """
+        Process the exchanges market for the given order book depth.
+
+        Parameters
+        ----------
+        depth : OrderBookDepth10
+            The order book depth to process.
+
+        """
+        Condition.not_none(depth, "depth")
+
+        if is_logging_initialized():
+            self._log.debug(f"Processing {depth!r}")
+
+        self._book.apply_depth(depth)
+
+        self.iterate(depth.ts_init)
+
 
     cpdef void process_quote_tick(self, QuoteTick tick) :
         """
@@ -1978,6 +1999,7 @@ cdef class OrderMatchingEngine:
             self.cancel_order(order)
             return
 
+        # Check MARKET order on exhausted book volume
         if (
             order.is_open_c()
             and self.book_type == BookType.L1_MBP
@@ -1985,6 +2007,7 @@ cdef class OrderMatchingEngine:
             order.order_type == OrderType.MARKET
             or order.order_type == OrderType.MARKET_IF_TOUCHED
             or order.order_type == OrderType.STOP_MARKET
+            or order.order_type == OrderType.TRAILING_STOP_MARKET
         )
         ):
             # Exhausted simulated book volume (continue aggressive filling into next level)
@@ -2008,6 +2031,45 @@ cdef class OrderMatchingEngine:
                 position=position,
             )
 
+        # Check LIMIT order on exhausted book volume
+        if (
+            order.is_open_c()
+            and self.book_type == BookType.L1_MBP
+            and (
+            order.order_type == OrderType.LIMIT
+            or order.order_type == OrderType.LIMIT_IF_TOUCHED
+            or order.order_type == OrderType.MARKET_TO_LIMIT
+            or order.order_type == OrderType.STOP_LIMIT
+            or order.order_type == OrderType.TRAILING_STOP_LIMIT
+        )
+        ):
+            if not self._has_targets and ((order.side == OrderSide.BUY and order.price == self._core.ask) or (order.side == OrderSide.SELL and order.price == self._core.bid)):
+                return  # Limit price is equal to top-of-book, no further fills
+
+            if order.liquidity_side == LiquiditySide.MAKER:
+                # Market moved through limit price, assumption is there was enough liquidity to fill entire order
+                fill_px = order.price
+            else:  # Marketable limit order
+                # Exhausted simulated book volume (continue aggressive filling into next level)
+                # This is a very basic implementation of slipping by a single tick, in the future
+                # we will implement more detailed fill modeling.
+                if order.side == OrderSide.BUY:
+                    fill_px = last_fill_px.add(self.instrument.price_increment)
+                elif order.side == OrderSide.SELL:
+                    fill_px = last_fill_px.sub(self.instrument.price_increment)
+                else:
+                    raise ValueError(  # pragma: no cover (design-time error)
+                        f"invalid `OrderSide`, was {order.side}",  # pragma: no cover (design-time error)
+                    )
+
+            self.fill_order(
+                order=order,
+                last_px=fill_px,
+                last_qty=order.leaves_qty,
+                liquidity_side=order.liquidity_side,
+                venue_position_id=venue_position_id,
+                position=position,
+            )
 
     cpdef void fill_order(
         self,

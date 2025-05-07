@@ -154,7 +154,7 @@ impl BacktestEngine {
         let exchange = Rc::new(RefCell::new(exchange));
         self.venues.insert(venue, exchange.clone());
 
-        let account_id = AccountId::from(format!("{}-001", venue).as_str());
+        let account_id = AccountId::from(format!("{venue}-001").as_str());
         let exec_client = BacktestExecutionClient::new(
             self.kernel.config.trader_id,
             account_id,
@@ -171,7 +171,7 @@ impl BacktestEngine {
             .exec_engine
             .register_client(exec_client)
             .unwrap();
-        log::info!("Adding exchange {} to engine", venue);
+        log::info!("Adding exchange {venue} to engine");
     }
 
     pub fn change_fill_model(&mut self, venue: Venue, fill_model: FillModel) {
@@ -308,6 +308,7 @@ impl BacktestEngine {
         todo!("implement add_data_client_if_not_exists")
     }
 
+    // TODO: We might want venue to be optional for multi-venue clients
     pub fn add_market_data_client_if_not_exists(&mut self, venue: Venue) {
         let client_id = ClientId::from(venue.as_str());
         if !self
@@ -320,7 +321,7 @@ impl BacktestEngine {
                 BacktestDataClient::new(client_id, venue, self.kernel.cache.clone());
             let data_client_adapter = DataClientAdapter::new(
                 client_id,
-                venue,
+                Some(venue), // TBD
                 false,
                 false,
                 Box::new(backtest_client),

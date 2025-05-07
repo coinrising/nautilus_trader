@@ -10,7 +10,7 @@
 
 | Branch    | Version                                                                                                                                                                                                                     | Status                                                                                                                                                                                            |
 | :-------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `master`  | [![version](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnautechsystems%2Fnautilus_trader%2Fmaster%2Fversion.json)](https://packages.nautechsystems.io/simple/nautilus-trader/index.html)  | [![build](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml/badge.svg?branch=master)](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml)  |
+| `master`  | [![version](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnautechsystems%2Fnautilus_trader%2Fmaster%2Fversion.json)](https://packages.nautechsystems.io/simple/nautilus-trader/index.html)  | [![build](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml/badge.svg?branch=nightly)](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml) |
 | `nightly` | [![version](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnautechsystems%2Fnautilus_trader%2Fnightly%2Fversion.json)](https://packages.nautechsystems.io/simple/nautilus-trader/index.html) | [![build](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml/badge.svg?branch=nightly)](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml) |
 | `develop` | [![version](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnautechsystems%2Fnautilus_trader%2Fdevelop%2Fversion.json)](https://packages.nautechsystems.io/simple/nautilus-trader/index.html) | [![build](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml/badge.svg?branch=develop)](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml) |
 
@@ -21,8 +21,8 @@
 | `macOS (ARM64)`    | 1.86.0+ | 3.11-3.13  |
 | `Windows (x86_64)` | 1.86.0+ | 3.11-3.13  |
 
-- **Docs**: https://nautilustrader.io/docs/
-- **Website**: https://nautilustrader.io
+- **Docs**: <https://nautilustrader.io/docs/>
+- **Website**: <https://nautilustrader.io>
 - **Support**: [support@nautilustrader.io](mailto:support@nautilustrader.io)
 
 ## Introduction
@@ -60,10 +60,10 @@ including FX, Equities, Futures, Options, Crypto and Betting, enabling seamless 
 
 ![Alt text](https://github.com/nautechsystems/nautilus_trader/raw/develop/assets/nautilus-art.png "nautilus")
 
-> _nautilus - from ancient Greek 'sailor' and naus 'ship'._
+> *nautilus - from ancient Greek 'sailor' and naus 'ship'.*
 >
-> _The nautilus shell consists of modular chambers with a growth factor which approximates a logarithmic spiral.
-> The idea is that this can be translated to the aesthetics of design and architecture._
+> *The nautilus shell consists of modular chambers with a growth factor which approximates a logarithmic spiral.
+> The idea is that this can be translated to the aesthetics of design and architecture.*
 
 ## Why NautilusTrader?
 
@@ -88,7 +88,7 @@ with CPython C extension modules then able to offer a Python-native environment,
 Python was originally created decades ago as a simple scripting language with a clean straightforward syntax.
 It has since evolved into a fully fledged general purpose object-oriented programming language.
 Based on the TIOBE index, Python is currently the most popular programming language in the world.
-Not only that, Python has become the _de facto lingua franca_ of data science, machine learning, and artificial intelligence.
+Not only that, Python has become the *de facto lingua franca* of data science, machine learning, and artificial intelligence.
 
 The language out of the box is not without its drawbacks however, especially in the context of
 implementing large performance-critical systems. Cython has addressed a lot of these issues, offering all the advantages
@@ -120,7 +120,7 @@ This project makes the [Soundness Pledge](https://raphlinus.github.io/rust/2020/
 
 ## Integrations
 
-NautilusTrader is modularly designed to work with _adapters_, enabling connectivity to trading venues
+NautilusTrader is modularly designed to work with *adapters*, enabling connectivity to trading venues
 and data providers by translating their raw APIs into a unified interface and normalized domain model.
 
 The following integrations are currently supported:
@@ -132,7 +132,7 @@ The following integrations are currently supported:
 | [Binance US](https://binance.us)                                             | `BINANCE`             | Crypto Exchange (CEX)   | ![status](https://img.shields.io/badge/stable-green)    | [Guide](https://nautilustrader.io/docs/nightly/integrations/binance.html)       |
 | [Binance Futures](https://www.binance.com/en/futures)                        | `BINANCE`             | Crypto Exchange (CEX)   | ![status](https://img.shields.io/badge/stable-green)    | [Guide](https://nautilustrader.io/docs/nightly/integrations/binance.html)       |
 | [Bybit](https://www.bybit.com)                                               | `BYBIT`               | Crypto Exchange (CEX)   | ![status](https://img.shields.io/badge/stable-green)    | [Guide](https://nautilustrader.io/docs/nightly/integrations/bybit.html)         |
-| [Coinbase International](https://www.coinbase.com/en/international-exchange) | `COINBASE_INTX`       | Crypto Exchange (CEX)   | ![status](https://img.shields.io/badge/beta-yellow)     | [Guide](https://nautilustrader.io/docs/nightly/integrations/coinbase_intx.html) |
+| [Coinbase International](https://www.coinbase.com/en/international-exchange) | `COINBASE_INTX`       | Crypto Exchange (CEX)   | ![status](https://img.shields.io/badge/stable-green)    | [Guide](https://nautilustrader.io/docs/nightly/integrations/coinbase_intx.html) |
 | [Databento](https://databento.com)                                           | `DATABENTO`           | Data Provider           | ![status](https://img.shields.io/badge/stable-green)    | [Guide](https://nautilustrader.io/docs/nightly/integrations/databento.html)     |
 | [dYdX](https://dydx.exchange/)                                               | `DYDX`                | Crypto Exchange (DEX)   | ![status](https://img.shields.io/badge/stable-green)    | [Guide](https://nautilustrader.io/docs/nightly/integrations/dydx.html)          |
 | [Interactive Brokers](https://www.interactivebrokers.com)                    | `INTERACTIVE_BROKERS` | Brokerage (multi-venue) | ![status](https://img.shields.io/badge/stable-green)    | [Guide](https://nautilustrader.io/docs/nightly/integrations/ib.html)            |
@@ -144,6 +144,7 @@ The following integrations are currently supported:
 - **Type**: The type of integration (often the venue type).
 
 ### Status
+
 - `building`: Under construction and likely not in a usable state.
 - `beta`: Completed to a minimally working state and in a beta testing phase.
 - `stable`: Stabilized feature set and API, the integration has been tested by both developers and users to a reasonable level (some bugs may still remain).
@@ -190,13 +191,26 @@ See the [Installation Guide](https://nautilustrader.io/docs/latest/getting_start
 
 ## Installation
 
-### From PyPI
+We recommend using the latest supported version of Python and installing [nautilus_trader](https://pypi.org/project/nautilus_trader/) inside a virtual environment to isolate dependencies.
 
-We recommend using the latest supported version of Python and setting up [nautilus_trader](https://pypi.org/project/nautilus_trader/) in a virtual environment to isolate dependencies.
+**There are two supported ways to install**:
+
+1. Pre-built binary wheel from PyPI *or* the Nautech Systems package index.
+2. Build from source.
+
+> [!TIP]
+>
+> We highly recommend installing using the [uv](https://docs.astral.sh/uv) package manager with a "vanilla" CPython.
+>
+> Conda and other Python distributions *may* work but aren’t officially supported.
+
+### From PyPI
 
 To install the latest binary wheel (or sdist package) from PyPI using Python's pip package manager:
 
-    pip install -U nautilus_trader
+```bash
+pip install -U nautilus_trader
+```
 
 ### From the Nautech Systems package index
 
@@ -209,7 +223,9 @@ Stable wheels correspond to official releases of `nautilus_trader` on PyPI, and 
 
 To install the latest stable release:
 
-    pip install -U nautilus_trader --index-url=https://packages.nautechsystems.io/simple
+```bash
+pip install -U nautilus_trader --index-url=https://packages.nautechsystems.io/simple
+```
 
 #### Development wheels
 
@@ -242,11 +258,15 @@ By default, pip installs the latest stable release. Adding the `--pre` flag ensu
 
 To install the latest available pre-release (including development wheels):
 
-    pip install -U nautilus_trader --pre --index-url=https://packages.nautechsystems.io/simple
+```bash
+pip install -U nautilus_trader --pre --index-url=https://packages.nautechsystems.io/simple
+```
 
 To install a specific development wheel (e.g., `1.208.0a20241212` for December 12, 2024):
 
-    pip install nautilus_trader==1.208.0a20241212 --index-url=https://packages.nautechsystems.io/simple
+```bash
+pip install nautilus_trader==1.208.0a20241212 --index-url=https://packages.nautechsystems.io/simple
+```
 
 #### Available versions
 
@@ -254,7 +274,9 @@ You can view all available versions of `nautilus_trader` on the [package index](
 
 To programmatically fetch and list available versions:
 
-    curl -s https://packages.nautechsystems.io/simple/nautilus-trader/index.html | grep -oP '(?<=<a href=")[^"]+(?=")' | awk -F'#' '{print $1}' | sort
+```bash
+curl -s https://packages.nautechsystems.io/simple/nautilus-trader/index.html | grep -oP '(?<=<a href=")[^"]+(?=")' | awk -F'#' '{print $1}' | sort
+```
 
 #### Branch updates
 
@@ -268,14 +290,15 @@ To programmatically fetch and list available versions:
 
 ### From Source
 
-It's possible to install from source using pip if you first install the build dependencies
-as specified in the `pyproject.toml`. We highly recommend installing using [uv](https://docs.astral.sh/uv) as below.
+It's possible to install from source using pip if you first install the build dependencies as specified in the `pyproject.toml`.
 
 1. Install [rustup](https://rustup.rs/) (the Rust toolchain installer):
    - Linux and macOS:
+
        ```bash
        curl https://sh.rustup.rs -sSf | sh
        ```
+
    - Windows:
        - Download and install [`rustup-init.exe`](https://win.rustup.rs/x86_64)
        - Install "Desktop development with C++" with [Build Tools for Visual Studio 2019](https://visualstudio.microsoft.com/thank-you-downloading-visual-studio/?sku=BuildTools&rel=16)
@@ -284,36 +307,46 @@ as specified in the `pyproject.toml`. We highly recommend installing using [uv](
 
 2. Enable `cargo` in the current shell:
    - Linux and macOS:
+
        ```bash
        source $HOME/.cargo/env
        ```
+
    - Windows:
      - Start a new PowerShell
 
 3. Install [clang](https://clang.llvm.org/) (a C language frontend for LLVM):
    - Linux:
+
        ```bash
        sudo apt-get install clang
        ```
+
    - Windows:
        1. Add Clang to your [Build Tools for Visual Studio 2019](https://visualstudio.microsoft.com/thank-you-downloading-visual-studio/?sku=BuildTools&rel=16):
           - Start | Visual Studio Installer | Modify | C++ Clang tools for Windows (12.0.0 - x64…) = checked | Modify
        2. Enable `clang` in the current shell:
+
           ```powershell
           [System.Environment]::SetEnvironmentVariable('path', "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\Llvm\x64\bin\;" + $env:Path,"User")
           ```
+
    - Verify (any system):
        from a terminal session run: `clang --version`
 
 4. Install uv (see the [uv installation guide](https://docs.astral.sh/uv/getting-started/installation) for more details):
 
-       curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
 
 5. Clone the source with `git`, and install from the project's root directory:
 
-       git clone --branch develop --depth 1 https://github.com/nautechsystems/nautilus_trader
-       cd nautilus_trader
-       uv sync --all-extras
+    ```bash
+    git clone --branch develop --depth 1 https://github.com/nautechsystems/nautilus_trader
+    cd nautilus_trader
+    uv sync --all-extras
+    ```
 
 > [!NOTE]
 >
@@ -373,16 +406,22 @@ Docker containers are built using the base image `python:3.12-slim` with the fol
 
 You can pull the container images as follows:
 
-    docker pull ghcr.io/nautechsystems/<image_variant_tag> --platform linux/amd64
+```bash
+docker pull ghcr.io/nautechsystems/<image_variant_tag> --platform linux/amd64
+```
 
 You can launch the backtest example container by running:
 
-    docker pull ghcr.io/nautechsystems/jupyterlab:nightly --platform linux/amd64
-    docker run -p 8888:8888 ghcr.io/nautechsystems/jupyterlab:nightly
+```bash
+docker pull ghcr.io/nautechsystems/jupyterlab:nightly --platform linux/amd64
+docker run -p 8888:8888 ghcr.io/nautechsystems/jupyterlab:nightly
+```
 
 Then open your browser at the following address:
 
-    http://127.0.0.1:8888/lab
+```bash
+http://127.0.0.1:8888/lab
+```
 
 > [!WARNING]
 >
@@ -391,8 +430,9 @@ Then open your browser at the following address:
 > logging will cause the notebook to hang during cell execution. We are investigating a fix, which
 > may involve either raising the configured rate limits for Jupyter or throttling the log flushing
 > from Nautilus.
-> - https://github.com/jupyterlab/jupyterlab/issues/12845
-> - https://github.com/deshaw/jupyterlab-limit-output
+>
+> - <https://github.com/jupyterlab/jupyterlab/issues/12845>
+> - <https://github.com/deshaw/jupyterlab-limit-output>
 
 ## Development
 
@@ -407,7 +447,9 @@ by avoiding interference.
 
 You can install cargo-nextest by running:
 
-    cargo install cargo-nextest
+```bash
+cargo install cargo-nextest
+```
 
 > [!TIP]
 >
@@ -440,10 +482,10 @@ developer looking to contribute or just want to learn more about the platform, a
 >
 > NautilusTrader does not issue, promote, or endorse any cryptocurrency tokens. Any claims or communications suggesting otherwise are unauthorized and false.
 >
-> All official updates and communications from NautilusTrader will be shared exclusively through https://nautilustrader.io, our [Discord server](https://discord.gg/NautilusTrader),
+> All official updates and communications from NautilusTrader will be shared exclusively through <https://nautilustrader.io>, our [Discord server](https://discord.gg/NautilusTrader),
 > or our X (Twitter) account: [@NautilusTrader](https://x.com/NautilusTrader).
 >
-> If you encounter any suspicious activity, please report it to the appropriate platform and contact us at info@nautechsystems.io.
+> If you encounter any suspicious activity, please report it to the appropriate platform and contact us at <info@nautechsystems.io>.
 
 ## License
 
@@ -454,7 +496,7 @@ Contributions to the project are welcome and require the completion of a standar
 
 NautilusTrader™ is developed and maintained by Nautech Systems, a technology
 company specializing in the development of high-performance trading systems.
-For more information, visit https://nautilustrader.io.
+For more information, visit <https://nautilustrader.io>.
 
 © 2015-2025 Nautech Systems Pty Ltd. All rights reserved.
 

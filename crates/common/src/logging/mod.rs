@@ -39,7 +39,7 @@ use self::{
 use crate::enums::LogLevel;
 
 pub const RECV: &str = "<--";
-pub const SENT: &str = "-->";
+pub const SEND: &str = "-->";
 pub const CMD: &str = "[CMD]";
 pub const EVT: &str = "[EVT]";
 pub const DOC: &str = "[DOC]";
@@ -67,7 +67,9 @@ pub extern "C" fn logging_set_bypass() {
 /// Shuts down the logging system.
 #[unsafe(no_mangle)]
 pub extern "C" fn logging_shutdown() {
-    todo!()
+    // Flush any buffered logs and mark logging as uninitialized
+    log::logger().flush();
+    LOGGING_INITIALIZED.store(false, Ordering::Relaxed);
 }
 
 /// Returns whether the core logger is using ANSI colors.
@@ -135,6 +137,15 @@ pub fn init_tracing() -> anyhow::Result<()> {
 ///
 /// Should only be called once during an applications run, ideally at the
 /// beginning of the run.
+/// Initialize logging.
+///
+/// Logging should be used for Python and sync Rust logic which is most of
+/// the components in the `nautilus_trader` package.
+/// Logging can be configured via the `NAUTILUS_LOG` environment variable.
+///
+/// # Errors
+///
+/// Returns an error if the logging subsystem fails to initialize.
 pub fn init_logging(
     trader_id: TraderId,
     instance_id: UUID4,
@@ -177,8 +188,12 @@ pub fn parse_component_levels(
             let mut new_map = HashMap::new();
             for (key, value) in map {
                 let ustr_key = Ustr::from(&key);
-                let value = parse_level_filter_str(value.as_str().unwrap());
-                new_map.insert(ustr_key, value);
+                // Expect the JSON value to be a string representing a log level
+                let s = value
+                    .as_str()
+                    .expect("Invalid component log level: expected string");
+                let lvl = parse_level_filter_str(s);
+                new_map.insert(ustr_key, lvl);
             }
             new_map
         }
