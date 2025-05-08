@@ -149,6 +149,7 @@ class GateExecutionClient(LiveExecutionClient):
             exc_types=(GateError,),
             retry_check=should_retry,
         )
+        self.handle_trade_id = set()
 
     async def _connect(self) -> None:
         await self._instrument_provider.initialize()
@@ -757,6 +758,10 @@ class GateExecutionClient(LiveExecutionClient):
                 last_px: Price = instrument.make_price(gate_trade.execPrice)
                 commission: Money = Money(gate_trade.execFee, quote_currency)
 
+                if gate_trade.execId in self.handle_trade_id:
+                    self._log.info(f"Trade {gate_trade.execId} already handled")
+                    return
+                self.handle_trade_id.add(gate_trade.execId)
                 self.generate_order_filled(
                     strategy_id=strategy_id,
                     instrument_id=instrument_id,
