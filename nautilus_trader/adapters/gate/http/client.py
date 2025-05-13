@@ -183,12 +183,14 @@ class GateHttpClient:
         else:
             return self._sign_request('DELETE', f'/api/v4/spot/orders/{client_order_id}', params)
 
-    async def cancel_all_orders(self, product_type, symbol):
+    async def cancel_all_orders(self, product_type, symbol, side):
         # https://www.gate.io/docs/developers/apiv4/zh_CN/#%E6%89%B9%E9%87%8F%E5%8F%96%E6%B6%88%E4%B8%80%E4%B8%AA%E4%BA%A4%E6%98%93%E5%AF%B9%E9%87%8C%E7%8A%B6%E6%80%81%E4%B8%BA-open-%E7%9A%84%E8%AE%A2%E5%8D%95
         params= {
             'account': product_type,
             'currency_pair': symbol,
         }
+        if side is not None:
+            params['side'] = side
         return self._sign_request('DELETE', f'/api/v4/spot/orders', params)
     
     async def cancel_all_trigger_orders(self):

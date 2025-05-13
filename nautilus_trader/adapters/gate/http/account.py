@@ -126,8 +126,14 @@ class GateAccountHttpAPI:
                 raise
 
 
-    async def cancel_all_orders(self, product_type: GateProductType, symbol: str) -> list[Any]:
-        resp = await self.client.cancel_all_orders(product_type.value, symbol)
+    async def cancel_all_orders(self, product_type: GateProductType, symbol: str, side) -> list[Any]:
+        if side.value == 1:
+            side2 = "bid"
+        elif side.value == 2:
+            side2 = "ask"
+        else:
+            side2 = None
+        resp = await self.client.cancel_all_orders(product_type.value, symbol, side2)
         tmp = await self.client.cancel_all_trigger_orders()
         cancel_list = []
         for c in resp:

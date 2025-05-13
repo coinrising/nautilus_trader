@@ -841,7 +841,10 @@ class GateExecutionClient(LiveExecutionClient):
             )
     async def _cancel_all_orders(self, command: CancelAllOrders) -> None:
         gate_symbol = GateSymbol(command.instrument_id.symbol.value)
-
+        try:
+            side = command.order_side
+        except:
+            side = None
         async with self._retry_manager_pool as retry_manager:
             await retry_manager.run(
                 "cancel_all_orders",
@@ -849,6 +852,7 @@ class GateExecutionClient(LiveExecutionClient):
                 self._http_clt.cancel_all_orders,
                 product_type=gate_symbol.product_type,
                 symbol=gate_symbol.raw_symbol,
+                side=side,
             )
             if not retry_manager.result:
                 orders_open = self._cache.orders_open(
