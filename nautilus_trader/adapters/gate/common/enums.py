@@ -111,6 +111,7 @@ class GateOrderType(Enum):
     LIMIT = "limit"
     LIMIT_BORROW_REPAY = "limit_borrow_repay"
     LIMIT_BORROW = "limit_borrow"
+    LIMIT_REPAY = "limit_repay"
 
 @unique
 class GateOrderEvent(Enum):
@@ -163,6 +164,7 @@ class GateEnumParser:
             (GateOrderType.LIMIT): OrderType.LIMIT,
             (GateOrderType.LIMIT_BORROW_REPAY): OrderType.LIMIT,
             (GateOrderType.LIMIT_BORROW): OrderType.LIMIT,
+            (GateOrderType.LIMIT_REPAY): OrderType.LIMIT,
             (GateOrderType.MARKET): OrderType.MARKET,
         }
 
