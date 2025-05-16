@@ -525,8 +525,8 @@ class GateExecutionClient(LiveExecutionClient):
 
             product_type, topic = channel.split('.')
             if topic == 'balances':
-                # await self._update_account_state()
-                pass
+                await self._update_account_state()
+                
             elif topic == 'orders':
                 self._handle_account_order_update(product_type, msg)
             elif topic == 'usertrades':
