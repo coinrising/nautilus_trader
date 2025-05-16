@@ -631,7 +631,8 @@ class GateExecutionClient(LiveExecutionClient):
             self._log.error(f'Failed to handle order update: {exception_text}')
 
     def _handle_order_cancel(self, product_type: str, msg: dict) -> None:
-        self._log.info(f"WebSocket order cancel result: {msg}")
+        if "errs" in msg["data"]:
+            self._log.info(f"WebSocket order cancel result: {msg}")
         try: 
             if "errs" in msg["data"] and  "Not login" in msg["data"]["errs"]["mesaage"]:
                 self._log.error("Relogin")
@@ -641,7 +642,8 @@ class GateExecutionClient(LiveExecutionClient):
             return 
 
     def _handle_order_place(self, product_type: str, msg: dict) -> None:
-        self._log.info(f"WebSocket order place result: {msg}")
+        if "errs" in msg["data"]:
+            self._log.error(f"WebSocket order place result: {msg}")
         try: 
             if "errs" in msg["data"] and  "Not login" in msg["data"]["errs"]["mesaage"]:
                 self._log.error("Relogin")
