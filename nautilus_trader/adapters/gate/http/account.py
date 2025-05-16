@@ -86,7 +86,7 @@ class GateAccountHttpAPI:
 
 
     async def place_order(self, product_type: GateProductType, symbol: str, side: GateOrderSide, order_type: GateOrderType, quantity: str,
-                          price: str=None, time_in_force: GateTimeInForce=None, client_order_id: str=None, auto_borrow: bool=True) -> GatePlaceOrder:
+                          price: str=None, time_in_force: GateTimeInForce=None, client_order_id: str=None, auto_borrow: bool=False) -> GatePlaceOrder:
         try:
             resp = await self.client.place_order(product_type.value, symbol, side.value, order_type.value, quantity, price, time_in_force.value, client_order_id, auto_borrow)
             return GatePlaceOrder(orderId=resp['id'], orderLinkId=resp['text'])

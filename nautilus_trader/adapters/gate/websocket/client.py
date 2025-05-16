@@ -249,7 +249,7 @@ class GateWebSocketClient:
         await self._send(login_dict)
 
     async def place_order(self, product_type: GateProductType, symbol: str, side: GateOrderSide, order_type: GateOrderType, quantity: str,
-                          price: str=None, time_in_force: GateTimeInForce=None, client_order_id: str=None, auto_borrow: bool=True) -> None:
+                          price: str=None, time_in_force: GateTimeInForce=None, client_order_id: str=None, auto_borrow: bool=False) -> None:
         PlaceOrderDict = {
             'time': int(time.time()),
             'channel': 'spot.order_place', 

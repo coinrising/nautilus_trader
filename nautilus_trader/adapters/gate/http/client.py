@@ -159,7 +159,7 @@ class GateHttpClient:
                 "account": "unified",
                 "time_in_force": "gtc",
                 "text": client_order_id,
-                "auto_borrow": True,
+                "auto_borrow": False,
             },
             "market": symbol,
         }

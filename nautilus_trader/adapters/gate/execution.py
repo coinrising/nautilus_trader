@@ -453,7 +453,7 @@ class GateExecutionClient(LiveExecutionClient):
                 price=str(order.price),
                 time_in_force=time_in_force,
                 client_order_id=str(order.client_order_id),
-                auto_borrow=True,  # 调试用
+                auto_borrow=False,  # 调试用
             )
         else:
             # 通过websocket下单
