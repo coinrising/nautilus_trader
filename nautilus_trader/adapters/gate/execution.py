@@ -634,7 +634,7 @@ class GateExecutionClient(LiveExecutionClient):
         if "errs" in msg["data"]:
             self._log.info(f"WebSocket order cancel result: {msg}")
         try: 
-            if "errs" in msg["data"] and  "Not login" in msg["data"]["errs"]["mesaage"]:
+            if "errs" in msg["data"] and  "Not login" in msg["data"]["errs"]["message"]:
                 self._log.error("Relogin")
                 for ws_client in self._ws_clients.values():
                     asyncio.run(ws_client.api_login()) 
@@ -645,7 +645,7 @@ class GateExecutionClient(LiveExecutionClient):
         if "errs" in msg["data"]:
             self._log.error(f"WebSocket order place result: {msg}")
         try: 
-            if "errs" in msg["data"] and  "Not login" in msg["data"]["errs"]["mesaage"]:
+            if "errs" in msg["data"] and  "Not login" in msg["data"]["errs"]["message"]:
                 self._log.error("Relogin")
                 for ws_client in self._ws_clients.values():
                     asyncio.run(ws_client.api_login()) 
