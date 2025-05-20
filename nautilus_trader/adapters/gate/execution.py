@@ -643,7 +643,10 @@ class GateExecutionClient(LiveExecutionClient):
 
     def _handle_order_place(self, product_type: str, msg: dict) -> None:
         if "errs" in msg["data"]:
-            self._log.error(f"WebSocket order place result: {msg}")
+            if "POC" in msg["data"]["errs"]["message"]:
+                self._log.info(f"WebSocket order place result: {msg}")
+            else:
+                self._log.error(f"WebSocket order place result: {msg}")
         try: 
             if "errs" in msg["data"] and  "Not login" in msg["data"]["errs"]["message"]:
                 self._log.error("Relogin")
