@@ -116,6 +116,7 @@ node.add_exec_client_factory("GATE", GateLiveExecClientFactory)
 node.build()
 
 if __name__ == "__main__":
+    os.system("start_proxy")
     try:
         node.run()
     finally:
