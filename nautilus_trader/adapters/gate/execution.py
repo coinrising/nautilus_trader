@@ -435,12 +435,8 @@ class GateExecutionClient(LiveExecutionClient):
                 )
             else:
                 pass
-                # self.generate_order_accepted(
-                #     strategy_id=order.strategy_id,
-                #     instrument_id=order.instrument_id,
-                #     client_order_id=order.client_order_id,
-                #     ts_event=self._clock.timestamp_ns(),
-                # )
+        finally:
+            await self._retry_manager_pool.release(retry_manager)
 
     async def _submit_limit_order(self, order: LimitOrder) -> None:
         gate_symbol = GateSymbol(order.instrument_id.symbol.value)
@@ -841,6 +837,8 @@ class GateExecutionClient(LiveExecutionClient):
                         retry_manager.message,
                         self._clock.timestamp_ns(),
                     )
+            finally:
+                await self._retry_manager_pool.release(retry_manager)
         else:
             # 通过websocket取消订单
             await self._ws_clients[symbol.product_type].cancel_order(
@@ -881,6 +879,8 @@ class GateExecutionClient(LiveExecutionClient):
                         retry_manager.message,
                         self._clock.timestamp_ns(),
                     )
+        finally:
+            await self._retry_manager_pool.release(retry_manager)
 
     async def _modify_order(self, command: ModifyOrder) -> None:
         order: Order | None = self._cache.order(command.client_order_id)
@@ -922,3 +922,5 @@ class GateExecutionClient(LiveExecutionClient):
                     retry_manager.message,
                     self._clock.timestamp_ns(),
                 )
+        finally:
+            await self._retry_manager_pool.release(retry_manager)
