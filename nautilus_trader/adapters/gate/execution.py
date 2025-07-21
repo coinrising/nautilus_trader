@@ -416,8 +416,9 @@ class GateExecutionClient(LiveExecutionClient):
             client_order_id=order.client_order_id,
             ts_event=self._clock.timestamp_ns(),
         )
-        
-        async with self._retry_manager_pool as retry_manager:
+
+        retry_manager = await self._retry_manager_pool.acquire()
+        try:
             await retry_manager.run(
                 "submit_order",
                 [order.client_order_id],
@@ -819,7 +820,9 @@ class GateExecutionClient(LiveExecutionClient):
         venue_order_id = str(command.venue_order_id) if command.venue_order_id else None
         
         if not self._use_ws_trade_api:
-            async with self._retry_manager_pool as retry_manager:
+            retry_manager = await self._retry_manager_pool.acquire()
+
+            try:
                 await retry_manager.run(
                     "cancel_order",
                     [client_order_id, venue_order_id],
@@ -852,7 +855,9 @@ class GateExecutionClient(LiveExecutionClient):
             side = command.order_side
         except:
             side = None
-        async with self._retry_manager_pool as retry_manager:
+        retry_manager = await self._retry_manager_pool.acquire()
+
+        try:
             await retry_manager.run(
                 "cancel_all_orders",
                 None,
@@ -895,7 +900,8 @@ class GateExecutionClient(LiveExecutionClient):
         price = str(command.price) if command.price else None
         quantity = str(command.quantity) if command.quantity else None
 
-        async with self._retry_manager_pool as retry_manager:
+        retry_manager = await self._retry_manager_pool.acquire()
+        try:
             await retry_manager.run(
                 "modify_order",
                 [client_order_id, venue_order_id],
