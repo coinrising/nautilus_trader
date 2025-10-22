@@ -113,58 +113,10 @@ class GateWsOrderbookDepth(msgspec.Struct):
                 snapshot=snapshot,
             )
             deltas.append(delta)
+        print('deltas:', deltas)
 
         return OrderBookDeltas(instrument_id=instrument_id, deltas=deltas)
 
-    def parse_to_quote_tick(
-        self,
-        instrument_id: InstrumentId,
-        last_quote: QuoteTick,
-        price_precision: int,
-        size_precision: int,
-        ts_event: int,
-        ts_init: int,
-    ) -> QuoteTick:
-        top_bid = self.b[0] if self.b else None
-        top_ask = self.a[0] if self.a else None
-        top_bid_price = top_bid[0] if top_bid else None
-        top_ask_price = top_ask[0] if top_ask else None
-        top_bid_size = top_bid[1] if top_bid else None
-        top_ask_size = top_ask[1] if top_ask else None
-
-        if top_bid_size == "0":
-            top_bid_size = None
-        if top_ask_size == "0":
-            top_ask_size = None
-
-        # Convert the previous quote to new price and sizes to ensure that the precision
-        # of the new Quote is consistent with the instrument definition even after
-        # updates of the instrument.
-        return QuoteTick(
-            instrument_id=instrument_id,
-            bid_price=(
-                Price(float(top_bid_price), price_precision)
-                if top_bid_price
-                else Price(last_quote.bid_price.as_double(), price_precision)
-            ),
-            ask_price=(
-                Price(float(top_ask_price), price_precision)
-                if top_ask_price
-                else Price(last_quote.ask_price.as_double(), price_precision)
-            ),
-            bid_size=(
-                Quantity(float(top_bid_size), size_precision)
-                if top_bid_size
-                else Quantity(last_quote.bid_size.as_double(), size_precision)
-            ),
-            ask_size=(
-                Quantity(float(top_ask_size), size_precision)
-                if top_ask_size
-                else Quantity(last_quote.ask_size.as_double(), size_precision)
-            ),
-            ts_event=ts_event,
-            ts_init=ts_init,
-        )
 
 
 class GateWsOrderbookDepthMsg(msgspec.Struct):
