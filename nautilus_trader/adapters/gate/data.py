@@ -263,20 +263,19 @@ class GateDataClient(LiveMarketDataClient):
         '''
         msg_bytes = json.dumps(msg).encode('utf-8')
         msg = self._decoder_ws_orderbook.decode(msg_bytes)
-        print('orderbook:', msg)
-        # instrument_id = self._get_cached_instrument_id(msg.result.s, product_type)
-        # instrument = self._cache.instrument(instrument_id)
-        # if instrument is None:
-        #     self._log.error(f"Cannot parse trade ticker: no instrument for {instrument_id}")
-        #     return
-        # deltas = msg.result.parse_to_deltas(
-        #     instrument_id=instrument_id,
-        #     price_precision=instrument.price_precision,
-        #     size_precision=instrument.size_precision,
-        #     ts_event=millis_to_nanos(msg.ts),
-        #     ts_init=self._clock.timestamp_ns(),
-        # )
-        # self._handle_data(deltas)
+        instrument_id = self._get_cached_instrument_id(msg.result.s, product_type)
+        instrument = self._cache.instrument(instrument_id)
+        if instrument is None:
+            self._log.error(f"Cannot parse trade ticker: no instrument for {instrument_id}")
+            return
+        deltas = msg.result.parse_to_deltas(
+            instrument_id=instrument_id,
+            price_precision=instrument.price_precision,
+            size_precision=instrument.size_precision,
+            ts_event=millis_to_nanos(msg.time_ms),
+            ts_init=self._clock.timestamp_ns(),
+        )
+        self._handle_data(deltas)
 
 
     async def _request(self, request: RequestData) -> None:
