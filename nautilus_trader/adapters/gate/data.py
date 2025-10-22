@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from nautilus_trader.cache.cache import Cache
 from nautilus_trader.common.component import LiveClock
@@ -248,7 +249,8 @@ class GateDataClient(LiveMarketDataClient):
             self._log.error(f"Failed to handle trade tick: {msg} with error {e}")
 
     def handle_orderbook(self, product_type: str, msg: dict) -> None:
-        msg = self._decoder_ws_orderbook.decode(msg)
+        msg_bytes = json.dumps(msg).encode('utf-8')
+        msg = self._decoder_ws_orderbook.decode(msg_bytes)
         instrument_id = self._get_cached_instrument_id(msg.result.s, product_type)
         instrument = self._cache.instrument(instrument_id)
         if instrument is None:
