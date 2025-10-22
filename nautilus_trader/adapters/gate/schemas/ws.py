@@ -41,7 +41,7 @@ class GateWsOrderbookDepth(msgspec.Struct):
     # Update ID. Is a sequence. Occasionally, you'll receive "u"=1, which is a
     # snapshot data due to the restart of the service.
     t: int
-    full: bool
+    # full: bool
     u: int
     # Cross sequence
 
