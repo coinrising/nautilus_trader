@@ -104,6 +104,9 @@ class GateWebSocketClient:
                     raw = await asyncio.wait_for(self._client.recv(), timeout=5)
                 except asyncio.TimeoutError:
                     continue
+                except asyncio.CancelledError:
+                    # Task cancelled during recv/wait_for: exit loop quietly
+                    break
                 msg = json.loads(raw)
                 # print(f"ws received {msg}")
                 if msg.get('channel') == 'spot.pong':
@@ -112,6 +115,9 @@ class GateWebSocketClient:
                     self._log.error(f"ws received error {msg['error']}")
                     continue
                 await self._handler(msg)
+            except asyncio.CancelledError:
+                # Task cancelled while running outer try-block: exit quietly
+                break
             except:
                 exception_text = traceback.format_exc()
                 if not ('ConnectionClosedError' in exception_text or 'ConnectionClosedOK' in exception_text):
