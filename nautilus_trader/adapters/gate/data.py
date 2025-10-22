@@ -275,7 +275,8 @@ class GateDataClient(LiveMarketDataClient):
             ts_event=millis_to_nanos(msg.time_ms),
             ts_init=self._clock.timestamp_ns(),
         )
-        self._handle_data(deltas)
+        if deltas is not None:
+            self._handle_data(deltas)
 
 
     async def _request(self, request: RequestData) -> None:

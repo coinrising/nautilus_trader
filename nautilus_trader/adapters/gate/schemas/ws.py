@@ -113,7 +113,8 @@ class GateWsOrderbookDepth(msgspec.Struct):
                 snapshot=snapshot,
             )
             deltas.append(delta)
-        print('deltas:', deltas)
+        if not deltas:
+            return None
 
         return OrderBookDeltas(instrument_id=instrument_id, deltas=deltas)
 
