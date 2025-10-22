@@ -54,6 +54,9 @@ class GateWebSocketClient:
 
         self._public_subscriptions: set[str] = set()
         self._private_subscriptions: set[str] = set()
+        
+        # Task management
+        self._tasks: set[asyncio.Task] = set()
 
 
     @property
@@ -65,16 +68,29 @@ class GateWebSocketClient:
         self._log.info(f"Connected to {self._base_url}", LogColor.BLUE)
         self.running = True
 
-        self._loop.create_task(self._heartbeat())
-        self._loop.create_task(self._keep_listening())
-        self._loop.create_task(self._keep_login())
+        # Create and track tasks
+        heartbeat_task = self._loop.create_task(self._heartbeat())
+        listening_task = self._loop.create_task(self._keep_listening())
+        login_task = self._loop.create_task(self._keep_login())
+        
+        self._tasks.update([heartbeat_task, listening_task, login_task])
 
     async def disconnect(self) -> None:
+        self.running = False
+        
+        # Cancel all running tasks
+        if self._tasks:
+            for task in self._tasks:
+                if not task.done():
+                    task.cancel()
+            # Wait for tasks to complete cancellation
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+            self._tasks.clear()
+        
         if self._client is not None:
             await self._client.close()
             self._client = None
         self._log.info(f"Disconnected from {self._base_url}", LogColor.BLUE)
-        self.running = False
 
     async def _keep_listening(self):
         while self.running:
@@ -115,7 +131,10 @@ class GateWebSocketClient:
                     await asyncio.sleep(30)
                 else:
                     await asyncio.sleep(5)
-            except:
+            except GeneratorExit:
+                # Task is being cancelled, exit gracefully
+                break
+            except Exception as e:
                 exception_text = traceback.format_exc()
                 self._log.error(exception_text)
 
@@ -133,7 +152,10 @@ class GateWebSocketClient:
                 else:
                     next_login_time = 0
                 await asyncio.sleep(60)    
-            except:
+            except GeneratorExit:
+                # Task is being cancelled, exit gracefully
+                break
+            except Exception as e:
                 exception_text = traceback.format_exc()
                 self._log.error(exception_text)
 
