@@ -249,9 +249,21 @@ class GateDataClient(LiveMarketDataClient):
             self._log.error(f"Failed to handle trade tick: {msg} with error {e}")
 
     def handle_orderbook(self, product_type: str, msg: dict) -> None:
+        '''
+            orderbook: {'time': 1761123743, 'time_ms': 1761123743613, 'channel': 'spot.order_book_update', 'event': 'update', 'result': 
+            {'t': 1761123743613, 
+            'l': '20', 
+            'e': 'depthUpdate', 
+            'E': 1761123743, 
+            's': 'BTC_USDT', 
+            'U': 28356763418, 
+            'u': 28356763423, 
+            'b': [['108232.4', '0'], ['108231.3', '0.085658'], ['108220.1', '0.060898']], 
+            'a': []}}
+        '''
+        msg_bytes = json.dumps(msg).encode('utf-8')
+        msg = self._decoder_ws_orderbook.decode(msg_bytes)
         print('orderbook:', msg)
-        # msg_bytes = json.dumps(msg).encode('utf-8')
-        # msg = self._decoder_ws_orderbook.decode(msg_bytes)
         # instrument_id = self._get_cached_instrument_id(msg.result.s, product_type)
         # instrument = self._cache.instrument(instrument_id)
         # if instrument is None:

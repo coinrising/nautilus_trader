@@ -34,16 +34,13 @@ from nautilus_trader.model.objects import Quantity
 class GateWsOrderbookDepth(msgspec.Struct):
     # symbol
     s: str
+    u: int
     # bids
     b: list[list[str]]
     # asks
     a: list[list[str]]
-    # Update ID. Is a sequence. Occasionally, you'll receive "u"=1, which is a
-    # snapshot data due to the restart of the service.
     t: int
-    # full: bool
-    u: int
-    # Cross sequence
+
 
     def parse_to_deltas(
         self,
