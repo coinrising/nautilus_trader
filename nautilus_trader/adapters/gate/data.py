@@ -10,8 +10,10 @@ from nautilus_trader.core.datetime import millis_to_nanos
 from nautilus_trader.data.messages import RequestData
 from nautilus_trader.data.messages import SubscribeQuoteTicks
 from nautilus_trader.data.messages import SubscribeTradeTicks
+from nautilus_trader.data.messages import SubscribeOrderBook
 from nautilus_trader.data.messages import UnsubscribeQuoteTicks
 from nautilus_trader.data.messages import UnsubscribeTradeTicks
+from nautilus_trader.data.messages import UnsubscribeOrderBook
 from nautilus_trader.live.data_client import LiveMarketDataClient
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
@@ -20,6 +22,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
+from nautilus_trader.adapters.gate.schemas.ws import decoder_ws_orderbook
 
 
 from nautilus_trader.adapters.gate.common.constants import GATE_VENUE
@@ -84,6 +87,8 @@ class GateDataClient(LiveMarketDataClient):
         self._update_instruments_interval_mins: int | None = config.update_instruments_interval_mins
         self._update_instruments_task: asyncio.Task | None = None
 
+        self._decoder_ws_orderbook = decoder_ws_orderbook()
+
         # self._msgbus.register(endpoint="gate.data.tickers", handler=self.complete_fetch_tickers_task)
 
         # Hot caches
@@ -140,6 +145,11 @@ class GateDataClient(LiveMarketDataClient):
         ws_client = self._ws_clients[symbol.product_type]
         await ws_client.subscribe_trades(symbol.raw_symbol)
 
+    async def _subscribe_order_book_deltas(self, command: SubscribeOrderBook) -> None:
+        symbol = GateSymbol(command.instrument_id.symbol.value)
+        ws_client = self._ws_clients[symbol.product_type]
+        await ws_client.subscribe_order_book_deltas(symbol.raw_symbol)
+
     async def _unsubscribe_quote_ticks(self, command: UnsubscribeQuoteTicks) -> None:
         symbol = GateSymbol(command.instrument_id.symbol.value)
         ws_client = self._ws_clients[symbol.product_type]
@@ -164,6 +174,8 @@ class GateDataClient(LiveMarketDataClient):
                 self.handle_trade_tick(product_type, msg)
             elif topic == 'book_ticker':
                 self.handle_quote_tickers(product_type, msg)
+            elif topic == 'order_book_update':
+                self.handle_orderbook(product_type, msg)
             else:
                 raise ValueError(f"Unknown websocket channel: {channel}")
         except Exception as e:
@@ -234,6 +246,22 @@ class GateDataClient(LiveMarketDataClient):
             self._handle_data(trade)
         except Exception as e:
             self._log.error(f"Failed to handle trade tick: {msg} with error {e}")
+
+    def handle_orderbook(self, product_type: str, msg: dict) -> None:
+        msg = self._decoder_ws_orderbook.decode(msg)
+        instrument_id = self._get_cached_instrument_id(msg.result.s, product_type)
+        instrument = self._cache.instrument(instrument_id)
+        if instrument is None:
+            self._log.error(f"Cannot parse trade ticker: no instrument for {instrument_id}")
+            return
+        deltas = msg.result.parse_to_deltas(
+            instrument_id=instrument_id,
+            price_precision=instrument.price_precision,
+            size_precision=instrument.size_precision,
+            ts_event=millis_to_nanos(msg.ts),
+            ts_init=self._clock.timestamp_ns(),
+        )
+        self._handle_data(deltas)
 
 
     async def _request(self, request: RequestData) -> None:

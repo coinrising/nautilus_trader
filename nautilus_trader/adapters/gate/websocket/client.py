@@ -210,6 +210,14 @@ class GateWebSocketClient:
         subscription = {'channel': 'spot.book_ticker', 'payload': [symbol]}
         await self._unsubscribe(subscription)
 
+    async def subscribe_order_book_deltas(self, symbol: str) -> None:
+        subscription = {'channel': 'spot.order_book_update', 'payload': [symbol, "20ms"]}
+        await self._subscribe(subscription, True)
+    
+    async def unsubscribe_order_book_deltas(self, symbol: str) -> None:
+        subscription = {'channel': 'spot.order_book_update', 'payload': [symbol, "20ms"]}
+        await self._unsubscribe(subscription, True)
+
     ################################################################################
     # Private
     ################################################################################
@@ -229,6 +237,7 @@ class GateWebSocketClient:
     async def subscribe_priceorders_update(self, symbol: str=None) -> None:
         subscription = {'channel': 'spot.priceorders', 'payload': [symbol or '!all']}
         await self._subscribe(subscription, True)
+
 
     # order action
     async def api_login(self) -> None:
