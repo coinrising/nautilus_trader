@@ -13,8 +13,10 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
-import asyncio
 from decimal import Decimal
+from unittest.mock import AsyncMock
+from unittest.mock import Mock
+from unittest.mock import patch
 
 import pytest
 
@@ -58,7 +60,6 @@ from nautilus_trader.model.objects import Money
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
 from nautilus_trader.portfolio.portfolio import Portfolio
-from nautilus_trader.test_kit.functions import ensure_all_tasks_completed
 from nautilus_trader.test_kit.functions import eventually
 from nautilus_trader.test_kit.mocks.exec_clients import MockLiveExecutionClient
 from nautilus_trader.test_kit.providers import TestInstrumentProvider
@@ -74,14 +75,15 @@ GBPUSD_SIM = TestInstrumentProvider.default_fx_ccy("GBP/USD")
 
 
 class TestLiveExecutionEngine:
-    def setup(self):
+    @pytest.fixture(autouse=True)
+    def setup(self, request):
         # Fixture Setup
-        self.loop = asyncio.get_event_loop()
-        asyncio.set_event_loop(self.loop)
+        self.loop = request.getfixturevalue("event_loop")
         self.loop.set_debug(True)
 
         self.clock = LiveClock()
         self.trader_id = TestIdStubs.trader_id()
+        self._engines_to_cleanup = []
 
         self.order_factory = OrderFactory(
             trader_id=self.trader_id,
@@ -175,18 +177,18 @@ class TestLiveExecutionEngine:
         self.emulator.start()
         self.strategy.start()
 
-    def teardown(self):
-        self.data_engine.stop()
-        self.risk_engine.stop()
+        yield
+
+        # Teardown - stop all engines and clean up any tasks
         self.emulator.stop()
-        self.strategy.stop()
+        self.exec_engine.stop()
+        self.risk_engine.stop()
+        self.data_engine.stop()
 
-        if self.exec_engine.is_running:
-            self.exec_engine.stop()
-
-        ensure_all_tasks_completed()
-
-        self.exec_engine.dispose()
+        # Clean up any additional engines created during tests
+        for engine in self._engines_to_cleanup:
+            if hasattr(engine, "stop") and not engine.is_stopped:
+                engine.stop()
 
     @pytest.mark.asyncio()
     async def test_start_when_loop_not_running_logs(self):
@@ -210,15 +212,15 @@ class TestLiveExecutionEngine:
             handler=self.exec_engine.process,
         )
         self.msgbus.deregister(
-            endpoint="ExecEngine.reconcile_report",
-            handler=self.exec_engine.reconcile_report,
+            endpoint="ExecEngine.reconcile_execution_report",
+            handler=self.exec_engine.reconcile_execution_report,
         )
         self.msgbus.deregister(
-            endpoint="ExecEngine.reconcile_mass_status",
-            handler=self.exec_engine.reconcile_mass_status,
+            endpoint="ExecEngine.reconcile_execution_mass_status",
+            handler=self.exec_engine.reconcile_execution_mass_status,
         )
 
-        self.exec_engine = LiveExecutionEngine(
+        new_engine = LiveExecutionEngine(
             loop=self.loop,
             msgbus=self.msgbus,
             cache=self.cache,
@@ -228,6 +230,8 @@ class TestLiveExecutionEngine:
                 inflight_check_threshold_ms=0,
             ),
         )
+        self._engines_to_cleanup.append(new_engine)
+        self.exec_engine = new_engine
 
         strategy = Strategy()
         strategy.register(
@@ -274,15 +278,15 @@ class TestLiveExecutionEngine:
             handler=self.exec_engine.process,
         )
         self.msgbus.deregister(
-            endpoint="ExecEngine.reconcile_report",
-            handler=self.exec_engine.reconcile_report,
+            endpoint="ExecEngine.reconcile_execution_report",
+            handler=self.exec_engine.reconcile_execution_report,
         )
         self.msgbus.deregister(
-            endpoint="ExecEngine.reconcile_mass_status",
-            handler=self.exec_engine.reconcile_mass_status,
+            endpoint="ExecEngine.reconcile_execution_mass_status",
+            handler=self.exec_engine.reconcile_execution_mass_status,
         )
 
-        self.exec_engine = LiveExecutionEngine(
+        new_engine = LiveExecutionEngine(
             loop=self.loop,
             msgbus=self.msgbus,
             cache=self.cache,
@@ -292,6 +296,8 @@ class TestLiveExecutionEngine:
                 inflight_check_threshold_ms=0,
             ),
         )
+        self._engines_to_cleanup.append(new_engine)
+        self.exec_engine = new_engine
 
         strategy = Strategy()
         strategy.register(
@@ -350,7 +356,7 @@ class TestLiveExecutionEngine:
     async def test_kill_when_not_running_with_messages_on_queue(self):
         # Arrange, Act
         self.exec_engine.stop()
-        await asyncio.sleep(0)
+        await eventually(lambda: self.exec_engine.is_stopped)
         self.exec_engine.kill()
 
         # Assert
@@ -406,7 +412,7 @@ class TestLiveExecutionEngine:
             venue_order_id=VenueOrderId("2"),
             order_side=OrderSide.SELL,
             order_type=OrderType.STOP_LIMIT,
-            contingency_type=ContingencyType.OCO,
+            contingency_type=ContingencyType.NO_CONTINGENCY,
             time_in_force=TimeInForce.DAY,
             expire_time=None,
             order_status=OrderStatus.REJECTED,
@@ -431,7 +437,7 @@ class TestLiveExecutionEngine:
         )
 
         # Act
-        self.exec_engine.reconcile_report(order_report)
+        self.exec_engine.reconcile_execution_report(order_report)
 
         # Assert
         assert self.exec_engine.report_count == 1
@@ -457,7 +463,7 @@ class TestLiveExecutionEngine:
         )
 
         # Act
-        self.exec_engine.reconcile_report(fill_report)
+        self.exec_engine.reconcile_execution_report(fill_report)
 
         # Assert
         assert self.exec_engine.report_count == 1
@@ -477,7 +483,7 @@ class TestLiveExecutionEngine:
         )
 
         # Act
-        self.exec_engine.reconcile_report(position_report)
+        self.exec_engine.reconcile_execution_report(position_report)
 
         # Assert
         assert self.exec_engine.report_count == 1
@@ -494,7 +500,7 @@ class TestLiveExecutionEngine:
         )
 
         # Act
-        self.exec_engine.reconcile_mass_status(mass_status)
+        self.exec_engine.reconcile_execution_mass_status(mass_status)
 
         # Assert
         assert self.exec_engine.report_count == 1
@@ -583,3 +589,351 @@ class TestLiveExecutionEngine:
 
         # Assert
         assert order.status == OrderStatus.CANCELED
+
+    @pytest.mark.asyncio
+    async def test_graceful_shutdown_cmd_queue_exception_enabled_calls_shutdown_system(self):
+        """
+        Test that when graceful_shutdown_on_exception=True, shutdown_system is called on
+        command queue exception.
+        """
+        # Arrange
+        # Create fresh msgbus to avoid endpoint conflicts
+        test_msgbus = MessageBus(
+            trader_id=self.trader_id,
+            clock=self.clock,
+        )
+
+        config = LiveExecEngineConfig(graceful_shutdown_on_exception=True)
+        engine = LiveExecutionEngine(
+            loop=self.loop,
+            msgbus=test_msgbus,
+            cache=self.cache,
+            clock=self.clock,
+            config=config,
+        )
+
+        # Mock shutdown_system to track calls
+        shutdown_mock = Mock()
+        engine.shutdown_system = shutdown_mock
+
+        # Mock _execute_command to raise an exception
+        def mock_execute_command(command):
+            raise ValueError("Test exception for graceful shutdown in cmd queue")
+
+        with patch.object(engine, "_execute_command", side_effect=mock_execute_command):
+            engine.start()
+
+            # Act - Send command that will trigger the exception
+            order = self.order_factory.market(
+                instrument_id=AUDUSD_SIM.id,
+                order_side=OrderSide.BUY,
+                quantity=AUDUSD_SIM.make_qty(100),
+            )
+            submit_order = SubmitOrder(
+                trader_id=self.trader_id,
+                strategy_id=StrategyId("S-001"),
+                order=order,
+                command_id=UUID4(),
+                ts_init=self.clock.timestamp_ns(),
+            )
+            engine.execute(submit_order)
+
+            # Wait for processing and shutdown call
+            await eventually(lambda: shutdown_mock.called)
+
+            # Assert
+            shutdown_mock.assert_called_once()
+            args = shutdown_mock.call_args[0]
+            assert "Test exception for graceful shutdown in cmd queue" in args[0]
+            assert engine._is_shutting_down is True
+
+            engine.stop()
+            await eventually(lambda: engine.cmd_qsize() == 0)
+
+    @pytest.mark.asyncio
+    async def test_graceful_shutdown_cmd_queue_exception_disabled_calls_os_exit(self):
+        """
+        Test that when graceful_shutdown_on_exception=False, os._exit is called on
+        command queue exception.
+        """
+        # Arrange
+        # Create fresh msgbus to avoid endpoint conflicts
+        test_msgbus = MessageBus(
+            trader_id=self.trader_id,
+            clock=self.clock,
+        )
+
+        config = LiveExecEngineConfig(graceful_shutdown_on_exception=False)
+        engine = LiveExecutionEngine(
+            loop=self.loop,
+            msgbus=test_msgbus,
+            cache=self.cache,
+            clock=self.clock,
+            config=config,
+        )
+
+        # Mock os._exit to track calls instead of actually exiting
+        with patch("os._exit") as exit_mock:
+            # Mock _execute_command to raise an exception
+            def mock_execute_command(command):
+                raise ValueError("Test exception for immediate crash in cmd queue")
+
+            with patch.object(engine, "_execute_command", side_effect=mock_execute_command):
+                engine.start()
+
+                # Act - Send command that will trigger the exception
+                order = self.order_factory.market(
+                    instrument_id=AUDUSD_SIM.id,
+                    order_side=OrderSide.BUY,
+                    quantity=AUDUSD_SIM.make_qty(100),
+                )
+                submit_order = SubmitOrder(
+                    trader_id=self.trader_id,
+                    strategy_id=StrategyId("S-001"),
+                    order=order,
+                    command_id=UUID4(),
+                    ts_init=self.clock.timestamp_ns(),
+                )
+                engine.execute(submit_order)
+
+                # Wait for processing and os._exit call
+                await eventually(lambda: exit_mock.called)
+
+                # Assert
+                exit_mock.assert_called_once_with(1)
+
+            engine.stop()
+            await eventually(lambda: engine.cmd_qsize() == 0)
+
+    @pytest.mark.asyncio
+    async def test_graceful_shutdown_evt_queue_exception_enabled_calls_shutdown_system(self):
+        """
+        Test that when graceful_shutdown_on_exception=True, shutdown_system is called on
+        event queue exception.
+        """
+        # Arrange
+        # Create fresh msgbus to avoid endpoint conflicts
+        test_msgbus = MessageBus(
+            trader_id=self.trader_id,
+            clock=self.clock,
+        )
+
+        config = LiveExecEngineConfig(graceful_shutdown_on_exception=True)
+        engine = LiveExecutionEngine(
+            loop=self.loop,
+            msgbus=test_msgbus,
+            cache=self.cache,
+            clock=self.clock,
+            config=config,
+        )
+
+        # Mock shutdown_system to track calls
+        shutdown_mock = Mock()
+        engine.shutdown_system = shutdown_mock
+
+        # Mock _handle_event to raise an exception
+        def mock_handle_event(event):
+            raise ValueError("Test exception for graceful shutdown in evt queue")
+
+        with patch.object(engine, "_handle_event", side_effect=mock_handle_event):
+            engine.start()
+
+            # Act - Send event that will trigger the exception
+            order = self.order_factory.market(
+                instrument_id=AUDUSD_SIM.id,
+                order_side=OrderSide.BUY,
+                quantity=AUDUSD_SIM.make_qty(100),
+            )
+            event = TestEventStubs.order_submitted(order)
+            engine.process(event)
+
+            # Wait for processing and shutdown call
+            await eventually(lambda: shutdown_mock.called)
+
+            # Assert
+            shutdown_mock.assert_called_once()
+            args = shutdown_mock.call_args[0]
+            assert "Test exception for graceful shutdown in evt queue" in args[0]
+            assert engine._is_shutting_down is True
+
+            engine.stop()
+            await eventually(lambda: engine.evt_qsize() == 0)
+
+    @pytest.mark.asyncio
+    async def test_graceful_shutdown_evt_queue_exception_disabled_calls_os_exit(self):
+        """
+        Test that when graceful_shutdown_on_exception=False, os._exit is called on event
+        queue exception.
+        """
+        # Arrange
+        # Create fresh msgbus to avoid endpoint conflicts
+        test_msgbus = MessageBus(
+            trader_id=self.trader_id,
+            clock=self.clock,
+        )
+
+        config = LiveExecEngineConfig(graceful_shutdown_on_exception=False)
+        engine = LiveExecutionEngine(
+            loop=self.loop,
+            msgbus=test_msgbus,
+            cache=self.cache,
+            clock=self.clock,
+            config=config,
+        )
+
+        # Mock os._exit to track calls instead of actually exiting
+        with patch("os._exit") as exit_mock:
+            # Mock _handle_event to raise an exception
+            def mock_handle_event(event):
+                raise ValueError("Test exception for immediate crash in evt queue")
+
+            with patch.object(engine, "_handle_event", side_effect=mock_handle_event):
+                engine.start()
+
+                # Act - Send event that will trigger the exception
+                order = self.order_factory.market(
+                    instrument_id=AUDUSD_SIM.id,
+                    order_side=OrderSide.BUY,
+                    quantity=AUDUSD_SIM.make_qty(100),
+                )
+                event = TestEventStubs.order_submitted(order)
+                engine.process(event)
+
+                # Wait for processing and os._exit call
+                await eventually(lambda: exit_mock.called)
+
+                # Assert
+                exit_mock.assert_called_once_with(1)
+
+            engine.stop()
+            await eventually(lambda: engine.evt_qsize() == 0)
+
+    @pytest.mark.asyncio()
+    async def test_reconciliation_with_none_mass_status_returns_false(self):
+        """
+        Test that reconciliation returns False when mass_status is None.
+        """
+
+        # Arrange
+        async def mock_generate_mass_status(lookback_mins):
+            return None
+
+        self.client.generate_mass_status = mock_generate_mass_status
+        self.exec_engine.start()
+
+        # Act
+        result = await self.exec_engine.reconcile_execution_state()
+
+        # Assert - should return False because mass_status is None
+        assert result is False
+
+        # Cleanup
+        self.exec_engine.stop()
+
+    @pytest.mark.asyncio()
+    async def test_filled_qty_mismatch_with_zero_report(self):
+        """
+        Test that filled_qty mismatch is detected when report.filled_qty is less than
+        cached.
+        """
+        # Arrange
+        order = self.order_factory.market(
+            instrument_id=AUDUSD_SIM.id,
+            order_side=OrderSide.BUY,
+            quantity=AUDUSD_SIM.make_qty(100),
+        )
+
+        self.cache.add_order(order)
+        order.apply(TestEventStubs.order_submitted(order))
+        order.apply(TestEventStubs.order_accepted(order))
+        filled_event = TestEventStubs.order_filled(
+            order,
+            instrument=AUDUSD_SIM,
+            last_qty=AUDUSD_SIM.make_qty(100),
+        )
+        order.apply(filled_event)
+        self.cache.update_order(order)
+
+        report = OrderStatusReport(
+            account_id=AccountId("MOCK-001"),
+            instrument_id=AUDUSD_SIM.id,
+            client_order_id=order.client_order_id,
+            venue_order_id=VenueOrderId("V-123"),
+            order_side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            time_in_force=TimeInForce.GTC,
+            order_status=OrderStatus.FILLED,
+            quantity=AUDUSD_SIM.make_qty(100),
+            filled_qty=AUDUSD_SIM.make_qty(0),  # Zero filled (error: less than cached)
+            report_id=UUID4(),
+            ts_accepted=self.clock.timestamp_ns(),
+            ts_last=self.clock.timestamp_ns(),
+            ts_init=self.clock.timestamp_ns(),
+        )
+
+        # Act
+        result = self.exec_engine.reconcile_execution_report(report)
+
+        # Assert - should correctly detect and fail on backwards fill quantity
+        assert result is False
+
+    @pytest.mark.asyncio()
+    async def test_inflight_timeout_resolves_order(self):
+        """
+        Test that inflight orders are resolved after exceeding max retries.
+        """
+        # Arrange
+        order = self.order_factory.market(
+            instrument_id=AUDUSD_SIM.id,
+            order_side=OrderSide.BUY,
+            quantity=AUDUSD_SIM.make_qty(100),
+        )
+
+        self.cache.add_order(order)
+        # Create an old submitted event so the order appears delayed
+        old_ts = (
+            self.clock.timestamp_ns()
+            - self.exec_engine._inflight_check_threshold_ns
+            - 1_000_000_000
+        )
+        order.apply(TestEventStubs.order_submitted(order, ts_event=old_ts))
+        self.cache.update_order(order)
+
+        # Set retry count to max so next check will resolve
+        self.exec_engine._recon_check_retries[order.client_order_id] = (
+            self.exec_engine.inflight_check_max_retries
+        )
+
+        # Verify preconditions
+        assert order.is_inflight
+        assert self.cache.orders_inflight() == [order]
+
+        # Act - trigger the inflight check which should resolve the order
+        await self.exec_engine._check_inflight_orders()
+
+        # Assert - order should be resolved as REJECTED
+        assert order.status == OrderStatus.REJECTED
+        assert not order.is_inflight
+        assert order.client_order_id not in self.exec_engine._recon_check_retries
+
+        # Cleanup
+        self.exec_engine.stop()
+
+    @pytest.mark.asyncio()
+    async def test_shutdown_flag_suppresses_reconciliation(self):
+        """
+        Test that _is_shutting_down flag prevents reconciliation from issuing HTTP
+        calls.
+        """
+        # Arrange - mock the client's generate methods to track if they're called
+        mock_generate_order_status = AsyncMock()
+        self.client.generate_order_status_reports = mock_generate_order_status
+
+        # Act - set shutdown flag and manually trigger reconciliation checks
+        self.exec_engine._is_shutting_down = True
+
+        await self.exec_engine._check_inflight_orders()
+        await self.exec_engine._check_orders_consistency()
+
+        # Assert - client methods should NOT have been called due to early exit
+        mock_generate_order_status.assert_not_called()

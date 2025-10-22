@@ -20,7 +20,8 @@ from numpy import float64
 from numpy import linspace
 from numpy import nan
 
-from nautilus_trader.analysis.statistics.sharpe_ratio import SharpeRatio
+from nautilus_trader.analysis import SharpeRatio
+from tests.unit_tests.analysis.conftest import convert_series_to_dict
 
 
 class TestSharpeRatioPortfolioStatistic:
@@ -41,7 +42,7 @@ class TestSharpeRatioPortfolioStatistic:
         stat = SharpeRatio()
 
         # Act
-        result = stat.calculate_from_returns(data)
+        result = stat.calculate_from_returns(convert_series_to_dict(data))
 
         # Assert
         assert result
@@ -55,7 +56,7 @@ class TestSharpeRatioPortfolioStatistic:
         stat = SharpeRatio()
 
         # Act
-        result = stat.calculate_from_returns(data)
+        result = stat.calculate_from_returns(convert_series_to_dict(data))
 
         # Assert
         assert result
@@ -69,20 +70,20 @@ class TestSharpeRatioPortfolioStatistic:
         stat = SharpeRatio()
 
         # Act
-        result = stat.calculate_from_returns(data)
+        result = stat.calculate_from_returns(convert_series_to_dict(data))
 
         # Assert
         assert result == 0.0
 
     def test_calculate_given_mix_of_pnls2_returns_expected(self):
         # Arrange
-        index = pd.date_range("1/1/2000", periods=10, freq="12H")
+        index = pd.date_range("1/1/2000", periods=10, freq="12h")
         data = pd.Series(linspace(0.1, 1, 10), index=index, dtype=float64)
 
         stat = SharpeRatio()
 
         # Act
-        result = stat.calculate_from_returns(data)
+        result = stat.calculate_from_returns(convert_series_to_dict(data))
 
         # Assert
         assert result

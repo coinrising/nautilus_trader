@@ -23,6 +23,7 @@
 
 use std::time::Duration;
 
+use nautilus_core::correctness::{check_in_range_inclusive_f64, check_predicate_true};
 use rand::Rng;
 
 #[derive(Clone, Debug)]
@@ -38,7 +39,9 @@ pub struct ExponentialBackoff {
     /// The maximum random jitter to add (in milliseconds).
     jitter_ms: u64,
     /// If true, the first call to `next()` returns zero delay (immediate reconnect).
-    immediate_first: bool,
+    immediate_reconnect: bool,
+    /// The original value of `immediate_reconnect` for reset purposes.
+    immediate_reconnect_original: bool,
 }
 
 /// An exponential backoff mechanism with optional jitter and immediate-first behavior.
@@ -50,22 +53,41 @@ pub struct ExponentialBackoff {
 /// returns zero delay, triggering an immediate reconnect, after which the immediate flag is disabled.
 impl ExponentialBackoff {
     /// Creates a new [`ExponentialBackoff]` instance.
-    #[must_use]
-    pub const fn new(
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `delay_initial` is zero.
+    /// - `delay_max` is less than `delay_initial`.
+    /// - `delay_max` exceeds `Duration::from_nanos(u64::MAX)` (≈584 years).
+    /// - `factor` is not in the range [1.0, 100.0] (to prevent reconnect spam).
+    pub fn new(
         delay_initial: Duration,
         delay_max: Duration,
         factor: f64,
         jitter_ms: u64,
         immediate_first: bool,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+        check_predicate_true(!delay_initial.is_zero(), "delay_initial must be non-zero")?;
+        check_predicate_true(
+            delay_max >= delay_initial,
+            "delay_max must be >= delay_initial",
+        )?;
+        check_predicate_true(
+            delay_max.as_nanos() <= u128::from(u64::MAX),
+            "delay_max exceeds maximum representable duration (≈584 years)",
+        )?;
+        check_in_range_inclusive_f64(factor, 1.0, 100.0, "factor")?;
+
+        Ok(Self {
             delay_initial,
             delay_max,
             delay_current: delay_initial,
             factor,
             jitter_ms,
-            immediate_first,
-        }
+            immediate_reconnect: immediate_first,
+            immediate_reconnect_original: immediate_first,
+        })
     }
 
     /// Return the next backoff delay with jitter and update the internal state.
@@ -74,8 +96,8 @@ impl ExponentialBackoff {
     /// delay equals the initial delay), it returns `Duration::ZERO` to trigger an immediate
     /// reconnect and disables the immediate behavior for subsequent calls.
     pub fn next_duration(&mut self) -> Duration {
-        if self.immediate_first && self.delay_current == self.delay_initial {
-            self.immediate_first = false;
+        if self.immediate_reconnect && self.delay_current == self.delay_initial {
+            self.immediate_reconnect = false;
             return Duration::ZERO;
         }
 
@@ -83,11 +105,35 @@ impl ExponentialBackoff {
         let jitter = rand::rng().random_range(0..=self.jitter_ms);
         let delay_with_jitter = self.delay_current + Duration::from_millis(jitter);
 
-        // Prepare the next delay
+        // Prepare the next delay with overflow protection
+        // Keep all math in u128 to avoid silent truncation
         let current_nanos = self.delay_current.as_nanos();
-        let max_nanos = self.delay_max.as_nanos() as u64;
-        let next_nanos = (current_nanos as f64 * self.factor) as u64;
-        self.delay_current = Duration::from_nanos(std::cmp::min(next_nanos, max_nanos));
+        let max_nanos = self.delay_max.as_nanos();
+
+        // Use checked floating point multiplication to prevent overflow
+        let next_nanos_u128 = if current_nanos > u128::from(u64::MAX) {
+            // Current is already at max representable value, cap to max
+            max_nanos
+        } else {
+            let current_u64 = current_nanos as u64;
+            let next_f64 = current_u64 as f64 * self.factor;
+
+            // Check for overflow in the float result
+            if next_f64 > u64::MAX as f64 {
+                u128::from(u64::MAX)
+            } else {
+                u128::from(next_f64 as u64)
+            }
+        };
+
+        let clamped = std::cmp::min(next_nanos_u128, max_nanos);
+        let final_nanos = if clamped > u128::from(u64::MAX) {
+            u64::MAX
+        } else {
+            clamped as u64
+        };
+
+        self.delay_current = Duration::from_nanos(final_nanos);
 
         delay_with_jitter
     }
@@ -95,6 +141,7 @@ impl ExponentialBackoff {
     /// Reset the backoff to its initial state.
     pub const fn reset(&mut self) {
         self.delay_current = self.delay_initial;
+        self.immediate_reconnect = self.immediate_reconnect_original;
     }
 
     /// Returns the current base delay without jitter.
@@ -123,7 +170,7 @@ mod tests {
         let max = Duration::from_millis(1600);
         let factor = 2.0;
         let jitter = 0;
-        let mut backoff = ExponentialBackoff::new(initial, max, factor, jitter, false);
+        let mut backoff = ExponentialBackoff::new(initial, max, factor, jitter, false).unwrap();
 
         // 1st call returns the initial delay
         let d1 = backoff.next_duration();
@@ -156,7 +203,7 @@ mod tests {
         let max = Duration::from_millis(1600);
         let factor = 2.0;
         let jitter = 0;
-        let mut backoff = ExponentialBackoff::new(initial, max, factor, jitter, false);
+        let mut backoff = ExponentialBackoff::new(initial, max, factor, jitter, false).unwrap();
 
         // Call next() once so that the internal state updates
         let _ = backoff.next_duration(); // current_delay becomes 200ms
@@ -174,7 +221,7 @@ mod tests {
         let jitter = 50;
         // Run several iterations to ensure that jitter stays within bounds
         for _ in 0..10 {
-            let mut backoff = ExponentialBackoff::new(initial, max, factor, jitter, false);
+            let mut backoff = ExponentialBackoff::new(initial, max, factor, jitter, false).unwrap();
             // Capture the expected base delay before jitter is applied
             let base = backoff.delay_current;
             let delay = backoff.next_duration();
@@ -198,7 +245,7 @@ mod tests {
         let max = Duration::from_millis(200);
         let factor = 1.5;
         let jitter = 0;
-        let mut backoff = ExponentialBackoff::new(initial, max, factor, jitter, false);
+        let mut backoff = ExponentialBackoff::new(initial, max, factor, jitter, false).unwrap();
 
         // First call returns 100ms
         let d1 = backoff.next_duration();
@@ -223,7 +270,7 @@ mod tests {
         let max = Duration::from_millis(1000);
         let factor = 3.0;
         let jitter = 0;
-        let mut backoff = ExponentialBackoff::new(initial, max, factor, jitter, false);
+        let mut backoff = ExponentialBackoff::new(initial, max, factor, jitter, false).unwrap();
 
         // 1st call returns 500ms
         let d1 = backoff.next_duration();
@@ -244,7 +291,7 @@ mod tests {
         let max = Duration::from_millis(1600);
         let factor = 2.0;
         let jitter = 0;
-        let mut backoff = ExponentialBackoff::new(initial, max, factor, jitter, false);
+        let mut backoff = ExponentialBackoff::new(initial, max, factor, jitter, false).unwrap();
 
         assert_eq!(backoff.current_delay(), initial);
 
@@ -259,12 +306,86 @@ mod tests {
     }
 
     #[rstest]
+    fn test_validation_zero_initial_delay() {
+        let result =
+            ExponentialBackoff::new(Duration::ZERO, Duration::from_millis(1000), 2.0, 0, false);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("delay_initial must be non-zero")
+        );
+    }
+
+    #[rstest]
+    fn test_validation_max_less_than_initial() {
+        let result = ExponentialBackoff::new(
+            Duration::from_millis(1000),
+            Duration::from_millis(500),
+            2.0,
+            0,
+            false,
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("delay_max must be >= delay_initial")
+        );
+    }
+
+    #[rstest]
+    fn test_validation_factor_too_small() {
+        let result = ExponentialBackoff::new(
+            Duration::from_millis(100),
+            Duration::from_millis(1000),
+            0.5,
+            0,
+            false,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("factor"));
+    }
+
+    #[rstest]
+    fn test_validation_factor_too_large() {
+        let result = ExponentialBackoff::new(
+            Duration::from_millis(100),
+            Duration::from_millis(1000),
+            150.0,
+            0,
+            false,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("factor"));
+    }
+
+    #[rstest]
+    fn test_validation_delay_max_exceeds_u64_max_nanos() {
+        // Duration::from_nanos(u64::MAX) is approximately 584 years
+        // Try to create a backoff with delay_max exceeding this
+        let max_valid = Duration::from_nanos(u64::MAX);
+        let too_large = max_valid + Duration::from_nanos(1);
+
+        let result = ExponentialBackoff::new(Duration::from_millis(100), too_large, 2.0, 0, false);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("delay_max exceeds maximum representable duration")
+        );
+    }
+
+    #[rstest]
     fn test_immediate_first() {
         let initial = Duration::from_millis(100);
         let max = Duration::from_millis(1600);
         let factor = 2.0;
         let jitter = 0;
-        let mut backoff = ExponentialBackoff::new(initial, max, factor, jitter, true);
+        let mut backoff = ExponentialBackoff::new(initial, max, factor, jitter, true).unwrap();
 
         // The first call should yield an immediate (zero) delay
         let d1 = backoff.next_duration();
@@ -287,6 +408,32 @@ mod tests {
         assert_eq!(
             d3, expected,
             "Expected exponential growth from the initial delay"
+        );
+    }
+
+    #[rstest]
+    fn test_reset_restores_immediate_first() {
+        let initial = Duration::from_millis(100);
+        let max = Duration::from_millis(1600);
+        let factor = 2.0;
+        let jitter = 0;
+        let mut backoff = ExponentialBackoff::new(initial, max, factor, jitter, true).unwrap();
+
+        // Use immediate first
+        let d1 = backoff.next_duration();
+        assert_eq!(d1, Duration::ZERO);
+
+        // Now immediate_first should be disabled
+        let d2 = backoff.next_duration();
+        assert_eq!(d2, initial);
+
+        // Reset should restore immediate_first
+        backoff.reset();
+        let d3 = backoff.next_duration();
+        assert_eq!(
+            d3,
+            Duration::ZERO,
+            "Reset should restore immediate_first behavior"
         );
     }
 }

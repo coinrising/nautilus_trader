@@ -123,11 +123,18 @@ def ib_client_running(ib_client):
     ib_client.start()
     yield ib_client
 
+    # Cleanup: stop the client and cancel its background tasks
+    if not ib_client.is_stopped:
+        ib_client.stop()
+
 
 @pytest.fixture()
 def instrument_provider(ib_client):
+    from nautilus_trader.common.component import LiveClock
+
     return InteractiveBrokersInstrumentProvider(
         client=ib_client,
+        clock=LiveClock(),
         config=InteractiveBrokersInstrumentProviderConfig(),
     )
 

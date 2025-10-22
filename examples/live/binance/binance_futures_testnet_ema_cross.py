@@ -16,11 +16,12 @@
 
 from decimal import Decimal
 
-from nautilus_trader.adapters.binance.common.enums import BinanceAccountType
-from nautilus_trader.adapters.binance.config import BinanceDataClientConfig
-from nautilus_trader.adapters.binance.config import BinanceExecClientConfig
-from nautilus_trader.adapters.binance.factories import BinanceLiveDataClientFactory
-from nautilus_trader.adapters.binance.factories import BinanceLiveExecClientFactory
+from nautilus_trader.adapters.binance import BINANCE
+from nautilus_trader.adapters.binance import BinanceAccountType
+from nautilus_trader.adapters.binance import BinanceDataClientConfig
+from nautilus_trader.adapters.binance import BinanceExecClientConfig
+from nautilus_trader.adapters.binance import BinanceLiveDataClientFactory
+from nautilus_trader.adapters.binance import BinanceLiveExecClientFactory
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.config import InstrumentProviderConfig
 from nautilus_trader.config import LiveExecEngineConfig
@@ -37,6 +38,10 @@ from nautilus_trader.model.identifiers import TraderId
 # *** THIS IS A TEST STRATEGY WITH NO ALPHA ADVANTAGE WHATSOEVER. ***
 # *** IT IS NOT INTENDED TO BE USED TO TRADE LIVE WITH REAL MONEY. ***
 
+# Strategy config params
+symbol = "ETHUSDT-PERP"
+instrument_id = InstrumentId.from_str(f"{symbol}.{BINANCE}")
+order_qty = Decimal("0.02")
 
 # Configure the trading node
 config_node = TradingNodeConfig(
@@ -65,10 +70,10 @@ config_node = TradingNodeConfig(
     #     autotrim_mins=30,
     # ),
     data_clients={
-        "BINANCE": BinanceDataClientConfig(
+        BINANCE: BinanceDataClientConfig(
             api_key=None,  # 'BINANCE_API_KEY' env var
             api_secret=None,  # 'BINANCE_API_SECRET' env var
-            account_type=BinanceAccountType.USDT_FUTURE,
+            account_type=BinanceAccountType.USDT_FUTURES,
             base_url_http=None,  # Override with custom endpoint
             base_url_ws=None,  # Override with custom endpoint
             us=False,  # If client is for Binance US
@@ -77,10 +82,10 @@ config_node = TradingNodeConfig(
         ),
     },
     exec_clients={
-        "BINANCE": BinanceExecClientConfig(
+        BINANCE: BinanceExecClientConfig(
             api_key=None,  # 'BINANCE_API_KEY' env var
             api_secret=None,  # 'BINANCE_API_SECRET' env var
-            account_type=BinanceAccountType.USDT_FUTURE,
+            account_type=BinanceAccountType.USDT_FUTURES,
             base_url_http=None,  # Override with custom endpoint
             base_url_ws=None,  # Override with custom endpoint
             us=False,  # If client is for Binance US
@@ -104,12 +109,12 @@ node = TradingNode(config=config_node)
 
 # Configure your strategy
 strat_config = EMACrossConfig(
-    instrument_id=InstrumentId.from_str("ETHUSDT-PERP.BINANCE"),
-    external_order_claims=[InstrumentId.from_str("ETHUSDT-PERP.BINANCE")],
-    bar_type=BarType.from_str("ETHUSDT-PERP.BINANCE-1-MINUTE-LAST-EXTERNAL"),
+    instrument_id=instrument_id,
+    external_order_claims=[instrument_id],
+    bar_type=BarType.from_str(f"{instrument_id}-1-MINUTE-LAST-EXTERNAL"),
     fast_ema_period=10,
     slow_ema_period=20,
-    trade_size=Decimal("0.010"),
+    trade_size=order_qty,
     order_id_tag="001",
     oms_type="HEDGING",
     subscribe_trade_ticks=True,
@@ -123,8 +128,8 @@ strategy = EMACross(config=strat_config)
 node.trader.add_strategy(strategy)
 
 # Register your client factories with the node (can take user-defined factories)
-node.add_data_client_factory("BINANCE", BinanceLiveDataClientFactory)
-node.add_exec_client_factory("BINANCE", BinanceLiveExecClientFactory)
+node.add_data_client_factory(BINANCE, BinanceLiveDataClientFactory)
+node.add_exec_client_factory(BINANCE, BinanceLiveExecClientFactory)
 node.build()
 
 

@@ -1,9 +1,5 @@
 # Backtesting
 
-:::info
-We are currently working on this concept guide.
-:::
-
 Backtesting with NautilusTrader is a methodical simulation process that replicates trading
 activities using a specific system implementation. This system is composed of various components
 including the built-in engines, `Cache`, [MessageBus](message_bus.md), `Portfolio`, [Actors](actors.md), [Strategies](strategies.md), [Execution Algorithms](execution.md),
@@ -84,7 +80,7 @@ available or necessary, then the platform has the capability of processing marke
 5. **Bars**:
    - Aggregating trading activity - typically over fixed time intervals, such as 1-minute, 1-hour, or 1-day.
 
-### Choosing data: Cost vs. Accuracy
+### Choosing data: cost vs. accuracy
 
 For many trading strategies, bar data (e.g., 1-minute) can be sufficient for backtesting and strategy development. This is
 particularly important because bar data is typically much more accessible and cost-effective compared to tick or order book data.
@@ -123,7 +119,12 @@ Failing to do so will result in data aggregation: L2 data will be reduced to a s
 
 ## Execution
 
-### Bar Based Execution
+### Data and message sequencing
+
+In the main backtesting loop, new market data is first processed for the execution of existing orders before being processed
+by the data engine that will then send data to strategies.
+
+### Bar based execution
 
 Bar data provides a summary of market activity with four key prices for each time period (assuming bars are aggregated by trades):
 
@@ -132,28 +133,43 @@ Bar data provides a summary of market activity with four key prices for each tim
 - **Low**: lowest price traded
 - **Close**: closing price (last trade)
 
-While this gives us an overview of price movement, we lose some important details that we'd have with more granular data:
+While this gives us an overview of price movement, we lose some important information that we'd have with more granular data:
 
 - We don't know in what order the market hit the high and low prices.
 - We can't see exactly when prices changed within the time period.
 - We don't know the actual sequence of trades that occurred.
 
-This is why Nautilus processes bar data through a sophisticated system that attempts to maintain
+This is why Nautilus processes bar data through a system that attempts to maintain
 the most realistic yet conservative market behavior possible, despite these limitations.
 At its core, the platform always maintains an order book simulation - even when you provide less
 granular data such as quotes, trades, or bars (although the simulation will only have a top level book).
 
-#### Processing Bar Data
+:::warning
+When using bars for execution simulation (enabled by default with `bar_execution=True` in venue configurations),
+Nautilus strictly expects the timestamp (`ts_init`) of each bar to represent its **closing time**.
+This ensures accurate chronological processing, prevents look-ahead bias, and aligns market updates (Open → High → Low → Close) with the moment the bar is complete.
+:::
+
+#### Bar timestamp convention
+
+If your data source provides bars timestamped at the **opening time** (common in some providers), you must adjust them to the closing time before loading into Nautilus.
+Failure to do so can lead to incorrect order fills, event sequencing errors, or unrealistic backtest results.
+
+- Use adapter-specific configurations like `bars_timestamp_on_close=True` (e.g., for Bybit or Databento adapters) to handle this automatically during data ingestion.
+- For custom data, manually shift timestamps by the bar duration (e.g., add 1 minute for `1-MINUTE` bars).
+- Always verify your data's timestamp convention with a small sample to avoid simulation inaccuracies.
+
+#### Processing bar data
 
 Even when you provide bar data, Nautilus maintains an internal order book for each instrument - just like a real venue would.
 
-1. **Time Processing**:
+1. **Time processing**:
    - Nautilus has a specific way of handling the timing of bar data *for execution* that's crucial for accurate simulation.
    - Bar timestamps (`ts_event`) are expected to represent the close time of the bar. This approach is most logical because it represents the moment when the bar is fully formed and its aggregation is complete.
    - The initialization time (`ts_init`) can be controlled using the `ts_init_delta` parameter in `BarDataWrangler`, which should typically be set to the bar's step size (timeframe) in nanoseconds.
    - The platform ensures all events happen in the correct sequence based on these timestamps, preventing any possibility of look-ahead bias in your backtests.
 
-2. **Price Processing**:
+2. **Price processing**:
    - The platform converts each bar's OHLC prices into a sequence of market updates.
    - These updates always follow the same order: Open → High → Low → Close.
    - If you provide multiple timeframes (like both 1-minute and 5-minute bars), the platform uses the more granular data for highest accuracy.
@@ -164,7 +180,7 @@ Even when you provide bar data, Nautilus maintains an internal order book for ea
    - For LIMIT orders working in the market, they'll execute if any of the bar's prices reach or cross your limit price (see below).
    - The matching engine continuously processes orders as OHLC prices move, rather than waiting for complete bars.
 
-#### OHLC Prices Simulation
+#### OHLC prices simulation
 
 During backtest execution, each bar is converted into a sequence of four price points:
 
@@ -182,29 +198,38 @@ How these price points are sequenced can be controlled via the `bar_adaptive_hig
 
 Nautilus supports two modes of bar processing:
 
-1. **Fixed Ordering** (`bar_adaptive_high_low_ordering=False`, default)
+1. **Fixed ordering** (`bar_adaptive_high_low_ordering=False`, default)
    - Processes every bar in a fixed sequence: `Open → High → Low → Close`.
    - Simple and deterministic approach.
 
-2. **Adaptive Ordering** (`bar_adaptive_high_low_ordering=True`)
+2. **Adaptive ordering** (`bar_adaptive_high_low_ordering=True`)
    - Uses bar structure to estimate likely price path:
      - If Open is closer to High: processes as `Open → High → Low → Close`.
      - If Open is closer to Low: processes as `Open → Low → High → Close`.
    - [Research](https://gist.github.com/stefansimik/d387e1d9ff784a8973feca0cde51e363) shows this approach achieves ~75-85% accuracy in predicting correct High/Low sequence (compared to statistical ~50% accuracy with fixed ordering).
-   - This is particularly important when both take-profit and stop-loss levels occur within the same bar - as the sequence determines which order is filled first.
+   - This is particularly important when both take-profit and stop-loss levels occur within the same bar - as the sequence determines which order fills first.
 
-Here's how to configure adaptive bar ordering for a venue:
+Here's how to configure adaptive bar ordering for a venue, including account setup:
 
 ```python
-# Configure venue with adaptive bar ordering
+from nautilus_trader.backtest.engine import BacktestEngine
+from nautilus_trader.model.enums import OmsType, AccountType
+from nautilus_trader.model import Money, Currency
+
+# Initialize the backtest engine
+engine = BacktestEngine()
+
+# Add a venue with adaptive bar ordering and required account settings
 engine.add_venue(
-    venue=venue,
+    venue=venue,  # Your Venue identifier, e.g., Venue("BINANCE")
     oms_type=OmsType.NETTING,
+    account_type=AccountType.CASH,
+    starting_balances=[Money(10_000, Currency.from_str("USDT"))],
     bar_adaptive_high_low_ordering=True,  # Enable adaptive ordering of High/Low bar prices
 )
 ```
 
-### Slippage and Spread Handling
+### Slippage and spread handling
 
 When backtesting with different types of data, Nautilus implements specific handling for slippage and spread simulation:
 
@@ -214,7 +239,7 @@ For L2 (market-by-price) or L3 (market-by-order) data, slippage is simulated wit
 - Matching available size at each price level sequentially.
 - Maintaining realistic order book depth impact (per order fill).
 
-For L1 data types (e.g., L1 orderbook, trades, quotes, bars), slippage is handled through:
+For L1 data types (e.g., L1 order book, trades, quotes, bars), slippage is handled through:
 
 **Initial fill slippage** (`prob_slippage`):
 
@@ -227,7 +252,7 @@ When backtesting with bar data, be aware that the reduced granularity of price i
 For the most realistic backtesting results, consider using higher granularity data sources such as L2 or L3 order book data when available.
 :::
 
-### Fill Model
+### Fill model
 
 The `FillModel` helps simulate order queue position and execution in a simple probabilistic way during backtesting.
 It addresses a fundamental challenge: *even with perfect historical market data, we can't fully simulate how orders may have interacted with other
@@ -235,24 +260,24 @@ market participants in real-time*.
 
 The `FillModel` simulates two key aspects of trading that exist in real markets regardless of data quality:
 
-1. **Queue Position for Limit Orders**:
+1. **Queue position for limit orders**:
    - When multiple traders place orders at the same price level, the order's position in the queue affects if and when it gets filled.
 
-2. **Market Impact and Competition**:
+2. **Market impact and competition**:
    - When taking liquidity with market orders, you compete with other traders for available liquidity, which can affect your fill price.
 
-#### Configuration and Parameters
+#### Configuration and parameters
 
 ```python
 from nautilus_trader.backtest.models import FillModel
+from nautilus_trader.backtest.config import BacktestEngineConfig
 from nautilus_trader.backtest.engine import BacktestEngine
-from nautilus_trader.backtest.engine import BacktestEngineConfig
 
 # Create a custom fill model with your desired probabilities
 fill_model = FillModel(
-    prob_fill_on_limit=0.2,    # Chance a limit order fills when price matches (applied to bars/trades/quotes + L1/L2/L3 orderbook)
+    prob_fill_on_limit=0.2,    # Chance a limit order fills when price matches (applied to bars/trades/quotes + L1/L2/L3 order book)
     prob_fill_on_stop=0.95,    # [DEPRECATED] Will be removed in a future version, use `prob_slippage` instead
-    prob_slippage=0.5,         # Chance of 1-tick slippage (applied to bars/trades/quotes + L1 orderbook only)
+    prob_slippage=0.5,         # Chance of 1-tick slippage (applied to bars/trades/quotes + L1 order book only)
     random_seed=None,          # Optional: Set for reproducible results
 )
 
@@ -271,7 +296,7 @@ engine = BacktestEngine(
   - Simulates the probability of a limit order getting filled when its price level is reached in the market.
 - Details:
   - Simulates your position in the order queue at a given price level.
-  - Applies to all data types (e.g., L3/L2/L1 orderbook, quotes, trades, bars).
+  - Applies to all data types (e.g., L1/L2/L3 order book, quotes, trades, bars).
   - New random probability check occurs each time market price touches your order price (but does not move through it).
   - On successful probability check, fills entire remaining order quantity.
 
@@ -321,11 +346,11 @@ engine = BacktestEngine(
 The `prob_fill_on_stop` parameter is deprecated and will be removed in a future version (use `prob_slippage` instead).
 :::
 
-#### How Simulation Varies by Data Type
+#### How simulation varies by data type
 
 The behavior of the `FillModel` adapts based on the order book type being used:
 
-**L2/L3 Orderbook data**
+**L2/L3 order book data**
 
 With full order book depth, the `FillModel` focuses purely on simulating queue position for limit orders through `prob_fill_on_limit`.
 The order book itself handles slippage naturally based on available liquidity at each price level.
@@ -333,7 +358,7 @@ The order book itself handles slippage naturally based on available liquidity at
 - `prob_fill_on_limit` is active - simulates queue position.
 - `prob_slippage` is not used - real order book depth determines price impact.
 
-**L1 Orderbook data**
+**L1 order book data**
 
 With only best bid/ask prices available, the `FillModel` provides additional simulation:
 
@@ -347,23 +372,23 @@ When using less granular data, the same behaviors apply as L1:
 - `prob_fill_on_limit` is active - simulates queue position.
 - `prob_slippage` is active - simulates basic price impact.
 
-#### Important Considerations
+#### Important considerations
 
 The `FillModel` has certain limitations to keep in mind:
 
 - **Partial fills are supported** with L2/L3 order book data - when there is no longer any size available in the order book, no more fills will be generated and the order will remain in a partially filled state. This accurately simulates real market conditions where not enough liquidity is available at the desired price levels.
-- With L1 data, slippage is limited to a fixed 1-tick, at which entire order's quantity is filled.
+- With L1 data, slippage limits to a fixed 1-tick, at which the system fills the entire order's quantity.
 
 :::note
 As the `FillModel` continues to evolve, future versions may introduce more sophisticated simulation of order execution dynamics, including:
 
-- Partial fill simulation
-- Variable slippage based on order size
-- More complex queue position modeling
+- Partial fill simulation.
+- Variable slippage based on order size.
+- More complex queue position modeling.
 
 :::
 
-## Account Types
+## Account types
 
 When you attach a venue to the engine—either for live trading or a back‑test—you must pick one of three accounting modes by passing the `account_type` parameter:
 
@@ -373,29 +398,37 @@ When you attach a venue to the engine—either for live trading or a back‑test
 | Margin                 | Derivatives or any product that allows leverage          | Initial margin for each order plus maintenance margin for open positions.                                          |
 | Betting                | Sports betting, book‑making                              | Stake required by the venue; no leverage.                                                                          |
 
-Example of adding a `CASH` account for trading on Binance Spot with assets directly:
+Example of adding a `CASH` account for a backtest venue:
 
 ```python
-from nautilus_trader.model.enums import AccountType
+from nautilus_trader.adapters.binance import BINANCE_VENUE
+from nautilus_trader.backtest.engine import BacktestEngine
+from nautilus_trader.model.currencies import USDT
+from nautilus_trader.model.enums import OmsType, AccountType
+from nautilus_trader.model import Money, Currency
 
+# Initialize the backtest engine
+engine = BacktestEngine()
 
+# Add a CASH account for the venue
 engine.add_venue(
-    venue_code="BINANCE",
-    account_type=AccountType.CASH,   #  CASH | MARGIN | BETTING
-    ...
+    venue=BINANCE_VENUE,  # Create or reference a Venue identifier
+    oms_type=OmsType.NETTING,
+    account_type=AccountType.CASH,
+    starting_balances=[Money(10_000, USDT)],
 )
 ```
 
-### Cash Accounts
+### Cash accounts
 
 Cash accounts settle trades in full; there is no leverage and therefore no concept of margin.
 
-### Margin Accounts
+### Margin accounts
 
 A *margin account* facilitates trading of instruments requiring margin, such as futures or leveraged products.
 It tracks account balances, calculates required margins, and manages leverage to ensure sufficient collateral for positions and orders.
 
-**Key Concepts**:
+**Key concepts**:
 
 - **Leverage**: Amplifies trading exposure relative to account equity. Higher leverage increases potential returns and risks.
 - **Initial Margin**: Collateral required to submit an order to open a position.
@@ -407,7 +440,271 @@ Reduce-only orders **do not** contribute to `balance_locked` in cash accounts,
 nor do they add to initial margin in margin accounts—as they can only reduce existing exposure.
 :::
 
-### Betting Accounts
+### Betting accounts
 
 Betting accounts are specialised for venues where you stake an amount to win or lose a fixed payout (some prediction markets, sports books, etc.).
 The engine locks only the stake required by the venue; leverage and margin are not applicable.
+
+## Margin models
+
+NautilusTrader provides flexible margin calculation models to accommodate different venue types and trading scenarios.
+
+### Overview
+
+Different venues and brokers have varying approaches to calculating margin requirements:
+
+- **Traditional Brokers** (Interactive Brokers, TD Ameritrade): Fixed margin percentages regardless of leverage.
+- **Crypto Exchanges** (Binance, some others): Leverage may reduce margin requirements.
+- **Futures Exchanges** (CME, ICE): Fixed margin amounts per contract.
+
+### Available models
+
+#### StandardMarginModel
+
+Uses fixed percentages without leverage division, matching traditional broker behavior.
+
+**Formula:**
+
+```python
+# Fixed percentages - leverage ignored
+margin = notional * instrument.margin_init
+```
+
+- Initial Margin = `notional_value * instrument.margin_init`
+- Maintenance Margin = `notional_value * instrument.margin_maint`
+
+**Use cases:**
+
+- Traditional brokers (Interactive Brokers, TD Ameritrade).
+- Futures exchanges (CME, ICE).
+- Forex brokers with fixed margin requirements.
+
+#### LeveragedMarginModel
+
+Divides margin requirements by leverage.
+
+**Formula:**
+
+```python
+# Leverage reduces margin requirements
+adjusted_notional = notional / leverage
+margin = adjusted_notional * instrument.margin_init
+```
+
+- Initial Margin = `(notional_value / leverage) * instrument.margin_init`
+- Maintenance Margin = `(notional_value / leverage) * instrument.margin_maint`
+
+**Use cases:**
+
+- Crypto exchanges that reduce margin with leverage.
+- Venues where leverage affects margin requirements.
+
+### Usage
+
+#### Programmatic configuration
+
+```python
+from nautilus_trader.backtest.models import LeveragedMarginModel
+from nautilus_trader.backtest.models import StandardMarginModel
+from nautilus_trader.test_kit.stubs.execution import TestExecStubs
+
+# Create account
+account = TestExecStubs.margin_account()
+
+# Set standard model for traditional brokers
+standard_model = StandardMarginModel()
+account.set_margin_model(standard_model)
+
+# Or use leveraged model for crypto exchanges
+leveraged_model = LeveragedMarginModel()
+account.set_margin_model(leveraged_model)
+```
+
+#### Backtest configuration
+
+```python
+from nautilus_trader.backtest.config import BacktestVenueConfig
+from nautilus_trader.backtest.config import MarginModelConfig
+
+venue_config = BacktestVenueConfig(
+    name="SIM",
+    oms_type="NETTING",
+    account_type="MARGIN",
+    starting_balances=["1_000_000 USD"],
+    margin_model=MarginModelConfig(model_type="standard"),  # Options: 'standard', 'leveraged'
+)
+```
+
+#### Available model types
+
+- `"leveraged"`: Margin reduced by leverage (default).
+- `"standard"`: Fixed percentages (traditional brokers).
+- Custom class path: `"my_package.my_module.MyMarginModel"`.
+
+#### Default behavior
+
+By default, `MarginAccount` uses `LeveragedMarginModel`.
+
+#### Real-world example
+
+**EUR/USD Trading Scenario:**
+
+- **Instrument**: EUR/USD
+- **Quantity**: 100,000 EUR
+- **Price**: 1.10000
+- **Notional Value**: $110,000
+- **Leverage**: 50x
+- **Instrument Margin Init**: 3%
+
+**Margin calculations:**
+
+| Model     | Calculation           | Result  | Percentage |
+|-----------|----------------------|---------|------------|
+| Standard  | $110,000 × 0.03      | $3,300  | 3.00%      |
+| Leveraged | ($110,000 ÷ 50) × 0.03 | $66   | 0.06%      |
+
+**Account balance impact:**
+
+- **Account Balance**: $10,000
+- **Standard Model**: Cannot trade (requires $3,300 margin)
+- **Leveraged Model**: Can trade (requires only $66 margin)
+
+### Real-world scenarios
+
+#### Interactive Brokers EUR/USD futures
+
+```python
+# IB requires fixed margin regardless of leverage
+account.set_margin_model(StandardMarginModel())
+margin = account.calculate_margin_init(instrument, quantity, price)
+# Result: Fixed percentage of notional value
+```
+
+#### Binance crypto trading
+
+```python
+# Binance may reduce margin with leverage
+account.set_margin_model(LeveragedMarginModel())
+margin = account.calculate_margin_init(instrument, quantity, price)
+# Result: Margin reduced by leverage factor
+```
+
+### Model selection
+
+#### Using the default model
+
+The default `LeveragedMarginModel` works out of the box:
+
+```python
+account = TestExecStubs.margin_account()
+margin = account.calculate_margin_init(instrument, quantity, price)
+```
+
+#### Using the standard model
+
+For traditional broker behavior:
+
+```python
+account.set_margin_model(StandardMarginModel())
+margin = account.calculate_margin_init(instrument, quantity, price)
+```
+
+### Custom models
+
+You can create custom margin models by inheriting from `MarginModel`. Custom models receive configuration through the `MarginModelConfig`:
+
+```python
+from nautilus_trader.backtest.models import MarginModel
+from nautilus_trader.backtest.config import MarginModelConfig
+
+class RiskAdjustedMarginModel(MarginModel):
+    def __init__(self, config: MarginModelConfig):
+        """Initialize with configuration parameters."""
+        self.risk_multiplier = Decimal(str(config.config.get("risk_multiplier", 1.0)))
+        self.use_leverage = config.config.get("use_leverage", False)
+
+    def calculate_margin_init(self, instrument, quantity, price, leverage, use_quote_for_inverse=False):
+        notional = instrument.notional_value(quantity, price, use_quote_for_inverse)
+        if self.use_leverage:
+            adjusted_notional = notional.as_decimal() / leverage
+        else:
+            adjusted_notional = notional.as_decimal()
+        margin = adjusted_notional * instrument.margin_init * self.risk_multiplier
+        return Money(margin, instrument.quote_currency)
+
+    def calculate_margin_maint(self, instrument, side, quantity, price, leverage, use_quote_for_inverse=False):
+        return self.calculate_margin_init(instrument, quantity, price, leverage, use_quote_for_inverse)
+```
+
+#### Using custom models
+
+**Programmatic:**
+
+```python
+from nautilus_trader.backtest.config import MarginModelConfig
+from nautilus_trader.backtest.config import MarginModelFactory
+
+config = MarginModelConfig(
+    model_type="my_package.my_module:RiskAdjustedMarginModel",
+    config={"risk_multiplier": 1.5, "use_leverage": False}
+)
+
+custom_model = MarginModelFactory.create(config)
+account.set_margin_model(custom_model)
+```
+
+### High-level backtest API configuration
+
+When using the high-level backtest API, you can specify margin models in your venue configuration using `MarginModelConfig`:
+
+```python
+from nautilus_trader.backtest.config import MarginModelConfig
+from nautilus_trader.backtest.config import BacktestVenueConfig
+from nautilus_trader.config import BacktestRunConfig
+
+# Configure venue with specific margin model
+venue_config = BacktestVenueConfig(
+    name="SIM",
+    oms_type="NETTING",
+    account_type="MARGIN",
+    starting_balances=["1_000_000 USD"],
+    margin_model=MarginModelConfig(
+        model_type="standard"  # Use standard model for traditional broker simulation
+    ),
+)
+
+# Use in backtest configuration
+config = BacktestRunConfig(
+    venues=[venue_config],
+    # ... other config
+)
+```
+
+#### Configuration examples
+
+**Standard model (traditional brokers):**
+
+```python
+margin_model=MarginModelConfig(model_type="standard")
+```
+
+**Leveraged model (default):**
+
+```python
+margin_model=MarginModelConfig(model_type="leveraged")  # Default
+```
+
+**Custom model with configuration:**
+
+```python
+margin_model=MarginModelConfig(
+    model_type="my_package.my_module:CustomMarginModel",
+    config={
+        "risk_multiplier": 1.5,
+        "use_leverage": False,
+        "volatility_threshold": 0.02,
+    }
+)
+```
+
+The margin model will be automatically applied to the simulated exchange during backtest execution.

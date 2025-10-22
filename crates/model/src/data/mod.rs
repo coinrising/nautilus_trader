@@ -21,6 +21,7 @@ pub mod close;
 pub mod delta;
 pub mod deltas;
 pub mod depth;
+pub mod funding;
 pub mod greeks;
 pub mod order;
 pub mod prices;
@@ -28,7 +29,7 @@ pub mod quote;
 pub mod status;
 pub mod trade;
 
-#[cfg(feature = "stubs")]
+#[cfg(any(test, feature = "stubs"))]
 pub mod stubs;
 
 use std::{
@@ -37,7 +38,6 @@ use std::{
     str::FromStr,
 };
 
-use close::InstrumentClose;
 use indexmap::IndexMap;
 use nautilus_core::UnixNanos;
 use serde::{Deserialize, Serialize};
@@ -46,9 +46,11 @@ use serde_json::to_string;
 // Re-exports
 #[rustfmt::skip]  // Keep these grouped
 pub use bar::{Bar, BarSpecification, BarType};
+pub use close::InstrumentClose;
 pub use delta::OrderBookDelta;
 pub use deltas::{OrderBookDeltas, OrderBookDeltas_API};
 pub use depth::{DEPTH10_LEN, OrderBookDepth10};
+pub use funding::FundingRateUpdate;
 pub use greeks::{
     BlackScholesGreeksResult, GreeksData, PortfolioGreeks, YieldCurveData, black_scholes_greeks,
     imply_vol_and_greeks,
@@ -114,6 +116,10 @@ impl_try_from_data!(MarkPriceUpdate, MarkPriceUpdate);
 impl_try_from_data!(IndexPriceUpdate, IndexPriceUpdate);
 impl_try_from_data!(InstrumentClose, InstrumentClose);
 
+/// Converts a vector of `Data` items to a specific variant type.
+///
+/// Filters and converts the data vector, keeping only items that can be
+/// successfully converted to the target type `T`.
 pub fn to_variant<T: TryFrom<Data>>(data: Vec<Data>) -> Vec<T> {
     data.into_iter()
         .filter_map(|d| T::try_from(d).ok())
@@ -142,11 +148,17 @@ impl Data {
     }
 }
 
-pub trait GetTsInit {
+/// Marker trait for types that carry a creation timestamp.
+///
+/// `ts_init` is the moment (UNIX nanoseconds) when this value was first generated or
+/// ingested by Nautilus. It can be used for sequencing, latency measurements,
+/// or monitoring data-pipeline delays.
+pub trait HasTsInit {
+    /// Returns the UNIX timestamp (nanoseconds) when the instance was created.
     fn ts_init(&self) -> UnixNanos;
 }
 
-impl GetTsInit for Data {
+impl HasTsInit for Data {
     fn ts_init(&self) -> UnixNanos {
         match self {
             Self::Delta(d) => d.ts_init,
@@ -162,7 +174,10 @@ impl GetTsInit for Data {
     }
 }
 
-pub fn is_monotonically_increasing_by_init<T: GetTsInit>(data: &[T]) -> bool {
+/// Checks if the data slice is monotonically increasing by initialization timestamp.
+///
+/// Returns `true` if each element's `ts_init` is less than or equal to the next element's `ts_init`.
+pub fn is_monotonically_increasing_by_init<T: HasTsInit>(data: &[T]) -> bool {
     data.windows(2)
         .all(|window| window[0].ts_init() <= window[1].ts_init())
 }
@@ -221,21 +236,15 @@ impl From<InstrumentClose> for Data {
     }
 }
 
-// TODO: https://blog.rust-lang.org/2024/03/30/i128-layout-update.html
-// i128 and u128 is now FFI compatible. However, since the clippy lint
-// hasn't been removed yet. We'll suppress with #[cfg_attr(feature = "high-precision", allow(improper_ctypes_definitions))]
-#[unsafe(no_mangle)]
-#[cfg_attr(feature = "high-precision", allow(improper_ctypes_definitions))]
-pub extern "C" fn data_clone(data: &Data) -> Data {
-    // Dummy function for cbindgen to export types
-    data.clone()
-}
-
 /// Represents a data type including metadata.
 #[derive(Clone, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.model")
+)]
+#[cfg_attr(
+    feature = "python",
+    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.model")
 )]
 pub struct DataType {
     type_name: String,
@@ -251,10 +260,10 @@ impl DataType {
         let topic = if let Some(ref meta) = metadata {
             let meta_str = meta
                 .iter()
-                .map(|(k, v)| format!("{}={}", k, v))
+                .map(|(k, v)| format!("{k}={v}"))
                 .collect::<Vec<_>>()
                 .join(".");
-            format!("{}.{}", type_name, meta_str)
+            format!("{type_name}.{meta_str}")
         } else {
             type_name.to_string()
         };
@@ -283,10 +292,10 @@ impl DataType {
 
     /// Returns a string representation of the metadata.
     pub fn metadata_str(&self) -> String {
-        self.metadata
-            .as_ref()
-            .map(|metadata| to_string(metadata).unwrap_or_default())
-            .unwrap_or_else(|| "null".to_string())
+        self.metadata.as_ref().map_or_else(
+            || "null".to_string(),
+            |metadata| to_string(metadata).unwrap_or_default(),
+        )
     }
 
     /// Returns the messaging topic for the data type.
@@ -298,9 +307,9 @@ impl DataType {
     ///
     /// # Panics
     ///
-    /// This function panics:
-    /// - If there is no metadata.
-    /// - If the `instrument_id` value contained in the metadata is invalid.
+    /// This function panics if:
+    /// - There is no metadata.
+    /// - The `instrument_id` value contained in the metadata is invalid.
     pub fn instrument_id(&self) -> Option<InstrumentId> {
         let metadata = self.metadata.as_ref().expect("metadata was `None`");
         let instrument_id = metadata.get("instrument_id")?;
@@ -314,9 +323,9 @@ impl DataType {
     ///
     /// # Panics
     ///
-    /// This function panics:
-    /// - If there is no metadata.
-    /// - If the `venue` value contained in the metadata is invalid.
+    /// This function panics if:
+    /// - There is no metadata.
+    /// - The `venue` value contained in the metadata is invalid.
     pub fn venue(&self) -> Option<Venue> {
         let metadata = self.metadata.as_ref().expect("metadata was `None`");
         let venue_str = metadata.get("venue")?;
@@ -327,9 +336,9 @@ impl DataType {
     ///
     /// # Panics
     ///
-    /// This function panics:
-    /// - If there is no metadata.
-    /// - If the `start` value contained in the metadata is invalid.
+    /// This function panics if:
+    /// - There is no metadata.
+    /// - The `start` value contained in the metadata is invalid.
     pub fn start(&self) -> Option<UnixNanos> {
         let metadata = self.metadata.as_ref()?;
         let start_str = metadata.get("start")?;
@@ -340,9 +349,9 @@ impl DataType {
     ///
     /// # Panics
     ///
-    /// This function panics:
-    /// - If there is no metadata.
-    /// - If the `end` value contained in the metadata is invalid.
+    /// This function panics if:
+    /// - There is no metadata.
+    /// - The `end` value contained in the metadata is invalid.
     pub fn end(&self) -> Option<UnixNanos> {
         let metadata = self.metadata.as_ref()?;
         let end_str = metadata.get("end")?;
@@ -353,9 +362,9 @@ impl DataType {
     ///
     /// # Panics
     ///
-    /// This function panics:
-    /// - If there is no metadata.
-    /// - If the `limit` value contained in the metadata is invalid.
+    /// This function panics if:
+    /// - There is no metadata.
+    /// - The `limit` value contained in the metadata is invalid.
     pub fn limit(&self) -> Option<usize> {
         let metadata = self.metadata.as_ref()?;
         let depth_str = metadata.get("limit")?;
@@ -520,7 +529,7 @@ mod tests {
         );
 
         let data_type1 = DataType::new("ExampleType", metadata.clone());
-        let data_type2 = DataType::new("ExampleType", metadata.clone());
+        let data_type2 = DataType::new("ExampleType", metadata);
 
         let mut hasher1 = DefaultHasher::new();
         data_type1.hash(&mut hasher1);
@@ -543,7 +552,7 @@ mod tests {
         );
         let data_type = DataType::new("ExampleType", metadata);
 
-        assert_eq!(format!("{}", data_type), "ExampleType.key1=value1");
+        assert_eq!(format!("{data_type}"), "ExampleType.key1=value1");
     }
 
     #[rstest]

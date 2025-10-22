@@ -43,6 +43,7 @@ from nautilus_trader.model.events import PositionEvent
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.persistence.wranglers_v2 import BarDataWranglerV2
 from nautilus_trader.persistence.wranglers_v2 import OrderBookDeltaDataWranglerV2
+from nautilus_trader.persistence.wranglers_v2 import OrderBookDepth10DataWranglerV2
 from nautilus_trader.persistence.wranglers_v2 import QuoteTickDataWranglerV2
 from nautilus_trader.persistence.wranglers_v2 import TradeTickDataWranglerV2
 from nautilus_trader.serialization.arrow.implementations import account_state
@@ -124,6 +125,7 @@ class ArrowSerializer:
     def _unpack_container_objects(data_cls: type, data: list[Any]) -> list[Data]:
         if data_cls == OrderBookDeltas:
             return [delta for deltas in data for delta in deltas.deltas]
+
         return data
 
     @staticmethod
@@ -184,9 +186,12 @@ class ArrowSerializer:
                         pyo3_instrument_closes,
                     )
                 elif data_cls == OrderBookDepth10:
-                    raise RuntimeError(
-                        f"Unsupported Rust defined data type for catalog write, was `{data_cls}`. "
-                        "You need to use a loader which returns `nautilus_pyo3.OrderBookDepth10` objects.",
+                    data = [
+                        nautilus_pyo3.OrderBookDepth10.from_dict(OrderBookDepth10.to_dict(item))
+                        for item in data
+                    ]
+                    batch_bytes = nautilus_pyo3.book_depth10_to_arrow_record_batch_bytes(
+                        data,
                     )
                 else:
                     raise RuntimeError(
@@ -204,6 +209,7 @@ class ArrowSerializer:
     ) -> pa.RecordBatch:
         if isinstance(data, CustomData):
             data = data.data
+
         data_cls = data_cls or type(data)
         if data_cls is None:
             raise RuntimeError("`cls` was `None` when a value was expected")
@@ -214,11 +220,12 @@ class ArrowSerializer:
                 return ArrowSerializer.rust_defined_to_record_batch([data], data_cls=data_cls)
             raise TypeError(
                 f"Cannot serialize object `{data_cls}`. Register a "
-                f"serialization method via `nautilus_trader.persistence.catalog.parquet.serializers.register_parquet()`",
+                f"serialization method via `nautilus_trader.serialization.arrow.serializer.register_arrow()`",
             )
 
         batch = delegate(data)
         assert isinstance(batch, pa.RecordBatch)
+
         return batch
 
     @staticmethod
@@ -248,11 +255,13 @@ class ArrowSerializer:
         """
         if data_cls in RUST_SERIALIZERS or data_cls.__name__ in RUST_STR_SERIALIZERS:
             return ArrowSerializer.rust_defined_to_record_batch(data, data_cls=data_cls)
+
         batches = [ArrowSerializer.serialize(obj, data_cls) for obj in data]
+
         return pa.Table.from_batches(batches, schema=batches[0].schema)
 
     @staticmethod
-    def deserialize(data_cls: type, batch: pa.RecordBatch | pa.Table) -> Data:
+    def deserialize(data_cls: type, batch: pa.RecordBatch | pa.Table) -> list[Data | Event]:
         """
         Deserialize the given `Parquet` specification bytes to an object.
 
@@ -278,10 +287,11 @@ class ArrowSerializer:
             if data_cls in RUST_SERIALIZERS:
                 if isinstance(batch, pa.RecordBatch):
                     batch = pa.Table.from_batches([batch])
+
                 return ArrowSerializer._deserialize_rust(data_cls=data_cls, table=batch)
             raise TypeError(
                 f"Cannot deserialize object `{data_cls}`. Register a "
-                f"deserialization method via `arrow.serializer.register_parquet()`",
+                f"deserialization method via `nautilus_trader.serialization.arrow.serializer.register_arrow()`",
             )
 
         return delegate(batch)
@@ -291,6 +301,7 @@ class ArrowSerializer:
         Wrangler = {
             OrderBookDelta: OrderBookDeltaDataWranglerV2,
             OrderBookDeltas: OrderBookDeltaDataWranglerV2,
+            OrderBookDepth10: OrderBookDepth10DataWranglerV2,
             QuoteTick: QuoteTickDataWranglerV2,
             TradeTick: TradeTickDataWranglerV2,
             Bar: BarDataWranglerV2,
@@ -304,6 +315,7 @@ class ArrowSerializer:
 
         wrangler = Wrangler.from_schema(table.schema)
         ticks = wrangler.from_arrow(table)
+
         return ticks
 
 
@@ -311,7 +323,9 @@ def make_dict_serializer(schema: pa.Schema) -> Callable[[list[Data | Event]], pa
     def inner(data: list[Data | Event]) -> pa.RecordBatch:
         if not isinstance(data, list):
             data = [data]
+
         dicts = [d.to_dict(d) for d in data]
+
         return dicts_to_record_batch(dicts, schema=schema)
 
     return inner

@@ -115,7 +115,7 @@ impl MarkPriceUpdate {
         Ok(())
     }
 
-    fn __getstate__(&self, py: Python) -> PyResult<PyObject> {
+    fn __getstate__(&self, py: Python) -> PyResult<Py<PyAny>> {
         (
             self.instrument_id.to_string(),
             self.value.raw,
@@ -126,7 +126,7 @@ impl MarkPriceUpdate {
             .into_py_any(py)
     }
 
-    fn __reduce__(&self, py: Python) -> PyResult<PyObject> {
+    fn __reduce__(&self, py: Python) -> PyResult<Py<PyAny>> {
         let safe_constructor = py.get_type::<Self>().getattr("_safe_constructor")?;
         let state = self.__getstate__(py)?;
         (safe_constructor, PyTuple::empty(py), state).into_py_any(py)
@@ -234,23 +234,23 @@ impl MarkPriceUpdate {
     }
 
     /// Return a dictionary representation of the object.
-    #[pyo3(name = "as_dict")]
-    fn py_as_dict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+    #[pyo3(name = "to_dict")]
+    fn py_to_dict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         to_dict_pyo3(py, self)
     }
 
     /// Return JSON encoded bytes representation of the object.
-    #[pyo3(name = "as_json")]
-    fn py_as_json(&self, py: Python<'_>) -> Py<PyAny> {
+    #[pyo3(name = "to_json_bytes")]
+    fn py_to_json_bytes(&self, py: Python<'_>) -> Py<PyAny> {
         // SAFETY: Unwrap safe when serializing a valid object
-        self.as_json_bytes().unwrap().into_py_any_unwrap(py)
+        self.to_json_bytes().unwrap().into_py_any_unwrap(py)
     }
 
     /// Return MsgPack encoded bytes representation of the object.
-    #[pyo3(name = "as_msgpack")]
-    fn py_as_msgpack(&self, py: Python<'_>) -> Py<PyAny> {
+    #[pyo3(name = "to_msgpack_bytes")]
+    fn py_to_msgpack_bytes(&self, py: Python<'_>) -> Py<PyAny> {
         // SAFETY: Unwrap safe when serializing a valid object
-        self.as_msgpack_bytes().unwrap().into_py_any_unwrap(py)
+        self.to_msgpack_bytes().unwrap().into_py_any_unwrap(py)
     }
 }
 
@@ -327,7 +327,7 @@ impl IndexPriceUpdate {
         Ok(())
     }
 
-    fn __getstate__(&self, py: Python) -> PyResult<PyObject> {
+    fn __getstate__(&self, py: Python) -> PyResult<Py<PyAny>> {
         (
             self.instrument_id.to_string(),
             self.value.raw,
@@ -338,7 +338,7 @@ impl IndexPriceUpdate {
             .into_py_any(py)
     }
 
-    fn __reduce__(&self, py: Python) -> PyResult<PyObject> {
+    fn __reduce__(&self, py: Python) -> PyResult<Py<PyAny>> {
         let safe_constructor = py.get_type::<Self>().getattr("_safe_constructor")?;
         let state = self.__getstate__(py)?;
         (safe_constructor, PyTuple::empty(py), state).into_py_any(py)
@@ -446,23 +446,23 @@ impl IndexPriceUpdate {
     }
 
     /// Return a dictionary representation of the object.
-    #[pyo3(name = "as_dict")]
-    fn py_as_dict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+    #[pyo3(name = "to_dict")]
+    fn py_to_dict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         to_dict_pyo3(py, self)
     }
 
     /// Return JSON encoded bytes representation of the object.
-    #[pyo3(name = "as_json")]
-    fn py_as_json(&self, py: Python<'_>) -> Py<PyAny> {
+    #[pyo3(name = "to_json_bytes")]
+    fn py_to_json_bytes(&self, py: Python<'_>) -> Py<PyAny> {
         // SAFETY: Unwrap safe when serializing a valid object
-        self.as_json_bytes().unwrap().into_py_any_unwrap(py)
+        self.to_json_bytes().unwrap().into_py_any_unwrap(py)
     }
 
     /// Return MsgPack encoded bytes representation of the object.
-    #[pyo3(name = "as_msgpack")]
-    fn py_as_msgpack(&self, py: Python<'_>) -> Py<PyAny> {
+    #[pyo3(name = "to_msgpack_bytes")]
+    fn py_to_msgpack_bytes(&self, py: Python<'_>) -> Py<PyAny> {
         // SAFETY: Unwrap safe when serializing a valid object
-        self.as_msgpack_bytes().unwrap().into_py_any_unwrap(py)
+        self.to_msgpack_bytes().unwrap().into_py_any_unwrap(py)
     }
 }
 
@@ -499,11 +499,10 @@ mod tests {
     }
 
     #[rstest]
-    fn test_mark_price_as_dict(mark_price: MarkPriceUpdate) {
-        pyo3::prepare_freethreaded_python();
-
-        Python::with_gil(|py| {
-            let dict_string = mark_price.py_as_dict(py).unwrap().to_string();
+    fn test_mark_price_to_dict(mark_price: MarkPriceUpdate) {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict_string = mark_price.py_to_dict(py).unwrap().to_string();
             let expected_string = r"{'type': 'MarkPriceUpdate', 'instrument_id': 'BTC-USDT.OKX', 'value': '100000.00', 'ts_event': 1, 'ts_init': 2}";
             assert_eq!(dict_string, expected_string);
         });
@@ -511,10 +510,9 @@ mod tests {
 
     #[rstest]
     fn test_mark_price_from_dict(mark_price: MarkPriceUpdate) {
-        pyo3::prepare_freethreaded_python();
-
-        Python::with_gil(|py| {
-            let dict = mark_price.py_as_dict(py).unwrap();
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = mark_price.py_to_dict(py).unwrap();
             let parsed = MarkPriceUpdate::py_from_dict(py, dict).unwrap();
             assert_eq!(parsed, mark_price);
         });
@@ -522,9 +520,8 @@ mod tests {
 
     #[rstest]
     fn test_mark_price_from_pyobject(mark_price: MarkPriceUpdate) {
-        pyo3::prepare_freethreaded_python();
-
-        Python::with_gil(|py| {
+        Python::initialize();
+        Python::attach(|py| {
             let tick_pyobject = mark_price.into_py_any_unwrap(py);
             let parsed_tick = MarkPriceUpdate::from_pyobject(tick_pyobject.bind(py)).unwrap();
             assert_eq!(parsed_tick, mark_price);
@@ -532,11 +529,10 @@ mod tests {
     }
 
     #[rstest]
-    fn test_index_price_as_dict(index_price: IndexPriceUpdate) {
-        pyo3::prepare_freethreaded_python();
-
-        Python::with_gil(|py| {
-            let dict_string = index_price.py_as_dict(py).unwrap().to_string();
+    fn test_index_price_to_dict(index_price: IndexPriceUpdate) {
+        Python::initialize();
+        Python::attach(|py| {
+            let dict_string = index_price.py_to_dict(py).unwrap().to_string();
             let expected_string = r"{'type': 'IndexPriceUpdate', 'instrument_id': 'BTC-USDT.OKX', 'value': '100000.00', 'ts_event': 1, 'ts_init': 2}";
             assert_eq!(dict_string, expected_string);
         });
@@ -544,10 +540,9 @@ mod tests {
 
     #[rstest]
     fn test_index_price_from_dict(index_price: IndexPriceUpdate) {
-        pyo3::prepare_freethreaded_python();
-
-        Python::with_gil(|py| {
-            let dict = index_price.py_as_dict(py).unwrap();
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = index_price.py_to_dict(py).unwrap();
             let parsed = IndexPriceUpdate::py_from_dict(py, dict).unwrap();
             assert_eq!(parsed, index_price);
         });
@@ -555,9 +550,8 @@ mod tests {
 
     #[rstest]
     fn test_index_price_from_pyobject(index_price: IndexPriceUpdate) {
-        pyo3::prepare_freethreaded_python();
-
-        Python::with_gil(|py| {
+        Python::initialize();
+        Python::attach(|py| {
             let tick_pyobject = index_price.into_py_any_unwrap(py);
             let parsed_tick = IndexPriceUpdate::from_pyobject(tick_pyobject.bind(py)).unwrap();
             assert_eq!(parsed_tick, index_price);

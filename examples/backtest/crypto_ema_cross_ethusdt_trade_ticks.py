@@ -19,8 +19,9 @@ from decimal import Decimal
 
 import pandas as pd
 
+from nautilus_trader.adapters.binance import BINANCE_VENUE
+from nautilus_trader.backtest.config import BacktestEngineConfig
 from nautilus_trader.backtest.engine import BacktestEngine
-from nautilus_trader.backtest.engine import BacktestEngineConfig
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.examples.algorithms.twap import TWAPExecAlgorithm
 from nautilus_trader.examples.strategies.ema_cross_twap import EMACrossTWAP
@@ -32,7 +33,6 @@ from nautilus_trader.model.enums import AccountType
 from nautilus_trader.model.enums import BookType
 from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.identifiers import TraderId
-from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.objects import Money
 from nautilus_trader.persistence.wranglers import TradeTickDataWrangler
 from nautilus_trader.test_kit.providers import TestDataProvider
@@ -54,9 +54,8 @@ if __name__ == "__main__":
     engine = BacktestEngine(config=config)
 
     # Add a trading venue (multiple venues possible)
-    BINANCE = Venue("BINANCE")
     engine.add_venue(
-        venue=BINANCE,
+        venue=BINANCE_VENUE,
         oms_type=OmsType.NETTING,
         book_type=BookType.L1_MBP,
         account_type=AccountType.CASH,  # Spot CASH account (not for perpetuals or futures)
@@ -76,7 +75,7 @@ if __name__ == "__main__":
     engine.add_data(ticks)
 
     # Configure your strategy
-    config = EMACrossTWAPConfig(
+    strategy_config = EMACrossTWAPConfig(
         instrument_id=ETHUSDT_BINANCE.id,
         bar_type=BarType.from_str("ETHUSDT.BINANCE-250-TICK-LAST-INTERNAL"),
         trade_size=Decimal("0.10"),
@@ -87,7 +86,7 @@ if __name__ == "__main__":
     )
 
     # Instantiate and add your strategy
-    strategy = EMACrossTWAP(config=config)
+    strategy = EMACrossTWAP(config=strategy_config)
     engine.add_strategy(strategy=strategy)
 
     # Instantiate and add your execution algorithm
@@ -109,7 +108,7 @@ if __name__ == "__main__":
         "display.width",
         300,
     ):
-        print(engine.trader.generate_account_report(BINANCE))
+        print(engine.trader.generate_account_report(BINANCE_VENUE))
         print(engine.trader.generate_order_fills_report())
         print(engine.trader.generate_positions_report())
 

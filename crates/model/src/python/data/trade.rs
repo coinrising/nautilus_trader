@@ -158,7 +158,7 @@ impl TradeTick {
         Ok(())
     }
 
-    fn __getstate__(&self, py: Python) -> PyResult<PyObject> {
+    fn __getstate__(&self, py: Python) -> PyResult<Py<PyAny>> {
         (
             self.instrument_id.to_string(),
             self.price.raw,
@@ -173,7 +173,7 @@ impl TradeTick {
             .into_py_any(py)
     }
 
-    fn __reduce__(&self, py: Python) -> PyResult<PyObject> {
+    fn __reduce__(&self, py: Python) -> PyResult<Py<PyAny>> {
         let safe_constructor = py.get_type::<Self>().getattr("_safe_constructor")?;
         let state = self.__getstate__(py)?;
         (safe_constructor, PyTuple::empty(py), state).into_py_any(py)
@@ -322,28 +322,28 @@ impl TradeTick {
     /// The function will panic if the `PyCapsule` creation fails, which can occur if the
     /// `Data::Trade` object cannot be converted into a raw pointer.
     #[pyo3(name = "as_pycapsule")]
-    fn py_as_pycapsule(&self, py: Python<'_>) -> PyObject {
+    fn py_as_pycapsule(&self, py: Python<'_>) -> Py<PyAny> {
         data_to_pycapsule(py, Data::Trade(*self))
     }
 
     /// Return a dictionary representation of the object.
-    #[pyo3(name = "as_dict")]
-    fn py_as_dict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+    #[pyo3(name = "to_dict")]
+    fn py_to_dict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         to_dict_pyo3(py, self)
     }
 
     /// Return JSON encoded bytes representation of the object.
-    #[pyo3(name = "as_json")]
-    fn py_as_json(&self, py: Python<'_>) -> Py<PyAny> {
+    #[pyo3(name = "to_json_bytes")]
+    fn py_to_json_bytes(&self, py: Python<'_>) -> Py<PyAny> {
         // SAFETY: Unwrap safe when serializing a valid object
-        self.as_json_bytes().unwrap().into_py_any_unwrap(py)
+        self.to_json_bytes().unwrap().into_py_any_unwrap(py)
     }
 
     /// Return MsgPack encoded bytes representation of the object.
-    #[pyo3(name = "as_msgpack")]
-    fn py_as_msgpack(&self, py: Python<'_>) -> Py<PyAny> {
+    #[pyo3(name = "to_msgpack_bytes")]
+    fn py_to_msgpack_bytes(&self, py: Python<'_>) -> Py<PyAny> {
         // SAFETY: Unwrap safe when serializing a valid object
-        self.as_msgpack_bytes().unwrap().into_py_any_unwrap(py)
+        self.to_msgpack_bytes().unwrap().into_py_any_unwrap(py)
     }
 }
 
@@ -365,8 +365,6 @@ mod tests {
 
     #[rstest]
     fn test_trade_tick_py_new_with_zero_size() {
-        pyo3::prepare_freethreaded_python();
-
         let instrument_id = InstrumentId::from("ETH-USDT-SWAP.OKX");
         let price = Price::from("10000.00");
         let zero_size = Quantity::from(0);
@@ -389,12 +387,12 @@ mod tests {
     }
 
     #[rstest]
-    fn test_as_dict(stub_trade_ethusdt_buyer: TradeTick) {
-        pyo3::prepare_freethreaded_python();
+    fn test_to_dict(stub_trade_ethusdt_buyer: TradeTick) {
         let trade = stub_trade_ethusdt_buyer;
 
-        Python::with_gil(|py| {
-            let dict_string = trade.py_as_dict(py).unwrap().to_string();
+        Python::initialize();
+        Python::attach(|py| {
+            let dict_string = trade.py_to_dict(py).unwrap().to_string();
             let expected_string = r"{'type': 'TradeTick', 'instrument_id': 'ETHUSDT-PERP.BINANCE', 'price': '10000.0000', 'size': '1.00000000', 'aggressor_side': 'BUYER', 'trade_id': '123456789', 'ts_event': 0, 'ts_init': 1}";
             assert_eq!(dict_string, expected_string);
         });
@@ -402,11 +400,11 @@ mod tests {
 
     #[rstest]
     fn test_from_dict(stub_trade_ethusdt_buyer: TradeTick) {
-        pyo3::prepare_freethreaded_python();
         let trade = stub_trade_ethusdt_buyer;
 
-        Python::with_gil(|py| {
-            let dict = trade.py_as_dict(py).unwrap();
+        Python::initialize();
+        Python::attach(|py| {
+            let dict = trade.py_to_dict(py).unwrap();
             let parsed = TradeTick::py_from_dict(py, dict).unwrap();
             assert_eq!(parsed, trade);
         });
@@ -414,10 +412,10 @@ mod tests {
 
     #[rstest]
     fn test_from_pyobject(stub_trade_ethusdt_buyer: TradeTick) {
-        pyo3::prepare_freethreaded_python();
         let trade = stub_trade_ethusdt_buyer;
 
-        Python::with_gil(|py| {
+        Python::initialize();
+        Python::attach(|py| {
             let tick_pyobject = trade.into_py_any_unwrap(py);
             let parsed_tick = TradeTick::from_pyobject(tick_pyobject.bind(py)).unwrap();
             assert_eq!(parsed_tick, trade);

@@ -19,15 +19,8 @@ use std::{
     ops::Neg,
 };
 
-use nautilus_core::python::{
-    IntoPyObjectNautilusExt, get_pytype_name, to_pytype_err, to_pyvalue_err,
-};
-use pyo3::{
-    conversion::IntoPyObjectExt,
-    prelude::*,
-    pyclass::CompareOp,
-    types::{PyFloat, PyTuple},
-};
+use nautilus_core::python::{get_pytype_name, to_pytype_err, to_pyvalue_err};
+use pyo3::{basic::CompareOp, conversion::IntoPyObjectExt, prelude::*, types::PyFloat};
 use rust_decimal::{Decimal, RoundingStrategy};
 
 use crate::types::{Quantity, quantity::QuantityRaw};
@@ -39,30 +32,51 @@ impl Quantity {
         Self::new_checked(value, precision).map_err(to_pyvalue_err)
     }
 
-    fn __setstate__(&mut self, state: &Bound<'_, PyAny>) -> PyResult<()> {
-        let py_tuple: &Bound<'_, PyTuple> = state.downcast::<PyTuple>()?;
-        self.raw = py_tuple.get_item(0)?.extract::<QuantityRaw>()?;
-        self.precision = py_tuple.get_item(1)?.extract::<u8>()?;
-        Ok(())
+    fn __reduce__(&self, py: Python) -> PyResult<Py<PyAny>> {
+        let from_raw = py.get_type::<Self>().getattr("from_raw")?;
+        let args = (self.raw, self.precision).into_py_any(py)?;
+        (from_raw, args).into_py_any(py)
     }
 
-    fn __getstate__(&self, py: Python) -> PyResult<PyObject> {
-        (self.raw, self.precision).into_py_any(py)
+    fn __richcmp__(
+        &self,
+        other: &Bound<'_, PyAny>,
+        op: CompareOp,
+        py: Python<'_>,
+    ) -> PyResult<Py<PyAny>> {
+        if let Ok(other_qty) = other.extract::<Self>() {
+            let result = match op {
+                CompareOp::Eq => self.eq(&other_qty),
+                CompareOp::Ne => self.ne(&other_qty),
+                CompareOp::Ge => self.ge(&other_qty),
+                CompareOp::Gt => self.gt(&other_qty),
+                CompareOp::Le => self.le(&other_qty),
+                CompareOp::Lt => self.lt(&other_qty),
+            };
+            result.into_py_any(py)
+        } else if let Ok(other_dec) = other.extract::<Decimal>() {
+            let result = match op {
+                CompareOp::Eq => self.as_decimal() == other_dec,
+                CompareOp::Ne => self.as_decimal() != other_dec,
+                CompareOp::Ge => self.as_decimal() >= other_dec,
+                CompareOp::Gt => self.as_decimal() > other_dec,
+                CompareOp::Le => self.as_decimal() <= other_dec,
+                CompareOp::Lt => self.as_decimal() < other_dec,
+            };
+            result.into_py_any(py)
+        } else {
+            Ok(py.NotImplemented())
+        }
     }
 
-    fn __reduce__(&self, py: Python) -> PyResult<PyObject> {
-        let safe_constructor = py.get_type::<Self>().getattr("_safe_constructor")?;
-        let state = self.__getstate__(py)?;
-        (safe_constructor, PyTuple::empty(py), state).into_py_any(py)
+    fn __hash__(&self) -> isize {
+        let mut h = DefaultHasher::new();
+        self.hash(&mut h);
+        h.finish() as isize
     }
 
-    #[staticmethod]
-    fn _safe_constructor() -> PyResult<Self> {
-        Ok(Self::zero(0)) // Safe default
-    }
-
-    fn __add__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<PyObject> {
-        if other.as_ref().is_instance_of::<PyFloat>() {
+    fn __add__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<Py<PyAny>> {
+        if other.is_instance_of::<PyFloat>() {
             let other_float: f64 = other.extract()?;
             (self.as_f64() + other_float).into_py_any(py)
         } else if let Ok(other_qty) = other.extract::<Self>() {
@@ -77,8 +91,8 @@ impl Quantity {
         }
     }
 
-    fn __radd__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<PyObject> {
-        if other.as_ref().is_instance_of::<PyFloat>() {
+    fn __radd__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<Py<PyAny>> {
+        if other.is_instance_of::<PyFloat>() {
             let other_float: f64 = other.extract()?;
             (other_float + self.as_f64()).into_py_any(py)
         } else if let Ok(other_qty) = other.extract::<Self>() {
@@ -93,8 +107,8 @@ impl Quantity {
         }
     }
 
-    fn __sub__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<PyObject> {
-        if other.as_ref().is_instance_of::<PyFloat>() {
+    fn __sub__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<Py<PyAny>> {
+        if other.is_instance_of::<PyFloat>() {
             let other_float: f64 = other.extract()?;
             (self.as_f64() - other_float).into_py_any(py)
         } else if let Ok(other_qty) = other.extract::<Self>() {
@@ -109,8 +123,8 @@ impl Quantity {
         }
     }
 
-    fn __rsub__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<PyObject> {
-        if other.as_ref().is_instance_of::<PyFloat>() {
+    fn __rsub__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<Py<PyAny>> {
+        if other.is_instance_of::<PyFloat>() {
             let other_float: f64 = other.extract()?;
             (other_float - self.as_f64()).into_py_any(py)
         } else if let Ok(other_qty) = other.extract::<Self>() {
@@ -125,8 +139,8 @@ impl Quantity {
         }
     }
 
-    fn __mul__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<PyObject> {
-        if other.as_ref().is_instance_of::<PyFloat>() {
+    fn __mul__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<Py<PyAny>> {
+        if other.is_instance_of::<PyFloat>() {
             let other_float: f64 = other.extract()?;
             (self.as_f64() * other_float).into_py_any(py)
         } else if let Ok(other_qty) = other.extract::<Self>() {
@@ -141,8 +155,8 @@ impl Quantity {
         }
     }
 
-    fn __rmul__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<PyObject> {
-        if other.as_ref().is_instance_of::<PyFloat>() {
+    fn __rmul__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<Py<PyAny>> {
+        if other.is_instance_of::<PyFloat>() {
             let other_float: f64 = other.extract()?;
             (other_float * self.as_f64()).into_py_any(py)
         } else if let Ok(other_qty) = other.extract::<Self>() {
@@ -157,8 +171,8 @@ impl Quantity {
         }
     }
 
-    fn __truediv__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<PyObject> {
-        if other.as_ref().is_instance_of::<PyFloat>() {
+    fn __truediv__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<Py<PyAny>> {
+        if other.is_instance_of::<PyFloat>() {
             let other_float: f64 = other.extract()?;
             (self.as_f64() / other_float).into_py_any(py)
         } else if let Ok(other_qty) = other.extract::<Self>() {
@@ -173,8 +187,8 @@ impl Quantity {
         }
     }
 
-    fn __rtruediv__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<PyObject> {
-        if other.as_ref().is_instance_of::<PyFloat>() {
+    fn __rtruediv__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<Py<PyAny>> {
+        if other.is_instance_of::<PyFloat>() {
             let other_float: f64 = other.extract()?;
             (other_float / self.as_f64()).into_py_any(py)
         } else if let Ok(other_qty) = other.extract::<Self>() {
@@ -189,8 +203,8 @@ impl Quantity {
         }
     }
 
-    fn __floordiv__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<PyObject> {
-        if other.as_ref().is_instance_of::<PyFloat>() {
+    fn __floordiv__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<Py<PyAny>> {
+        if other.is_instance_of::<PyFloat>() {
             let other_float: f64 = other.extract()?;
             (self.as_f64() / other_float).floor().into_py_any(py)
         } else if let Ok(other_qty) = other.extract::<Self>() {
@@ -207,8 +221,8 @@ impl Quantity {
         }
     }
 
-    fn __rfloordiv__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<PyObject> {
-        if other.as_ref().is_instance_of::<PyFloat>() {
+    fn __rfloordiv__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<Py<PyAny>> {
+        if other.is_instance_of::<PyFloat>() {
             let other_float: f64 = other.extract()?;
             (other_float / self.as_f64()).floor().into_py_any(py)
         } else if let Ok(other_qty) = other.extract::<Self>() {
@@ -225,8 +239,8 @@ impl Quantity {
         }
     }
 
-    fn __mod__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<PyObject> {
-        if other.as_ref().is_instance_of::<PyFloat>() {
+    fn __mod__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<Py<PyAny>> {
+        if other.is_instance_of::<PyFloat>() {
             let other_float: f64 = other.extract()?;
             (self.as_f64() % other_float).into_py_any(py)
         } else if let Ok(other_qty) = other.extract::<Self>() {
@@ -241,8 +255,8 @@ impl Quantity {
         }
     }
 
-    fn __rmod__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<PyObject> {
-        if other.as_ref().is_instance_of::<PyFloat>() {
+    fn __rmod__(&self, other: &Bound<'_, PyAny>, py: Python) -> PyResult<Py<PyAny>> {
+        if other.is_instance_of::<PyFloat>() {
             let other_float: f64 = other.extract()?;
             (other_float % self.as_f64()).into_py_any(py)
         } else if let Ok(other_qty) = other.extract::<Self>() {
@@ -283,36 +297,6 @@ impl Quantity {
     fn __round__(&self, ndigits: Option<u32>) -> Decimal {
         self.as_decimal()
             .round_dp_with_strategy(ndigits.unwrap_or(0), RoundingStrategy::MidpointNearestEven)
-    }
-
-    fn __richcmp__(&self, other: PyObject, op: CompareOp, py: Python<'_>) -> Py<PyAny> {
-        if let Ok(other_qty) = other.extract::<Self>(py) {
-            match op {
-                CompareOp::Eq => self.eq(&other_qty).into_py_any_unwrap(py),
-                CompareOp::Ne => self.ne(&other_qty).into_py_any_unwrap(py),
-                CompareOp::Ge => self.ge(&other_qty).into_py_any_unwrap(py),
-                CompareOp::Gt => self.gt(&other_qty).into_py_any_unwrap(py),
-                CompareOp::Le => self.le(&other_qty).into_py_any_unwrap(py),
-                CompareOp::Lt => self.lt(&other_qty).into_py_any_unwrap(py),
-            }
-        } else if let Ok(other_dec) = other.extract::<Decimal>(py) {
-            match op {
-                CompareOp::Eq => (self.as_decimal() == other_dec).into_py_any_unwrap(py),
-                CompareOp::Ne => (self.as_decimal() != other_dec).into_py_any_unwrap(py),
-                CompareOp::Ge => (self.as_decimal() >= other_dec).into_py_any_unwrap(py),
-                CompareOp::Gt => (self.as_decimal() > other_dec).into_py_any_unwrap(py),
-                CompareOp::Le => (self.as_decimal() <= other_dec).into_py_any_unwrap(py),
-                CompareOp::Lt => (self.as_decimal() < other_dec).into_py_any_unwrap(py),
-            }
-        } else {
-            py.NotImplemented()
-        }
-    }
-
-    fn __hash__(&self) -> isize {
-        let mut h = DefaultHasher::new();
-        self.hash(&mut h);
-        h.finish() as isize
     }
 
     fn __repr__(&self) -> String {

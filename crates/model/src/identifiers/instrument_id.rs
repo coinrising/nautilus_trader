@@ -21,9 +21,11 @@ use std::{
     str::FromStr,
 };
 
-use nautilus_core::correctness::check_valid_string;
+use nautilus_core::correctness::{check_valid_string_ascii, check_valid_string_utf8};
 use serde::{Deserialize, Deserializer, Serialize};
 
+#[cfg(feature = "defi")]
+use crate::defi::{Blockchain, validation::validate_address};
 use crate::identifiers::{Symbol, Venue};
 
 /// Represents a valid instrument ID.
@@ -62,6 +64,16 @@ impl InstrumentId {
     pub fn from_as_ref<T: AsRef<str>>(value: T) -> anyhow::Result<Self> {
         Self::from_str(value.as_ref())
     }
+
+    /// Extracts the blockchain from the venue if it's a DEX venue.
+    #[cfg(feature = "defi")]
+    #[must_use]
+    pub fn blockchain(&self) -> Option<Blockchain> {
+        self.venue
+            .parse_dex()
+            .map(|(blockchain, _)| blockchain)
+            .ok()
+    }
 }
 
 impl FromStr for InstrumentId {
@@ -70,12 +82,26 @@ impl FromStr for InstrumentId {
     fn from_str(s: &str) -> anyhow::Result<Self> {
         match s.rsplit_once('.') {
             Some((symbol_part, venue_part)) => {
-                check_valid_string(symbol_part, stringify!(value))?;
-                check_valid_string(venue_part, stringify!(value))?;
-                Ok(Self {
-                    symbol: Symbol::new(symbol_part),
-                    venue: Venue::new(venue_part),
-                })
+                check_valid_string_utf8(symbol_part, stringify!(value))?;
+                check_valid_string_ascii(venue_part, stringify!(value))?;
+
+                let venue = Venue::new_checked(venue_part)?;
+
+                let symbol = {
+                    #[cfg(feature = "defi")]
+                    if venue.is_dex() {
+                        let validated_address = validate_address(symbol_part)
+                            .map_err(|e| anyhow::anyhow!(err_message(s, e.to_string())))?;
+                        Symbol::new(validated_address.to_string())
+                    } else {
+                        Symbol::new(symbol_part)
+                    }
+
+                    #[cfg(not(feature = "defi"))]
+                    Symbol::new(symbol_part)
+                };
+
+                Ok(Self { symbol, venue })
             }
             None => {
                 anyhow::bail!(err_message(
@@ -92,8 +118,7 @@ impl From<&str> for InstrumentId {
     ///
     /// # Panics
     ///
-    /// This function panics:
-    /// - If the `value` string is not valid.
+    /// Panics if the `value` string is not valid.
     fn from(value: &str) -> Self {
         Self::from_str(value).unwrap()
     }
@@ -104,8 +129,7 @@ impl From<String> for InstrumentId {
     ///
     /// # Panics
     ///
-    /// This function panics:
-    /// - If the `value` string is not valid.
+    /// Panics if the `value` string is not valid.
     fn from(value: String) -> Self {
         Self::from(value.as_str())
     }
@@ -151,6 +175,7 @@ fn err_message(s: &str, e: String) -> String {
 ////////////////////////////////////////////////////////////////////////////////
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
 
     use rstest::rstest;
 
@@ -176,5 +201,113 @@ mod tests {
         let id = InstrumentId::from("ETH/USDT.BINANCE");
         assert_eq!(id.to_string(), "ETH/USDT.BINANCE");
         assert_eq!(format!("{id}"), "ETH/USDT.BINANCE");
+    }
+
+    #[rstest]
+    fn test_instrument_id_from_str_with_utf8_symbol() {
+        let non_ascii_symbol = "TËST-PÉRP";
+        let non_ascii_instrument = "TËST-PÉRP.BINANCE";
+
+        let id = InstrumentId::from_str(non_ascii_instrument).unwrap();
+        assert_eq!(id.symbol.to_string(), non_ascii_symbol);
+        assert_eq!(id.venue.to_string(), "BINANCE");
+        assert_eq!(id.to_string(), non_ascii_instrument);
+    }
+
+    #[cfg(feature = "defi")]
+    #[rstest]
+    fn test_blockchain_instrument_id_valid() {
+        let id =
+            InstrumentId::from("0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443.Arbitrum:UniswapV3");
+        assert_eq!(
+            id.symbol.to_string(),
+            "0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443"
+        );
+        assert_eq!(id.venue.to_string(), "Arbitrum:UniswapV3");
+    }
+
+    #[cfg(feature = "defi")]
+    #[rstest]
+    #[should_panic(
+        expected = "Error creating `Venue` from 'InvalidChain:UniswapV3': invalid blockchain venue 'InvalidChain:UniswapV3': chain 'InvalidChain' not recognized"
+    )]
+    fn test_blockchain_instrument_id_invalid_chain() {
+        let _ =
+            InstrumentId::from("0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443.InvalidChain:UniswapV3");
+    }
+
+    #[cfg(feature = "defi")]
+    #[rstest]
+    #[should_panic(
+        expected = "Error creating `Venue` from 'Arbitrum:': invalid blockchain venue 'Arbitrum:': expected format 'Chain:DexId'"
+    )]
+    fn test_blockchain_instrument_id_empty_dex() {
+        let _ = InstrumentId::from("0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443.Arbitrum:");
+    }
+
+    #[cfg(feature = "defi")]
+    #[rstest]
+    fn test_regular_venue_with_blockchain_like_name_but_without_dex() {
+        // Should work fine since it doesn't contain ':' (not a DEX venue)
+        let id = InstrumentId::from("0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443.Ethereum");
+        assert_eq!(
+            id.symbol.to_string(),
+            "0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443"
+        );
+        assert_eq!(id.venue.to_string(), "Ethereum");
+    }
+
+    #[cfg(feature = "defi")]
+    #[rstest]
+    #[should_panic(
+        expected = "Error parsing `InstrumentId` from 'invalidaddress.Ethereum:UniswapV3': Ethereum address must start with '0x': invalidaddress"
+    )]
+    fn test_blockchain_instrument_id_invalid_address_no_prefix() {
+        let _ = InstrumentId::from("invalidaddress.Ethereum:UniswapV3");
+    }
+
+    #[cfg(feature = "defi")]
+    #[rstest]
+    #[should_panic(
+        expected = "Error parsing `InstrumentId` from '0x123.Ethereum:UniswapV3': Blockchain address '0x123' is incorrect: odd number of digits"
+    )]
+    fn test_blockchain_instrument_id_invalid_address_short() {
+        let _ = InstrumentId::from("0x123.Ethereum:UniswapV3");
+    }
+
+    #[cfg(feature = "defi")]
+    #[rstest]
+    #[should_panic(
+        expected = "Error parsing `InstrumentId` from '0xC31E54c7a869B9FcBEcc14363CF510d1c41fa44G.Ethereum:UniswapV3': Blockchain address '0xC31E54c7a869B9FcBEcc14363CF510d1c41fa44G' is incorrect: invalid character 'G' at position 39"
+    )]
+    fn test_blockchain_instrument_id_invalid_address_non_hex() {
+        let _ = InstrumentId::from("0xC31E54c7a869B9FcBEcc14363CF510d1c41fa44G.Ethereum:UniswapV3");
+    }
+
+    #[cfg(feature = "defi")]
+    #[rstest]
+    #[should_panic(
+        expected = "Error parsing `InstrumentId` from '0xc31e54c7a869b9fcbecc14363cf510d1c41fa443.Ethereum:UniswapV3': Blockchain address '0xc31e54c7a869b9fcbecc14363cf510d1c41fa443' has incorrect checksum"
+    )]
+    fn test_blockchain_instrument_id_invalid_address_checksum() {
+        let _ = InstrumentId::from("0xc31e54c7a869b9fcbecc14363cf510d1c41fa443.Ethereum:UniswapV3");
+    }
+
+    #[cfg(feature = "defi")]
+    #[rstest]
+    fn test_blockchain_extraction_valid_dex() {
+        let id =
+            InstrumentId::from("0xC31E54c7a869B9FcBEcc14363CF510d1c41fa443.Arbitrum:UniswapV3");
+        let blockchain = id.blockchain();
+        assert!(blockchain.is_some());
+        assert_eq!(blockchain.unwrap(), crate::defi::Blockchain::Arbitrum);
+    }
+
+    #[cfg(feature = "defi")]
+    #[rstest]
+    fn test_blockchain_extraction_tradifi_venue() {
+        let id = InstrumentId::from("ETH/USDT.BINANCE");
+        let blockchain = id.blockchain();
+        assert!(blockchain.is_none());
     }
 }

@@ -33,6 +33,7 @@ from nautilus_trader.common.component import LiveClock
 from nautilus_trader.common.component import Logger
 from nautilus_trader.common.component import MessageBus
 from nautilus_trader.model.data import BarType
+from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.identifiers import InstrumentId
 
 
@@ -110,6 +111,7 @@ class Base(ABC):
         for req_id, req_name in self._req_id_to_name.items():
             if req_name == name:
                 return req_id
+
         return None
 
     def _validation_check(self, req_id: int, name: Any) -> None:
@@ -197,6 +199,7 @@ class Base(ABC):
         """
         if req_id is None:
             req_id = self._name_to_req_id(name)
+
             if req_id is None:
                 return  # If no matching req_id is found, exit the method
 
@@ -215,8 +218,10 @@ class Base(ABC):
 
         """
         result: list = []
+
         for req_id in self._req_id_to_name:
             result.append(self.get(req_id=req_id))
+
         return result
 
     @abstractmethod
@@ -284,6 +289,7 @@ class Subscriptions(Base):
         """
         super().add_req_id(req_id, name, handle, cancel)
         self._req_id_to_last[req_id] = None
+
         return self.get(req_id=req_id)
 
     def remove(self, req_id: int | None = None, name: str | tuple | None = None) -> None:
@@ -303,6 +309,7 @@ class Subscriptions(Base):
         """
         if not req_id:
             req_id = self._name_to_req_id(name)
+
         if req_id:
             super().remove_req_id(req_id)
             self._req_id_to_last.pop(req_id, None)
@@ -329,8 +336,10 @@ class Subscriptions(Base):
         """
         if not req_id:
             req_id = self._name_to_req_id(name)
+
         if not req_id or not (name := self._req_id_to_name.get(req_id, None)):
             return None
+
         return Subscription(
             req_id=req_id,
             name=name,
@@ -411,6 +420,7 @@ class Requests(Base):
         super().add_req_id(req_id, name, handle, cancel)
         self._req_id_to_future[req_id] = asyncio.Future()
         self._req_id_to_result[req_id] = []
+
         return self.get(req_id=req_id)
 
     def remove(self, req_id: int | None = None, name: str | tuple | None = None) -> None:
@@ -431,6 +441,7 @@ class Requests(Base):
         """
         if not req_id:
             req_id = self._name_to_req_id(name)
+
         if req_id:
             super().remove_req_id(req_id)
             self._req_id_to_future.pop(req_id, None)
@@ -458,8 +469,10 @@ class Requests(Base):
         """
         if not req_id:
             req_id = self._name_to_req_id(name)
+
         if not req_id or not (name := self._req_id_to_name.get(req_id, None)):
             return None
+
         return Request(
             req_id=req_id,
             name=name,
@@ -486,6 +499,9 @@ class BaseMixin:
     _port: int
     _client_id: int
     _requests: Requests
+    _instrument_provider: (
+        Any  # InteractiveBrokersInstrumentProvider | None - Will be set by data/execution client
+    )
     _subscriptions: Subscriptions
     _event_subscriptions: dict[str, Callable]
     _eclient: EClient
@@ -511,9 +527,11 @@ class BaseMixin:
     _reconnect_delay: int
     _max_reconnect_attempts: int
     _indefinite_reconnect: bool
+    _last_disconnection_ns: int | None
 
     # MarketData
     _bar_type_to_last_bar: dict[str, BarData | None]
+    _bar_timeout_tasks: dict[str, Any]  # asyncio.Task
     _order_id_to_order_ref: dict[int, AccountOrderRef]
 
     # Order
@@ -522,3 +540,26 @@ class BaseMixin:
         str,
         dict[str, Execution | (CommissionReport | str)],
     ]
+
+
+class IBKRBookLevel(msgspec.Struct, frozen=True):
+    """
+    Single price level in the order book.
+
+    Attributes
+    ----------
+    price : float
+        Price at this level.
+    size : Decimal
+        Total size/quantity at this price.
+    side : OrderSide
+        Side of the order at this price.
+    market_maker : str
+        Market maker identifier providing this quote.
+
+    """
+
+    price: float
+    size: Decimal
+    side: OrderSide
+    market_maker: str

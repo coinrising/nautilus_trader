@@ -9,6 +9,11 @@ For development we recommend using the PyCharm *Professional* edition IDE, as it
 NautilusTrader uses increasingly more [Rust](https://www.rust-lang.org), so Rust should be installed on your system as well
 ([installation guide](https://www.rust-lang.org/tools/install)).
 
+:::info
+NautilusTrader *must* compile and run on **Linux, macOS, and Windows**. Please keep portability in
+mind (use `std::path::Path`, avoid Bash-isms in shell scripts, etc.).
+:::
+
 ## Setup
 
 The following steps are for UNIX-like systems, and only need to be completed once.
@@ -38,16 +43,30 @@ make install-debug
 pre-commit install
 ```
 
-3. In case of large recompiles for small changes, configure the `PYO3_PYTHON` variable in `nautilus_trader/.cargo/config.toml` with the path to the Python interpreter in the virtual managed environment. This is primarily useful for Rust developers working on core and experience frequent recompiles from IDE/rust analyzer based `cargo check`.
+Before opening a pull-request run the formatting and lint suite locally so that CI passes on the
+first attempt:
+
+```bash
+make format
+make pre-commit
+```
+
+Make sure the Rust compiler reports **zero errors** – broken builds slow everyone down.
+
+3. **Optional**: For frequent Rust development, configure the `PYO3_PYTHON` variable in `.cargo/config.toml` with the path to the Python interpreter. This helps reduce recompilation times for IDE/rust-analyzer based `cargo check`:
 
 ```bash
 PYTHON_PATH=$(which python)
 echo -e "\n[env]\nPYO3_PYTHON = \"$PYTHON_PATH\"" >> .cargo/config.toml
 ```
 
-Since `.cargo/config.toml` is a tracked file, configure git to skip local modifications to it with `git update-index --skip-worktree .cargo/config.toml`. Git will still pull remote modifications. To push modifications track local modifications using `git update-index --no-skip-worktree .cargo/config.toml`.
+Since `.cargo/config.toml` is tracked, configure git to skip any local modifications:
 
-The git hack is needed till [local cargo config](https://github.com/rust-lang/cargo/issues/7723) feature is merged.
+```bash
+git update-index --skip-worktree .cargo/config.toml
+```
+
+To restore tracking: `git update-index --no-skip-worktree .cargo/config.toml`
 
 ## Builds
 
@@ -70,6 +89,57 @@ To compile in debug mode, use:
 make build-debug
 ```
 
+## Faster builds
+
+The cranelift backends reduces build time significantly for dev, testing and IDE checks. However, cranelift is available on the nightly toolchain and needs extra configuration. Install the nightly toolchain
+
+```
+rustup install nightly
+rustup override set nightly
+rustup component add rust-analyzer # install nightly lsp
+rustup override set stable # reset to stable
+```
+
+Activate the nightly feature and use "cranelift" backend for dev and testing profiles in workspace `Cargo.toml`. You can apply the below patch using `git apply <patch>`. You can remove it using `git apply -R <patch>` before pushing changes.
+
+```
+diff --git a/Cargo.toml b/Cargo.toml
+index 62b78cd8d0..beb0800211 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,3 +1,6 @@
++# This line needs to come before anything else in Cargo.toml
++cargo-features = ["codegen-backend"]
++
+ [workspace]
+ resolver = "2"
+ members = [
+@@ -140,6 +143,7 @@ lto = false
+ panic = "unwind"
+ incremental = true
+ codegen-units = 256
++codegen-backend = "cranelift"
+
+ [profile.test]
+ opt-level = 0
+@@ -150,11 +154,13 @@ strip = false
+ lto = false
+ incremental = true
+ codegen-units = 256
++codegen-backend = "cranelift"
+
+ [profile.nextest]
+ inherits = "test"
+ debug = false # Improves compile times
+ strip = "debuginfo" # Improves compile times
++codegen-backend = "cranelift"
+
+ [profile.release]
+ opt-level = 3
+```
+
+Pass `RUSTUP_TOOLCHAIN=nightly` when running `make build-debug` like commands and include it in all [rust analyzer settings](#rust-analyzer-settings) for faster builds and IDE checks.
+
 ## Services
 
 You can use `docker-compose.yml` file located in `.docker` directory
@@ -87,9 +157,9 @@ docker-compose up -d postgres
 
 Used services are:
 
-- `postgres`: Postgres database with root user `POSTRES_USER` which defaults to `postgres`, `POSTGRES_PASSWORD` which defaults to `pass` and `POSTGRES_DB` which defaults to `postgres`
-- `redis`: Redis server
-- `pgadmin`: PgAdmin4 for database management and administration
+- `postgres`: Postgres database with root user `POSTRES_USER` which defaults to `postgres`, `POSTGRES_PASSWORD` which defaults to `pass` and `POSTGRES_DB` which defaults to `postgres`.
+- `redis`: Redis server.
+- `pgadmin`: PgAdmin4 for database management and administration.
 
 :::info
 Please use this as development environment only. For production, use a proper and more secure setup.
@@ -113,7 +183,7 @@ CREATE DATABASE
 
 ```
 
-## Nautilus CLI Developer Guide
+## Nautilus CLI developer guide
 
 ## Introduction
 
@@ -162,8 +232,8 @@ POSTGRES_DATABASE=nautilus
 
 List of commands are:
 
-1. `nautilus database init`: Will bootstrap schema, roles and all sql files located in `schema` root directory (like `tables.sql`)
-2. `nautilus database drop`: Will drop all tables, roles and data in target Postgres database
+1. `nautilus database init`: Will bootstrap schema, roles and all sql files located in `schema` root directory (like `tables.sql`).
+2. `nautilus database drop`: Will drop all tables, roles and data in target Postgres database.
 
 ## Rust analyzer settings
 

@@ -19,6 +19,7 @@ use std::{
 };
 
 use nautilus_common::{cache::Cache, clock::Clock};
+use nautilus_core::WeakCell;
 use nautilus_model::{
     enums::{AccountType, BookType, OmsType},
     instruments::InstrumentAny,
@@ -34,6 +35,7 @@ use crate::{
     models::{fee::FeeModelAny, fill::FillModel},
 };
 
+#[derive(Debug)]
 pub struct OrderEngineAdapter {
     engine: Rc<RefCell<OrderMatchingEngine>>,
 }
@@ -74,7 +76,7 @@ impl OrderEngineAdapter {
 
     fn initialize_fill_order_handler(engine: Rc<RefCell<OrderMatchingEngine>>) {
         let handler = ShareableFillLimitOrderHandler(
-            FillLimitOrderHandlerAny::OrderMatchingEngine(engine.clone()),
+            FillLimitOrderHandlerAny::OrderMatchingEngine(WeakCell::from(Rc::downgrade(&engine))),
         );
         engine
             .borrow_mut()
@@ -84,7 +86,7 @@ impl OrderEngineAdapter {
 
     fn initialize_fill_market_order_handler(engine: Rc<RefCell<OrderMatchingEngine>>) {
         let handler = ShareableFillMarketOrderHandler(
-            FillMarketOrderHandlerAny::OrderMatchingEngine(engine.clone()),
+            FillMarketOrderHandlerAny::OrderMatchingEngine(WeakCell::from(Rc::downgrade(&engine))),
         );
         engine
             .borrow_mut()
@@ -94,7 +96,7 @@ impl OrderEngineAdapter {
 
     fn initialize_trigger_stop_order_handler(engine: Rc<RefCell<OrderMatchingEngine>>) {
         let handler = ShareableTriggerStopOrderHandler(
-            TriggerStopOrderHandlerAny::OrderMatchingEngine(engine.clone()),
+            TriggerStopOrderHandlerAny::OrderMatchingEngine(WeakCell::from(Rc::downgrade(&engine))),
         );
         engine
             .borrow_mut()
@@ -103,12 +105,12 @@ impl OrderEngineAdapter {
     }
 
     #[must_use]
-    pub fn get_engine(&self) -> Ref<OrderMatchingEngine> {
+    pub fn get_engine(&self) -> Ref<'_, OrderMatchingEngine> {
         self.engine.borrow()
     }
 
     #[must_use]
-    pub fn get_engine_mut(&self) -> RefMut<OrderMatchingEngine> {
+    pub fn get_engine_mut(&self) -> RefMut<'_, OrderMatchingEngine> {
         self.engine.borrow_mut()
     }
 }

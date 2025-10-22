@@ -13,7 +13,6 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
-
 from nautilus_trader.execution.messages import BatchCancelOrders
 from nautilus_trader.execution.messages import CancelAllOrders
 from nautilus_trader.execution.messages import CancelOrder
@@ -22,7 +21,7 @@ from nautilus_trader.execution.messages import GenerateOrderStatusReport
 from nautilus_trader.execution.messages import GenerateOrderStatusReports
 from nautilus_trader.execution.messages import GeneratePositionStatusReports
 from nautilus_trader.execution.messages import ModifyOrder
-from nautilus_trader.execution.messages import QueryOrder
+from nautilus_trader.execution.messages import QueryAccount
 from nautilus_trader.execution.messages import SubmitOrder
 from nautilus_trader.execution.messages import SubmitOrderList
 from nautilus_trader.execution.reports import FillReport
@@ -51,15 +50,14 @@ class TemplateLiveExecutionClient(LiveExecutionClient):
     +--------------------------------------------+-------------+
     | _connect                                   | required    |
     | _disconnect                                | required    |
-    | reset                                      | optional    |
-    | dispose                                    | optional    |
     +--------------------------------------------+-------------+
     | _submit_order                              | required    |
-    | _submit_order_list                         | required    |
+    | _submit_order_list                         | optional    |
     | _modify_order                              | optional    |
     | _cancel_order                              | required    |
     | _cancel_all_orders                         | required    |
     | _batch_cancel_orders                       | optional    |
+    | _query_account                             | optional    |
     | generate_order_status_report               | required    |
     | generate_order_status_reports              | required    |
     | generate_fill_reports                      | required    |
@@ -76,16 +74,6 @@ class TemplateLiveExecutionClient(LiveExecutionClient):
     async def _disconnect(self) -> None:
         raise NotImplementedError(
             "method `_disconnect` must be implemented in the subclass",
-        )  # pragma: no cover
-
-    def reset(self) -> None:
-        raise NotImplementedError(
-            "method `reset` must be implemented in the subclass",
-        )  # pragma: no cover
-
-    def dispose(self) -> None:
-        raise NotImplementedError(
-            "method `dispose` must be implemented in the subclass",
         )  # pragma: no cover
 
     # -- EXECUTION REPORTS ------------------------------------------------------------------------
@@ -154,7 +142,7 @@ class TemplateLiveExecutionClient(LiveExecutionClient):
             "method `_batch_cancel_orders` must be implemented in the subclass",
         )  # pragma: no cover
 
-    async def _query_order(self, command: QueryOrder) -> None:
+    async def _query_account(self, command: QueryAccount) -> None:
         raise NotImplementedError(
-            "method `_query_order` must be implemented in the subclass",
+            "method `_query_account` must be implemented in the subclass",
         )  # pragma: no cover

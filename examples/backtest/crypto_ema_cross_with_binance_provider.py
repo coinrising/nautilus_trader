@@ -20,11 +20,12 @@ from decimal import Decimal
 
 import pandas as pd
 
+from nautilus_trader.adapters.binance import BINANCE_VENUE
+from nautilus_trader.adapters.binance import get_cached_binance_http_client
 from nautilus_trader.adapters.binance.common.enums import BinanceAccountType
-from nautilus_trader.adapters.binance.factories import get_cached_binance_http_client
 from nautilus_trader.adapters.binance.futures.providers import BinanceFuturesInstrumentProvider
+from nautilus_trader.backtest.config import BacktestEngineConfig
 from nautilus_trader.backtest.engine import BacktestEngine
-from nautilus_trader.backtest.engine import BacktestEngineConfig
 from nautilus_trader.common.component import LiveClock
 from nautilus_trader.config import InstrumentProviderConfig
 from nautilus_trader.config import LoggingConfig
@@ -36,7 +37,6 @@ from nautilus_trader.model.enums import OmsType
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import Symbol
 from nautilus_trader.model.identifiers import TraderId
-from nautilus_trader.model.identifiers import Venue
 from nautilus_trader.model.objects import Money
 from nautilus_trader.persistence.wranglers import QuoteTickDataWrangler
 from nautilus_trader.test_kit.providers import TestDataProvider
@@ -50,7 +50,7 @@ async def create_provider():
 
     client = get_cached_binance_http_client(
         clock=clock,
-        account_type=BinanceAccountType.USDT_FUTURE,
+        account_type=BinanceAccountType.USDT_FUTURES,
         is_testnet=True,
     )
 
@@ -75,18 +75,16 @@ if __name__ == "__main__":
     engine = BacktestEngine(config=config)
 
     # Add a trading venue (multiple venues possible)
-    BINANCE = Venue("BINANCE")
-
     # Use actual Binance instrument for backtesting
     provider: BinanceFuturesInstrumentProvider = asyncio.run(create_provider())
 
-    instrument_id = InstrumentId(symbol=Symbol("ETHUSDT-PERP"), venue=BINANCE)
+    instrument_id = InstrumentId(symbol=Symbol("ETHUSDT-PERP"), venue=BINANCE_VENUE)
     instrument = provider.find(instrument_id)
     if instrument is None:
         raise RuntimeError(f"Unable to find instrument {instrument_id}")
 
     engine.add_venue(
-        venue=BINANCE,
+        venue=BINANCE_VENUE,
         oms_type=OmsType.NETTING,
         account_type=AccountType.MARGIN,
         base_currency=None,
@@ -105,7 +103,7 @@ if __name__ == "__main__":
     engine.add_data(ticks)
 
     # Configure your strategy
-    config = EMACrossTrailingStopConfig(
+    strategy_config = EMACrossTrailingStopConfig(
         instrument_id=instrument.id,
         bar_type=bar_type,
         trade_size=Decimal("1"),
@@ -117,7 +115,7 @@ if __name__ == "__main__":
         trigger_type="LAST_PRICE",
     )
     # Instantiate and add your strategy
-    strategy = EMACrossTrailingStop(config=config)
+    strategy = EMACrossTrailingStop(config=strategy_config)
     engine.add_strategy(strategy=strategy)
 
     time.sleep(0.1)
@@ -135,7 +133,7 @@ if __name__ == "__main__":
         "display.width",
         300,
     ):
-        print(engine.trader.generate_account_report(BINANCE))
+        print(engine.trader.generate_account_report(BINANCE_VENUE))
         print(engine.trader.generate_order_fills_report())
         print(engine.trader.generate_positions_report())
 

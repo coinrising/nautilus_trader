@@ -19,36 +19,34 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
-use std::{any::Any, cell::RefCell, rc::Rc};
+use std::{any::Any, cell::RefCell, fmt::Debug, rc::Rc};
 
-use nautilus_common::{
-    cache::Cache,
-    clock::Clock,
-    msgbus::{self},
-};
+use nautilus_common::{cache::Cache, clock::Clock, msgbus};
 use nautilus_core::{UUID4, UnixNanos};
 use nautilus_model::{
     accounts::AccountAny,
     enums::{AccountType, LiquiditySide, OmsType, OrderSide, OrderType},
     events::{
-        AccountState, OrderAccepted, OrderCancelRejected, OrderCanceled, OrderEventAny,
-        OrderExpired, OrderFilled, OrderModifyRejected, OrderRejected, OrderSubmitted,
-        OrderTriggered, OrderUpdated,
+        AccountState, OrderAccepted, OrderCancelRejected, OrderCanceled, OrderDenied,
+        OrderEventAny, OrderExpired, OrderFilled, OrderModifyRejected, OrderRejected,
+        OrderSubmitted, OrderTriggered, OrderUpdated,
     },
     identifiers::{
         AccountId, ClientId, ClientOrderId, InstrumentId, PositionId, StrategyId, TradeId,
         TraderId, Venue, VenueOrderId,
     },
+    reports::{ExecutionMassStatus, FillReport, OrderStatusReport, PositionStatusReport},
     types::{AccountBalance, Currency, MarginBalance, Money, Price, Quantity},
 };
-use ustr::Ustr;
 
-use crate::reports::{
-    fill::FillReport, mass_status::ExecutionMassStatus, order::OrderStatusReport,
-    position::PositionStatusReport,
-};
-
-pub struct BaseExecutionClient {
+/// Base implementation for execution clients providing common functionality.
+///
+/// This struct provides the foundation for all execution clients, handling
+/// account state generation, order event creation, and message routing.
+/// Execution clients can inherit this base functionality and extend it
+/// with venue-specific implementations.
+#[derive(Clone)]
+pub struct ExecutionClientCore {
     pub trader_id: TraderId,
     pub client_id: ClientId,
     pub venue: Venue,
@@ -61,7 +59,16 @@ pub struct BaseExecutionClient {
     cache: Rc<RefCell<Cache>>,
 }
 
-impl BaseExecutionClient {
+impl Debug for ExecutionClientCore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(stringify!(ExecutionClientCore))
+            .field("client_id", &self.client_id)
+            .finish()
+    }
+}
+
+impl ExecutionClientCore {
+    /// Creates a new [`ExecutionClientCore`] instance.
     #[allow(clippy::too_many_arguments)]
     pub const fn new(
         trader_id: TraderId,
@@ -88,19 +95,39 @@ impl BaseExecutionClient {
         }
     }
 
+    /// Sets the connection status of the execution client.
     pub const fn set_connected(&mut self, is_connected: bool) {
         self.is_connected = is_connected;
     }
 
+    /// Sets the account identifier for the execution client.
     pub const fn set_account_id(&mut self, account_id: AccountId) {
         self.account_id = account_id;
     }
 
+    /// Returns a reference to the clock.
+    #[must_use]
+    pub const fn clock(&self) -> &Rc<RefCell<dyn Clock>> {
+        &self.clock
+    }
+
+    /// Returns a reference to the cache.
+    #[must_use]
+    pub const fn cache(&self) -> &Rc<RefCell<Cache>> {
+        &self.cache
+    }
+
+    /// Returns the account associated with this execution client.
     #[must_use]
     pub fn get_account(&self) -> Option<AccountAny> {
         self.cache.borrow().account(&self.account_id).cloned()
     }
 
+    /// Generates and publishes the account state event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if constructing or sending the account state fails.
     pub fn generate_account_state(
         &self,
         balances: Vec<AccountBalance>,
@@ -122,6 +149,27 @@ impl BaseExecutionClient {
         );
         self.send_account_state(account_state);
         Ok(())
+    }
+
+    pub fn generate_order_denied(
+        &self,
+        strategy_id: StrategyId,
+        instrument_id: InstrumentId,
+        client_order_id: ClientOrderId,
+        reason: &str,
+        ts_event: UnixNanos,
+    ) {
+        let event = OrderDenied::new(
+            self.trader_id,
+            strategy_id,
+            instrument_id,
+            client_order_id,
+            reason.into(),
+            UUID4::new(),
+            ts_event,
+            self.clock.borrow().timestamp_ns(),
+        );
+        self.send_order_event(OrderEventAny::Denied(event));
     }
 
     pub fn generate_order_submitted(
@@ -151,6 +199,7 @@ impl BaseExecutionClient {
         client_order_id: ClientOrderId,
         reason: &str,
         ts_event: UnixNanos,
+        due_post_only: bool,
     ) {
         let event = OrderRejected::new(
             self.trader_id,
@@ -163,6 +212,7 @@ impl BaseExecutionClient {
             ts_event,
             self.clock.borrow().timestamp_ns(),
             false,
+            due_post_only,
         );
         self.send_order_event(OrderEventAny::Rejected(event));
     }
@@ -256,12 +306,12 @@ impl BaseExecutionClient {
         if !venue_order_id_modified {
             let cache = self.cache.as_ref().borrow();
             let existing_order_result = cache.venue_order_id(&client_order_id);
-            if let Some(existing_order) = existing_order_result {
-                if *existing_order != venue_order_id {
-                    log::error!(
-                        "Existing venue order id {existing_order} does not match provided venue order id {venue_order_id}"
-                    );
-                }
+            if let Some(existing_order) = existing_order_result
+                && *existing_order != venue_order_id
+            {
+                log::error!(
+                    "Existing venue order id {existing_order} does not match provided venue order id {venue_order_id}"
+                );
             }
         }
 
@@ -400,32 +450,32 @@ impl BaseExecutionClient {
     }
 
     fn send_account_state(&self, account_state: AccountState) {
-        let endpoint = Ustr::from("Portfolio.update_account");
-        msgbus::send(&endpoint, &account_state as &dyn Any);
+        let endpoint = "Portfolio.update_account".into();
+        msgbus::send_any(endpoint, &account_state as &dyn Any);
     }
 
     fn send_order_event(&self, event: OrderEventAny) {
-        let endpoint = Ustr::from("ExecEngine.process");
-        msgbus::send(&endpoint, &event as &dyn Any);
+        let endpoint = "ExecEngine.process".into();
+        msgbus::send_any(endpoint, &event as &dyn Any);
     }
 
     fn send_mass_status_report(&self, report: ExecutionMassStatus) {
-        let endpoint = Ustr::from("ExecEngine.reconcile_mass_status");
-        msgbus::send(&endpoint, &report as &dyn Any);
+        let endpoint = "ExecEngine.reconcile_execution_mass_status".into();
+        msgbus::send_any(endpoint, &report as &dyn Any);
     }
 
     fn send_order_status_report(&self, report: OrderStatusReport) {
-        let endpoint = Ustr::from("ExecEngine.reconcile_report");
-        msgbus::send(&endpoint, &report as &dyn Any);
+        let endpoint = "ExecEngine.reconcile_execution_report".into();
+        msgbus::send_any(endpoint, &report as &dyn Any);
     }
 
     fn send_fill_report(&self, report: FillReport) {
-        let endpoint = Ustr::from("ExecEngine.reconcile_report");
-        msgbus::send(&endpoint, &report as &dyn Any);
+        let endpoint = "ExecEngine.reconcile_execution_report".into();
+        msgbus::send_any(endpoint, &report as &dyn Any);
     }
 
     fn send_position_report(&self, report: PositionStatusReport) {
-        let endpoint = Ustr::from("ExecEngine.reconcile_report");
-        msgbus::send(&endpoint, &report as &dyn Any);
+        let endpoint = "ExecEngine.reconcile_execution_report".into();
+        msgbus::send_any(endpoint, &report as &dyn Any);
     }
 }

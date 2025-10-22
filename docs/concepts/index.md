@@ -1,7 +1,7 @@
 # Concepts
 
 Concept guides introduce and explain the foundational ideas, components, and best practices that underpin the NautilusTrader platform.
-Designed to offer both conceptual and practical insights, these guides help you navigate the system's architecture, strategies, data management, execution flow, and more.
+These guides are designed to provide both conceptual and practical insights, helping you navigate the system's architecture, strategies, data management, execution flow, and more.
 Explore the following guides to deepen your understanding and make the most of NautilusTrader.
 
 ## [Overview](overview.md)
@@ -21,7 +21,7 @@ The **Actors** guide covers capabilities and implementation specifics.
 ## [Strategies](strategies.md)
 
 The `Strategy` is at the heart of the NautilusTrader user experience when writing and working with
-trading strategies. The **Strategies** guide covers how to implement trading strategies for the platform.
+trading strategies. The **Strategies** guide covers how to implement strategies for the platform.
 
 ## [Instruments](instruments.md)
 
@@ -43,6 +43,12 @@ well as the flow of execution messages (commands and events).
 The **Orders** guide provides more details about the available order types for the platform, along with
 the execution instructions supported for each. Advanced order types and emulated orders are also covered.
 
+## [Positions](positions.md)
+
+The **Positions** guide explains how positions work in NautilusTrader, including their lifecycle,
+aggregation from order fills, profit and loss calculations, and the important concept of position
+snapshotting for netting OMS configurations.
+
 ## [Cache](cache.md)
 
 The `Cache` is a central in-memory data store for managing all trading-related data.
@@ -52,13 +58,19 @@ The **Cache** guide covers capabilities and best practices of the cache.
 
 The `MessageBus` is the core communication system enabling decoupled messaging patterns between components,
 including point-to-point, publish/subscribe, and request/response.
-The **Message Bus** guide covers capabilities and best practices of the message bus.
+The **Message Bus** guide covers capabilities and best practices of the `MessageBus`.
 
 ## [Portfolio](portfolio.md)
 
 The `Portfolio` serves as the central hub for managing and tracking all positions across active strategies for the trading node or backtest.
 It consolidates position data from multiple instruments, providing a unified view of your holdings, risk exposure, and overall performance.
 Explore this section to understand how NautilusTrader aggregates and updates portfolio state to support effective trading and risk management.
+
+## [Reports](reports.md)
+
+The **Reports** guide covers the reporting capabilities in NautilusTrader, including execution reports,
+portfolio analysis reports, PnL accounting considerations, and how reports are used for backtest
+post-run analysis.
 
 ## [Logging](logging.md)
 
@@ -69,7 +81,7 @@ The platform provides logging for both backtesting and live trading using a high
 Backtesting with NautilusTrader is a methodical simulation process that replicates trading
 activities using a specific system implementation.
 
-## [Live trading](live.md)
+## [Live Trading](live.md)
 
 Live trading in NautilusTrader enables traders to deploy their backtested strategies in real-time
 without any code changes. This seamless transition ensures consistency and reliability, though there

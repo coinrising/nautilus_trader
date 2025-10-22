@@ -30,6 +30,7 @@ from nautilus_trader.core.rust.model cimport PositionSide
 from nautilus_trader.model.book cimport OrderBook
 from nautilus_trader.model.data cimport Bar
 from nautilus_trader.model.data cimport BarType
+from nautilus_trader.model.data cimport FundingRateUpdate
 from nautilus_trader.model.data cimport IndexPriceUpdate
 from nautilus_trader.model.data cimport MarkPriceUpdate
 from nautilus_trader.model.data cimport QuoteTick
@@ -68,6 +69,7 @@ cdef class Cache(CacheFacade):
     cdef dict _xrate_symbols
     cdef dict _mark_prices
     cdef dict _index_prices
+    cdef dict _funding_rates
     cdef dict _bars
     cdef dict _bars_bid
     cdef dict _bars_ask
@@ -92,6 +94,7 @@ cdef class Cache(CacheFacade):
     cdef dict _index_position_orders
     cdef dict _index_instrument_orders
     cdef dict _index_instrument_positions
+    cdef dict _index_instrument_position_snapshots
     cdef dict _index_strategy_orders
     cdef dict _index_strategy_positions
     cdef dict _index_exec_algorithm_orders
@@ -110,14 +113,18 @@ cdef class Cache(CacheFacade):
     cdef set _index_strategies
     cdef set _index_exec_algorithms
     cdef bint _drop_instruments_on_reset
+    cdef Venue _specific_venue
 
     cdef readonly bint has_backing
     """If the cache has a database backing.\n\n:returns: `bool`"""
+    cdef readonly bint persist_account_events
+    """If account state events are written to the backing database.\n\n:returns: `bool`"""
     cdef readonly int tick_capacity
     """The caches tick capacity.\n\n:returns: `int`"""
     cdef readonly int bar_capacity
     """The caches bar capacity.\n\n:returns: `int`"""
 
+    cpdef void set_specific_venue(self, Venue venue)
     cpdef void cache_all(self)
     cpdef void cache_general(self)
     cpdef void cache_currencies(self)
@@ -130,11 +137,11 @@ cdef class Cache(CacheFacade):
     cpdef void build_index(self)
     cpdef bint check_integrity(self)
     cpdef bint check_residuals(self)
-    cpdef void purge_closed_orders(self, uint64_t ts_now, uint64_t buffer_secs=*)
-    cpdef void purge_closed_positions(self, uint64_t ts_now, uint64_t buffer_secs=*)
-    cpdef void purge_order(self, ClientOrderId client_order_id)
-    cpdef void purge_position(self, PositionId position_id)
-    cpdef void purge_account_events(self, uint64_t ts_now, uint64_t lookback_secs=*)
+    cpdef void purge_closed_orders(self, uint64_t ts_now, uint64_t buffer_secs=*, bint purge_from_database=*)
+    cpdef void purge_closed_positions(self, uint64_t ts_now, uint64_t buffer_secs=*, bint purge_from_database=*)
+    cpdef void purge_order(self, ClientOrderId client_order_id, bint purge_from_database=*)
+    cpdef void purge_position(self, PositionId position_id, bint purge_from_database=*)
+    cpdef void purge_account_events(self, uint64_t ts_now, uint64_t lookback_secs=*, bint purge_from_database=*)
     cpdef void clear_index(self)
     cpdef void reset(self)
     cpdef void dispose(self)
@@ -166,6 +173,7 @@ cdef class Cache(CacheFacade):
     cpdef void add_trade_tick(self, TradeTick tick)
     cpdef void add_mark_price(self, MarkPriceUpdate mark_price)
     cpdef void add_index_price(self, IndexPriceUpdate index_price)
+    cpdef void add_funding_rate(self, FundingRateUpdate funding_rate)
     cpdef void add_bar(self, Bar bar)
     cpdef void add_quote_ticks(self, list ticks)
     cpdef void add_trade_ticks(self, list ticks)
@@ -195,6 +203,7 @@ cdef class Cache(CacheFacade):
     cpdef void delete_strategy(self, Strategy strategy)
 
     cpdef void heartbeat(self, datetime timestamp)
+    cpdef void force_remove_from_own_order_book(self, ClientOrderId client_order_id)
     cpdef void audit_own_order_books(self)
 
     cdef timedelta _get_timedelta(self, BarType bar_type)

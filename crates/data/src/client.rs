@@ -19,38 +19,45 @@
 //! and utilities for constructing data responses.
 
 use std::{
-    cell::RefCell,
+    any::Any,
     fmt::{Debug, Display},
     ops::{Deref, DerefMut},
-    rc::Rc,
-    sync::Arc,
 };
 
 use ahash::AHashSet;
-use indexmap::IndexMap;
-use nautilus_common::{
-    clock::Clock,
-    messages::data::{
-        CustomDataResponse, RequestBars, RequestBookSnapshot, RequestData, RequestInstrument,
-        RequestInstruments, RequestQuotes, RequestTrades, SubscribeBars, SubscribeBookDeltas,
-        SubscribeBookDepth10, SubscribeBookSnapshots, SubscribeCommand, SubscribeData,
-        SubscribeIndexPrices, SubscribeInstrument, SubscribeInstrumentClose,
-        SubscribeInstrumentStatus, SubscribeInstruments, SubscribeMarkPrices, SubscribeQuotes,
-        SubscribeTrades, UnsubscribeBars, UnsubscribeBookDeltas, UnsubscribeBookDepth10,
-        UnsubscribeBookSnapshots, UnsubscribeCommand, UnsubscribeData, UnsubscribeIndexPrices,
-        UnsubscribeInstrument, UnsubscribeInstrumentClose, UnsubscribeInstrumentStatus,
-        UnsubscribeInstruments, UnsubscribeMarkPrices, UnsubscribeQuotes, UnsubscribeTrades,
-    },
+use nautilus_common::messages::data::{
+    RequestBars, RequestBookDepth, RequestBookSnapshot, RequestCustomData, RequestInstrument,
+    RequestInstruments, RequestQuotes, RequestTrades, SubscribeBars, SubscribeBookDeltas,
+    SubscribeBookDepth10, SubscribeBookSnapshots, SubscribeCommand, SubscribeCustomData,
+    SubscribeFundingRates, SubscribeIndexPrices, SubscribeInstrument, SubscribeInstrumentClose,
+    SubscribeInstrumentStatus, SubscribeInstruments, SubscribeMarkPrices, SubscribeQuotes,
+    SubscribeTrades, UnsubscribeBars, UnsubscribeBookDeltas, UnsubscribeBookDepth10,
+    UnsubscribeBookSnapshots, UnsubscribeCommand, UnsubscribeCustomData, UnsubscribeFundingRates,
+    UnsubscribeIndexPrices, UnsubscribeInstrument, UnsubscribeInstrumentClose,
+    UnsubscribeInstrumentStatus, UnsubscribeInstruments, UnsubscribeMarkPrices, UnsubscribeQuotes,
+    UnsubscribeTrades,
 };
-use nautilus_core::UUID4;
+#[cfg(feature = "defi")]
+use nautilus_common::messages::defi::{
+    RequestPoolSnapshot, SubscribeBlocks, SubscribePool, SubscribePoolFeeCollects,
+    SubscribePoolFlashEvents, SubscribePoolLiquidityUpdates, SubscribePoolSwaps, UnsubscribeBlocks,
+    UnsubscribePool, UnsubscribePoolFeeCollects, UnsubscribePoolFlashEvents,
+    UnsubscribePoolLiquidityUpdates, UnsubscribePoolSwaps,
+};
+#[cfg(feature = "defi")]
+use nautilus_model::defi::Blockchain;
 use nautilus_model::{
-    data::{Bar, BarType, DataType, QuoteTick, TradeTick},
+    data::{BarType, DataType},
     identifiers::{ClientId, InstrumentId, Venue},
-    instruments::{Instrument, InstrumentAny},
 };
 
+#[cfg(feature = "defi")]
+#[allow(unused_imports)] // Brings DeFi impl blocks into scope
+use crate::defi::client as _;
+
 /// Defines the interface for a data client, managing connections, subscriptions, and requests.
-pub trait DataClient {
+#[async_trait::async_trait]
+pub trait DataClient: Any + Sync + Send {
     /// Returns the unique identifier for this data client.
     fn client_id(&self) -> ClientId;
 
@@ -62,42 +69,42 @@ pub trait DataClient {
     /// # Errors
     ///
     /// Returns an error if the operation fails.
-    fn start(&self) -> anyhow::Result<()>;
+    fn start(&mut self) -> anyhow::Result<()>;
 
     /// Stops the data client.
     ///
     /// # Errors
     ///
     /// Returns an error if the operation fails.
-    fn stop(&self) -> anyhow::Result<()>;
+    fn stop(&mut self) -> anyhow::Result<()>;
 
     /// Resets the data client to its initial state.
     ///
     /// # Errors
     ///
     /// Returns an error if the operation fails.
-    fn reset(&self) -> anyhow::Result<()>;
+    fn reset(&mut self) -> anyhow::Result<()>;
 
     /// Disposes of client resources and cleans up.
     ///
     /// # Errors
     ///
     /// Returns an error if the operation fails.
-    fn dispose(&self) -> anyhow::Result<()>;
+    fn dispose(&mut self) -> anyhow::Result<()>;
 
     /// Connects external API's if needed.
     ///
     /// # Errors
     ///
     /// Returns an error if the operation fails.
-    fn connect(&self) -> anyhow::Result<()>;
+    async fn connect(&mut self) -> anyhow::Result<()>;
 
     /// Disconnects external API's if needed.
     ///
     /// # Errors
     ///
     /// Returns an error if the operation fails.
-    fn disconnect(&self) -> anyhow::Result<()>;
+    async fn disconnect(&mut self) -> anyhow::Result<()>;
 
     /// Returns `true` if the client is currently connected.
     fn is_connected(&self) -> bool;
@@ -105,17 +112,12 @@ pub trait DataClient {
     /// Returns `true` if the client is currently disconnected.
     fn is_disconnected(&self) -> bool;
 
-    // TODO: Move to separate trait
-    // A [`LiveDataClient`] must have two channels to send back data and data responses
-    // fn get_response_data_channel(&self) -> tokio::sync::mpsc::UnboundedSender<DataResponse>;
-    // fn get_subscriber_data_channel(&self) -> tokio::sync::mpsc::UnboundedSender<Data>;
-
-    /// Subscribes to generic data types according to the command.
+    /// Subscribes to custom data types according to the command.
     ///
     /// # Errors
     ///
     /// Returns an error if the subscribe operation fails.
-    fn subscribe(&mut self, cmd: &SubscribeData) -> anyhow::Result<()> {
+    fn subscribe(&mut self, cmd: &SubscribeCustomData) -> anyhow::Result<()> {
         log_not_implemented(&cmd);
         Ok(())
     }
@@ -210,6 +212,16 @@ pub trait DataClient {
         Ok(())
     }
 
+    /// Subscribes to funding rate updates for the specified instrument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscribe operation fails.
+    fn subscribe_funding_rates(&mut self, cmd: &SubscribeFundingRates) -> anyhow::Result<()> {
+        log_not_implemented(&cmd);
+        Ok(())
+    }
+
     /// Subscribes to bar updates of the specified bar type.
     ///
     /// # Errors
@@ -243,12 +255,87 @@ pub trait DataClient {
         Ok(())
     }
 
-    /// Unsubscribes from generic data types according to the command.
+    #[cfg(feature = "defi")]
+    /// Subscribes to blocks for a specified blockchain.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription operation fails.
+    fn subscribe_blocks(&mut self, cmd: &SubscribeBlocks) -> anyhow::Result<()> {
+        log_not_implemented(&cmd);
+        Ok(())
+    }
+
+    #[cfg(feature = "defi")]
+    /// Subscribes to pool definition updates for a specified AMM pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription operation fails.
+    fn subscribe_pool(&mut self, cmd: &SubscribePool) -> anyhow::Result<()> {
+        log_not_implemented(&cmd);
+        Ok(())
+    }
+
+    #[cfg(feature = "defi")]
+    /// Subscribes to pool swaps for a specified AMM pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription operation fails.
+    fn subscribe_pool_swaps(&mut self, cmd: &SubscribePoolSwaps) -> anyhow::Result<()> {
+        log_not_implemented(&cmd);
+        Ok(())
+    }
+
+    #[cfg(feature = "defi")]
+    /// Subscribes to pool liquidity updates for a specified AMM pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription operation fails.
+    fn subscribe_pool_liquidity_updates(
+        &mut self,
+        cmd: &SubscribePoolLiquidityUpdates,
+    ) -> anyhow::Result<()> {
+        log_not_implemented(&cmd);
+        Ok(())
+    }
+
+    #[cfg(feature = "defi")]
+    /// Subscribes to pool fee collects for a specified AMM pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription operation fails.
+    fn subscribe_pool_fee_collects(
+        &mut self,
+        cmd: &SubscribePoolFeeCollects,
+    ) -> anyhow::Result<()> {
+        log_not_implemented(&cmd);
+        Ok(())
+    }
+
+    #[cfg(feature = "defi")]
+    /// Subscribes to pool flash loan events for a specified AMM pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription operation fails.
+    fn subscribe_pool_flash_events(
+        &mut self,
+        cmd: &SubscribePoolFlashEvents,
+    ) -> anyhow::Result<()> {
+        log_not_implemented(&cmd);
+        Ok(())
+    }
+
+    /// Unsubscribes from custom data types according to the command.
     ///
     /// # Errors
     ///
     /// Returns an error if the unsubscribe operation fails.
-    fn unsubscribe(&mut self, cmd: &UnsubscribeData) -> anyhow::Result<()> {
+    fn unsubscribe(&mut self, cmd: &UnsubscribeCustomData) -> anyhow::Result<()> {
         log_not_implemented(&cmd);
         Ok(())
     }
@@ -343,6 +430,16 @@ pub trait DataClient {
         Ok(())
     }
 
+    /// Unsubscribes from funding rate updates for the specified instrument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the unsubscribe operation fails.
+    fn unsubscribe_funding_rates(&mut self, cmd: &UnsubscribeFundingRates) -> anyhow::Result<()> {
+        log_not_implemented(&cmd);
+        Ok(())
+    }
+
     /// Unsubscribes from bar updates of the specified bar type.
     ///
     /// # Errors
@@ -379,12 +476,87 @@ pub trait DataClient {
         Ok(())
     }
 
-    /// Sends a generic data request to the provider.
+    #[cfg(feature = "defi")]
+    /// Unsubscribes from blocks for a specified blockchain.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription operation fails.
+    fn unsubscribe_blocks(&mut self, cmd: &UnsubscribeBlocks) -> anyhow::Result<()> {
+        log_not_implemented(&cmd);
+        Ok(())
+    }
+
+    #[cfg(feature = "defi")]
+    /// Unsubscribes from pool definition updates for a specified AMM pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription operation fails.
+    fn unsubscribe_pool(&mut self, cmd: &UnsubscribePool) -> anyhow::Result<()> {
+        log_not_implemented(&cmd);
+        Ok(())
+    }
+
+    #[cfg(feature = "defi")]
+    /// Unsubscribes from swaps for a specified AMM pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription operation fails.
+    fn unsubscribe_pool_swaps(&mut self, cmd: &UnsubscribePoolSwaps) -> anyhow::Result<()> {
+        log_not_implemented(&cmd);
+        Ok(())
+    }
+
+    #[cfg(feature = "defi")]
+    /// Unsubscribes from pool liquidity updates for a specified AMM pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription operation fails.
+    fn unsubscribe_pool_liquidity_updates(
+        &mut self,
+        cmd: &UnsubscribePoolLiquidityUpdates,
+    ) -> anyhow::Result<()> {
+        log_not_implemented(&cmd);
+        Ok(())
+    }
+
+    #[cfg(feature = "defi")]
+    /// Unsubscribes from pool fee collects for a specified AMM pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription operation fails.
+    fn unsubscribe_pool_fee_collects(
+        &mut self,
+        cmd: &UnsubscribePoolFeeCollects,
+    ) -> anyhow::Result<()> {
+        log_not_implemented(&cmd);
+        Ok(())
+    }
+
+    #[cfg(feature = "defi")]
+    /// Unsubscribes from pool flash loan events for a specified AMM pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the subscription operation fails.
+    fn unsubscribe_pool_flash_events(
+        &mut self,
+        cmd: &UnsubscribePoolFlashEvents,
+    ) -> anyhow::Result<()> {
+        log_not_implemented(&cmd);
+        Ok(())
+    }
+
+    /// Sends a custom data request to the provider.
     ///
     /// # Errors
     ///
     /// Returns an error if the data request fails.
-    fn request_data(&self, request: &RequestData) -> anyhow::Result<()> {
+    fn request_data(&self, request: &RequestCustomData) -> anyhow::Result<()> {
         log_not_implemented(&request);
         Ok(())
     }
@@ -448,17 +620,37 @@ pub trait DataClient {
         log_not_implemented(&request);
         Ok(())
     }
+
+    /// Requests historical order book depth data for a specified instrument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the order book depths request fails.
+    fn request_book_depth(&self, request: &RequestBookDepth) -> anyhow::Result<()> {
+        log_not_implemented(&request);
+        Ok(())
+    }
+
+    #[cfg(feature = "defi")]
+    /// Requests a snapshot of a specific AMM pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pool snapshot request fails.
+    fn request_pool_snapshot(&self, request: &RequestPoolSnapshot) -> anyhow::Result<()> {
+        log_not_implemented(&request);
+        Ok(())
+    }
 }
 
 /// Wraps a [`DataClient`], managing subscription state and forwarding commands.
 pub struct DataClientAdapter {
-    client: Box<dyn DataClient>,
-    clock: Rc<RefCell<dyn Clock>>,
+    pub(crate) client: Box<dyn DataClient>,
     pub client_id: ClientId,
     pub venue: Option<Venue>,
     pub handles_book_deltas: bool,
     pub handles_book_snapshots: bool,
-    pub subscriptions_generic: AHashSet<DataType>,
+    pub subscriptions_custom: AHashSet<DataType>,
     pub subscriptions_book_deltas: AHashSet<InstrumentId>,
     pub subscriptions_book_depth10: AHashSet<InstrumentId>,
     pub subscriptions_book_snapshots: AHashSet<InstrumentId>,
@@ -471,6 +663,19 @@ pub struct DataClientAdapter {
     pub subscriptions_instrument_venue: AHashSet<Venue>,
     pub subscriptions_mark_prices: AHashSet<InstrumentId>,
     pub subscriptions_index_prices: AHashSet<InstrumentId>,
+    pub subscriptions_funding_rates: AHashSet<InstrumentId>,
+    #[cfg(feature = "defi")]
+    pub subscriptions_blocks: AHashSet<Blockchain>,
+    #[cfg(feature = "defi")]
+    pub subscriptions_pools: AHashSet<InstrumentId>,
+    #[cfg(feature = "defi")]
+    pub subscriptions_pool_swaps: AHashSet<InstrumentId>,
+    #[cfg(feature = "defi")]
+    pub subscriptions_pool_liquidity_updates: AHashSet<InstrumentId>,
+    #[cfg(feature = "defi")]
+    pub subscriptions_pool_fee_collects: AHashSet<InstrumentId>,
+    #[cfg(feature = "defi")]
+    pub subscriptions_pool_flash: AHashSet<InstrumentId>,
 }
 
 impl Deref for DataClientAdapter {
@@ -495,7 +700,7 @@ impl Debug for DataClientAdapter {
             .field("venue", &self.venue)
             .field("handles_book_deltas", &self.handles_book_deltas)
             .field("handles_book_snapshots", &self.handles_book_snapshots)
-            .field("subscriptions_generic", &self.subscriptions_generic)
+            .field("subscriptions_custom", &self.subscriptions_custom)
             .field("subscriptions_book_deltas", &self.subscriptions_book_deltas)
             .field("subscriptions_book_depth10", &self.subscriptions_book_depth10)
             .field("subscriptions_book_snapshot", &self.subscriptions_book_snapshots)
@@ -513,7 +718,7 @@ impl Debug for DataClientAdapter {
 }
 
 impl DataClientAdapter {
-    /// Creates a new [`DataClientAdapter`] with the given client and clock, initializing empty subscriptions.
+    /// Creates a new [`DataClientAdapter`] with the given client and clock.
     #[must_use]
     pub fn new(
         client_id: ClientId,
@@ -521,16 +726,14 @@ impl DataClientAdapter {
         handles_order_book_deltas: bool,
         handles_order_book_snapshots: bool,
         client: Box<dyn DataClient>,
-        clock: Rc<RefCell<dyn Clock>>,
     ) -> Self {
         Self {
             client,
-            clock,
             client_id,
             venue,
             handles_book_deltas: handles_order_book_deltas,
             handles_book_snapshots: handles_order_book_snapshots,
-            subscriptions_generic: AHashSet::new(),
+            subscriptions_custom: AHashSet::new(),
             subscriptions_book_deltas: AHashSet::new(),
             subscriptions_book_depth10: AHashSet::new(),
             subscriptions_book_snapshots: AHashSet::new(),
@@ -538,17 +741,36 @@ impl DataClientAdapter {
             subscriptions_trades: AHashSet::new(),
             subscriptions_mark_prices: AHashSet::new(),
             subscriptions_index_prices: AHashSet::new(),
+            subscriptions_funding_rates: AHashSet::new(),
             subscriptions_bars: AHashSet::new(),
             subscriptions_instrument_status: AHashSet::new(),
             subscriptions_instrument_close: AHashSet::new(),
             subscriptions_instrument: AHashSet::new(),
             subscriptions_instrument_venue: AHashSet::new(),
+            #[cfg(feature = "defi")]
+            subscriptions_blocks: AHashSet::new(),
+            #[cfg(feature = "defi")]
+            subscriptions_pools: AHashSet::new(),
+            #[cfg(feature = "defi")]
+            subscriptions_pool_swaps: AHashSet::new(),
+            #[cfg(feature = "defi")]
+            subscriptions_pool_liquidity_updates: AHashSet::new(),
+            #[cfg(feature = "defi")]
+            subscriptions_pool_fee_collects: AHashSet::new(),
+            #[cfg(feature = "defi")]
+            subscriptions_pool_flash: AHashSet::new(),
         }
     }
 
+    #[allow(clippy::borrowed_box)]
+    #[must_use]
+    pub fn get_client(&self) -> &Box<dyn DataClient> {
+        &self.client
+    }
+
     #[inline]
-    pub fn execute_subscribe_command(&mut self, cmd: &SubscribeCommand) {
-        let result = match cmd {
+    pub fn execute_subscribe(&mut self, cmd: &SubscribeCommand) {
+        if let Err(e) = match cmd {
             SubscribeCommand::Data(cmd) => self.subscribe(cmd),
             SubscribeCommand::Instrument(cmd) => self.subscribe_instrument(cmd),
             SubscribeCommand::Instruments(cmd) => self.subscribe_instruments(cmd),
@@ -559,19 +781,18 @@ impl DataClientAdapter {
             SubscribeCommand::Trades(cmd) => self.subscribe_trades(cmd),
             SubscribeCommand::MarkPrices(cmd) => self.subscribe_mark_prices(cmd),
             SubscribeCommand::IndexPrices(cmd) => self.subscribe_index_prices(cmd),
+            SubscribeCommand::FundingRates(cmd) => self.subscribe_funding_rates(cmd),
             SubscribeCommand::Bars(cmd) => self.subscribe_bars(cmd),
-            SubscribeCommand::InstrumentStatus(_cmd) => todo!(), // TODO: Implement
-            SubscribeCommand::InstrumentClose(_cmd) => todo!(),  // TODO: Implement
-        };
-
-        if let Err(e) = result {
+            SubscribeCommand::InstrumentStatus(cmd) => self.subscribe_instrument_status(cmd),
+            SubscribeCommand::InstrumentClose(cmd) => self.subscribe_instrument_close(cmd),
+        } {
             log_command_error(&cmd, &e);
         }
     }
 
     #[inline]
-    pub fn execute_unsubscribe_command(&mut self, cmd: &UnsubscribeCommand) {
-        let result = match cmd {
+    pub fn execute_unsubscribe(&mut self, cmd: &UnsubscribeCommand) {
+        if let Err(e) = match cmd {
             UnsubscribeCommand::Data(cmd) => self.unsubscribe(cmd),
             UnsubscribeCommand::Instrument(cmd) => self.unsubscribe_instrument(cmd),
             UnsubscribeCommand::Instruments(cmd) => self.unsubscribe_instruments(cmd),
@@ -583,13 +804,40 @@ impl DataClientAdapter {
             UnsubscribeCommand::Bars(cmd) => self.unsubscribe_bars(cmd),
             UnsubscribeCommand::MarkPrices(cmd) => self.unsubscribe_mark_prices(cmd),
             UnsubscribeCommand::IndexPrices(cmd) => self.unsubscribe_index_prices(cmd),
-            UnsubscribeCommand::InstrumentStatus(_cmd) => todo!(), // TODO: Implement
-            UnsubscribeCommand::InstrumentClose(_cmd) => todo!(),  // TODO: Implement
-        };
-
-        if let Err(e) = result {
+            UnsubscribeCommand::FundingRates(cmd) => self.unsubscribe_funding_rates(cmd),
+            UnsubscribeCommand::InstrumentStatus(cmd) => self.unsubscribe_instrument_status(cmd),
+            UnsubscribeCommand::InstrumentClose(cmd) => self.unsubscribe_instrument_close(cmd),
+        } {
             log_command_error(&cmd, &e);
         }
+    }
+
+    // -- SUBSCRIPTION HANDLERS -------------------------------------------------------------------
+
+    /// Subscribes to a custom data type, updating internal state and forwarding to the client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying client subscribe operation fails.
+    pub fn subscribe(&mut self, cmd: &SubscribeCustomData) -> anyhow::Result<()> {
+        if !self.subscriptions_custom.contains(&cmd.data_type) {
+            self.subscriptions_custom.insert(cmd.data_type.clone());
+            self.client.subscribe(cmd)?;
+        }
+        Ok(())
+    }
+
+    /// Unsubscribes from a custom data type, updating internal state and forwarding to the client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying client unsubscribe operation fails.
+    pub fn unsubscribe(&mut self, cmd: &UnsubscribeCustomData) -> anyhow::Result<()> {
+        if self.subscriptions_custom.contains(&cmd.data_type) {
+            self.subscriptions_custom.remove(&cmd.data_type);
+            self.client.unsubscribe(cmd)?;
+        }
+        Ok(())
     }
 
     /// Subscribes to instrument definitions for a venue, updating internal state and forwarding to the client.
@@ -790,6 +1038,32 @@ impl DataClientAdapter {
         Ok(())
     }
 
+    /// Subscribes to bars for a bar type, updating internal state and forwarding to the client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying client subscribe operation fails.
+    fn subscribe_bars(&mut self, cmd: &SubscribeBars) -> anyhow::Result<()> {
+        if !self.subscriptions_bars.contains(&cmd.bar_type) {
+            self.subscriptions_bars.insert(cmd.bar_type);
+            self.client.subscribe_bars(cmd)?;
+        }
+        Ok(())
+    }
+
+    /// Unsubscribes from bars for a bar type, updating internal state and forwarding to the client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying client unsubscribe operation fails.
+    fn unsubscribe_bars(&mut self, cmd: &UnsubscribeBars) -> anyhow::Result<()> {
+        if self.subscriptions_bars.contains(&cmd.bar_type) {
+            self.subscriptions_bars.remove(&cmd.bar_type);
+            self.client.unsubscribe_bars(cmd)?;
+        }
+        Ok(())
+    }
+
     /// Subscribes to mark price updates for an instrument, updating internal state and forwarding to the client.
     ///
     /// # Errors
@@ -842,66 +1116,123 @@ impl DataClientAdapter {
         Ok(())
     }
 
-    /// Subscribes to bars for a bar type, updating internal state and forwarding to the client.
+    /// Subscribes to funding rate updates for an instrument, updating internal state and forwarding to the client.
     ///
     /// # Errors
     ///
     /// Returns an error if the underlying client subscribe operation fails.
-    fn subscribe_bars(&mut self, cmd: &SubscribeBars) -> anyhow::Result<()> {
-        if !self.subscriptions_bars.contains(&cmd.bar_type) {
-            self.subscriptions_bars.insert(cmd.bar_type);
-            self.client.subscribe_bars(cmd)?;
+    fn subscribe_funding_rates(&mut self, cmd: &SubscribeFundingRates) -> anyhow::Result<()> {
+        if !self
+            .subscriptions_funding_rates
+            .contains(&cmd.instrument_id)
+        {
+            self.subscriptions_funding_rates.insert(cmd.instrument_id);
+            self.client.subscribe_funding_rates(cmd)?;
         }
         Ok(())
     }
 
-    /// Unsubscribes from bars for a bar type, updating internal state and forwarding to the client.
+    /// Unsubscribes from funding rate updates for an instrument, updating internal state and forwarding to the client.
     ///
     /// # Errors
     ///
     /// Returns an error if the underlying client unsubscribe operation fails.
-    fn unsubscribe_bars(&mut self, cmd: &UnsubscribeBars) -> anyhow::Result<()> {
-        if self.subscriptions_bars.contains(&cmd.bar_type) {
-            self.subscriptions_bars.remove(&cmd.bar_type);
-            self.client.unsubscribe_bars(cmd)?;
+    fn unsubscribe_funding_rates(&mut self, cmd: &UnsubscribeFundingRates) -> anyhow::Result<()> {
+        if self
+            .subscriptions_funding_rates
+            .contains(&cmd.instrument_id)
+        {
+            self.subscriptions_funding_rates.remove(&cmd.instrument_id);
+            self.client.unsubscribe_funding_rates(cmd)?;
         }
         Ok(())
     }
 
-    /// Subscribes to a generic data type, updating internal state and forwarding to the client.
+    /// Subscribes to instrument status updates for the specified instrument.
     ///
     /// # Errors
     ///
     /// Returns an error if the underlying client subscribe operation fails.
-    pub fn subscribe(&mut self, cmd: &SubscribeData) -> anyhow::Result<()> {
-        if !self.subscriptions_generic.contains(&cmd.data_type) {
-            self.subscriptions_generic.insert(cmd.data_type.clone());
-            self.client.subscribe(cmd)?;
+    fn subscribe_instrument_status(
+        &mut self,
+        cmd: &SubscribeInstrumentStatus,
+    ) -> anyhow::Result<()> {
+        if !self
+            .subscriptions_instrument_status
+            .contains(&cmd.instrument_id)
+        {
+            self.subscriptions_instrument_status
+                .insert(cmd.instrument_id);
+            self.client.subscribe_instrument_status(cmd)?;
         }
         Ok(())
     }
 
-    /// Unsubscribes from a generic data type, updating internal state and forwarding to the client.
+    /// Unsubscribes from instrument status updates for the specified instrument.
     ///
     /// # Errors
     ///
     /// Returns an error if the underlying client unsubscribe operation fails.
-    pub fn unsubscribe(&mut self, cmd: &UnsubscribeData) -> anyhow::Result<()> {
-        if self.subscriptions_generic.contains(&cmd.data_type) {
-            self.subscriptions_generic.remove(&cmd.data_type);
-            self.client.unsubscribe(cmd)?;
+    fn unsubscribe_instrument_status(
+        &mut self,
+        cmd: &UnsubscribeInstrumentStatus,
+    ) -> anyhow::Result<()> {
+        if self
+            .subscriptions_instrument_status
+            .contains(&cmd.instrument_id)
+        {
+            self.subscriptions_instrument_status
+                .remove(&cmd.instrument_id);
+            self.client.unsubscribe_instrument_status(cmd)?;
         }
         Ok(())
     }
 
-    // -- DATA REQUEST HANDLERS IMPLEMENTATION ---------------------------------------------------------------------------
+    /// Subscribes to instrument close events for the specified instrument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying client subscribe operation fails.
+    fn subscribe_instrument_close(&mut self, cmd: &SubscribeInstrumentClose) -> anyhow::Result<()> {
+        if !self
+            .subscriptions_instrument_close
+            .contains(&cmd.instrument_id)
+        {
+            self.subscriptions_instrument_close
+                .insert(cmd.instrument_id);
+            self.client.subscribe_instrument_close(cmd)?;
+        }
+        Ok(())
+    }
+
+    /// Unsubscribes from instrument close events for the specified instrument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying client unsubscribe operation fails.
+    fn unsubscribe_instrument_close(
+        &mut self,
+        cmd: &UnsubscribeInstrumentClose,
+    ) -> anyhow::Result<()> {
+        if self
+            .subscriptions_instrument_close
+            .contains(&cmd.instrument_id)
+        {
+            self.subscriptions_instrument_close
+                .remove(&cmd.instrument_id);
+            self.client.unsubscribe_instrument_close(cmd)?;
+        }
+        Ok(())
+    }
+
+    // -- REQUEST HANDLERS ------------------------------------------------------------------------
 
     /// Sends a data request to the underlying client.
     ///
     /// # Errors
     ///
     /// Returns an error if the client request fails.
-    pub fn request_data(&self, req: &RequestData) -> anyhow::Result<()> {
+    pub fn request_data(&self, req: &RequestCustomData) -> anyhow::Result<()> {
         self.client.request_data(req)
     }
 
@@ -950,123 +1281,13 @@ impl DataClientAdapter {
         self.client.request_bars(req)
     }
 
-    ///////////////////////////////////////////////////////////////////////////////////////////////
-    // TODO: Below handler style is deprecated (need to update incorrect CustomDataResponse)
-    ///////////////////////////////////////////////////////////////////////////////////////////////
-
-    /// Constructs a `CustomDataResponse` wrapping a single instrument.
-    #[must_use]
-    pub fn handle_instrument(
-        &self,
-        instrument: InstrumentAny,
-        correlation_id: UUID4,
-    ) -> CustomDataResponse {
-        let instrument_id = instrument.id();
-        let metadata = IndexMap::from([("instrument_id".to_string(), instrument_id.to_string())]);
-        let data_type = DataType::new(stringify!(InstrumentAny), Some(metadata));
-        let data = Arc::new(instrument);
-
-        CustomDataResponse::new(
-            correlation_id,
-            self.client_id,
-            instrument_id.venue,
-            data_type,
-            data,
-            self.clock.borrow().timestamp_ns(),
-            None,
-        )
-    }
-
-    /// Constructs a `CustomDataResponse` wrapping multiple instruments for a venue.
-    #[must_use]
-    pub fn handle_instruments(
-        &self,
-        venue: Venue,
-        instruments: Vec<InstrumentAny>,
-        correlation_id: UUID4,
-    ) -> CustomDataResponse {
-        let metadata = IndexMap::from([("venue".to_string(), venue.to_string())]);
-        let data_type = DataType::new(stringify!(InstrumentAny), Some(metadata));
-        let data = Arc::new(instruments);
-
-        CustomDataResponse::new(
-            correlation_id,
-            self.client_id,
-            venue,
-            data_type,
-            data,
-            self.clock.borrow().timestamp_ns(),
-            None,
-        )
-    }
-
-    /// Constructs a `CustomDataResponse` carrying quote ticks for the specified instrument.
-    #[must_use]
-    pub fn handle_quotes(
-        &self,
-        instrument_id: &InstrumentId,
-        quotes: Vec<QuoteTick>,
-        correlation_id: UUID4,
-    ) -> CustomDataResponse {
-        let metadata = IndexMap::from([("instrument_id".to_string(), instrument_id.to_string())]);
-        let data_type = DataType::new(stringify!(QuoteTick), Some(metadata));
-        let data = Arc::new(quotes);
-
-        CustomDataResponse::new(
-            correlation_id,
-            self.client_id,
-            instrument_id.venue,
-            data_type,
-            data,
-            self.clock.borrow().timestamp_ns(),
-            None,
-        )
-    }
-
-    /// Constructs a `CustomDataResponse` carrying trade ticks for the specified instrument.
-    #[must_use]
-    pub fn handle_trades(
-        &self,
-        instrument_id: &InstrumentId,
-        trades: Vec<TradeTick>,
-        correlation_id: UUID4,
-    ) -> CustomDataResponse {
-        let metadata = IndexMap::from([("instrument_id".to_string(), instrument_id.to_string())]);
-        let data_type = DataType::new(stringify!(TradeTick), Some(metadata));
-        let data = Arc::new(trades);
-
-        CustomDataResponse::new(
-            correlation_id,
-            self.client_id,
-            instrument_id.venue,
-            data_type,
-            data,
-            self.clock.borrow().timestamp_ns(),
-            None,
-        )
-    }
-
-    /// Constructs a `CustomDataResponse` carrying bar data for the specified bar type.
-    #[must_use]
-    pub fn handle_bars(
-        &self,
-        bar_type: &BarType,
-        bars: Vec<Bar>,
-        correlation_id: UUID4,
-    ) -> CustomDataResponse {
-        let metadata = IndexMap::from([("bar_type".to_string(), bar_type.to_string())]);
-        let data_type = DataType::new(stringify!(Bar), Some(metadata));
-        let data = Arc::new(bars);
-
-        CustomDataResponse::new(
-            correlation_id,
-            self.client_id,
-            bar_type.instrument_id().venue,
-            data_type,
-            data,
-            self.clock.borrow().timestamp_ns(),
-            None,
-        )
+    /// Sends an order book depths request for a given instrument.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the client fails to process the order book depths request.
+    pub fn request_book_depth(&self, req: &RequestBookDepth) -> anyhow::Result<()> {
+        self.client.request_book_depth(req)
     }
 }
 
@@ -1078,130 +1299,4 @@ fn log_not_implemented<T: Debug>(msg: &T) {
 #[inline(always)]
 fn log_command_error<C: Debug, E: Display>(cmd: &C, e: &E) {
     log::error!("Error on {cmd:?}: {e}");
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// Tests
-////////////////////////////////////////////////////////////////////////////////
-#[cfg(test)]
-mod adapter_tests {
-    use std::{cell::RefCell, rc::Rc};
-
-    use nautilus_common::{
-        cache::Cache,
-        clock::TestClock,
-        messages::data::{
-            SubscribeData, SubscribeInstrument, UnsubscribeData, UnsubscribeInstrument,
-        },
-    };
-    use nautilus_core::{UUID4, UnixNanos};
-    use nautilus_model::{
-        data::DataType,
-        identifiers::{ClientId, InstrumentId, Venue},
-        instruments::stubs::audusd_sim,
-    };
-
-    use super::*;
-    use crate::mocks::MockDataClient;
-
-    #[test]
-    fn test_generic_data_subscription() {
-        // Setup adapter with a mock client
-        let cache = Rc::new(RefCell::new(Cache::default()));
-        let client_id = ClientId::new("GEN");
-        let venue = Venue::default();
-        let client = Box::new(MockDataClient::new(cache.clone(), client_id, venue));
-        let clock = Rc::new(RefCell::new(TestClock::new()));
-        let mut client = DataClientAdapter::new(
-            client_id,
-            Some(venue),
-            false, // handles deltas
-            false, // handles snapshots
-            client,
-            clock,
-        );
-
-        // Define a custom data type
-        let data_type = DataType::new("MyType", None);
-
-        // Subscribe
-        let sub = SubscribeData::new(
-            Some(client_id),
-            Some(venue),
-            data_type.clone(),
-            UUID4::new(),
-            UnixNanos::default(),
-            None,
-        );
-        client.subscribe(&sub).unwrap();
-        assert!(client.subscriptions_generic.contains(&data_type));
-
-        // Check idempotency
-        client.subscribe(&sub).unwrap();
-        assert_eq!(client.subscriptions_generic.len(), 1);
-
-        // Unsubscribe
-        let unsub = UnsubscribeData::new(
-            Some(client_id),
-            Some(venue),
-            data_type.clone(),
-            UUID4::new(),
-            UnixNanos::default(),
-            None,
-        );
-        client.unsubscribe(&unsub).unwrap();
-
-        assert!(!client.subscriptions_generic.contains(&data_type));
-    }
-
-    #[test]
-    fn test_instrument_subscription() {
-        // Setup adapter with a mock client
-        let cache = Rc::new(RefCell::new(Cache::default()));
-        let client_id = ClientId::new("INS");
-        let venue = Venue::default();
-        let client = Box::new(MockDataClient::new(cache.clone(), client_id, venue));
-        let clock = Rc::new(RefCell::new(TestClock::new()));
-        let mut client = DataClientAdapter::new(
-            client_id,
-            Some(venue),
-            false, // handles deltas
-            false, // handles snapshots
-            client,
-            clock,
-        );
-
-        let instrument = audusd_sim();
-        let instr_id: InstrumentId = instrument.id;
-
-        // Subscribe instrument
-        let sub = SubscribeInstrument::new(
-            instr_id,
-            Some(client_id),
-            Some(venue),
-            UUID4::new(),
-            UnixNanos::default(),
-            None,
-        );
-
-        client.subscribe_instrument(&sub).unwrap();
-        assert!(client.subscriptions_instrument.contains(&instr_id));
-
-        // Check idempotency
-        client.subscribe_instrument(&sub).unwrap();
-        assert_eq!(client.subscriptions_instrument.len(), 1);
-
-        // Unsubscribe instrument
-        let unsub = UnsubscribeInstrument::new(
-            instr_id,
-            Some(client_id),
-            Some(venue),
-            UUID4::new(),
-            UnixNanos::default(),
-            None,
-        );
-        client.unsubscribe_instrument(&unsub).unwrap();
-
-        assert!(!client.subscriptions_instrument.contains(&instr_id));
-    }
 }

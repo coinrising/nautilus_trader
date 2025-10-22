@@ -19,15 +19,12 @@ use std::{
 };
 
 use indexmap::IndexMap;
-use nautilus_core::{
-    UUID4, UnixNanos,
-    correctness::{FAILED, check_predicate_false},
-};
+use nautilus_core::{UUID4, UnixNanos, correctness::FAILED};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use ustr::Ustr;
 
-use super::{Order, OrderAny, OrderCore, OrderError};
+use super::{Order, OrderAny, OrderCore, OrderError, check_display_qty, check_time_in_force};
 use crate::{
     enums::{
         ContingencyType, LiquiditySide, OrderSide, OrderStatus, OrderType, PositionSide,
@@ -38,10 +35,7 @@ use crate::{
         AccountId, ClientOrderId, ExecAlgorithmId, InstrumentId, OrderListId, PositionId,
         StrategyId, Symbol, TradeId, TraderId, Venue, VenueOrderId,
     },
-    types::{
-        Currency, Money, Price, Quantity, price::check_positive_price,
-        quantity::check_positive_quantity,
-    },
+    types::{Currency, Money, Price, Quantity, quantity::check_positive_quantity},
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -69,7 +63,8 @@ impl StopLimitOrder {
     ///
     /// Returns an error if:
     /// - The `quantity` is not positive.
-    /// - The `time_in_force` is GTD and the `expire_time` is `None` or zero.
+    /// - The `display_qty` (when provided) exceeds `quantity`.
+    /// - The `time_in_force` is `GTD` **and** `expire_time` is `None` or zero.
     #[allow(clippy::too_many_arguments)]
     pub fn new_checked(
         trader_id: TraderId,
@@ -101,20 +96,8 @@ impl StopLimitOrder {
         ts_init: UnixNanos,
     ) -> anyhow::Result<Self> {
         check_positive_quantity(quantity, stringify!(quantity))?;
-        check_positive_price(price, stringify!(price))?;
-        check_positive_price(trigger_price, stringify!(trigger_price))?;
-
-        if let Some(disp) = display_qty {
-            check_positive_quantity(disp, stringify!(display_qty))?;
-            check_predicate_false(disp > quantity, "`display_qty` may not exceed `quantity`")?;
-        }
-
-        if time_in_force == TimeInForce::Gtd {
-            check_predicate_false(
-                expire_time.unwrap_or_default().is_zero(),
-                "`expire_time` is required for `GTD` order",
-            )?;
-        }
+        check_display_qty(display_qty, quantity)?;
+        check_time_in_force(time_in_force, expire_time)?;
 
         let init_order = OrderInitialized::new(
             trader_id,
@@ -470,9 +453,21 @@ impl Order for StopLimitOrder {
         if let OrderEventAny::Updated(ref event) = event {
             self.update(event);
         };
+
         let is_order_filled = matches!(event, OrderEventAny::Filled(_));
+        let is_order_triggered = matches!(event, OrderEventAny::Triggered(_));
+        let ts_event = if is_order_triggered {
+            Some(event.ts_event())
+        } else {
+            None
+        };
 
         self.core.apply(event)?;
+
+        if is_order_triggered {
+            self.is_triggered = true;
+            self.ts_triggered = ts_event;
+        }
 
         if is_order_filled {
             self.core.set_slippage(self.price);
@@ -493,7 +488,7 @@ impl Order for StopLimitOrder {
         }
 
         self.quantity = event.quantity;
-        self.leaves_qty = self.quantity - self.filled_qty;
+        self.leaves_qty = self.quantity.saturating_sub(self.filled_qty);
     }
 
     fn is_triggered(&self) -> Option<bool> {
@@ -521,7 +516,7 @@ impl Order for StopLimitOrder {
     }
 
     fn set_liquidity_side(&mut self, liquidity_side: LiquiditySide) {
-        self.liquidity_side = Some(liquidity_side)
+        self.liquidity_side = Some(liquidity_side);
     }
 
     fn would_reduce_only(&self, side: PositionSide, position_qty: Quantity) -> bool {
@@ -601,17 +596,18 @@ impl Display for StopLimitOrder {
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-//  Tests
-////////////////////////////////////////////////////////////////////////////////
 #[cfg(test)]
 mod tests {
+    use nautilus_core::UnixNanos;
     use rstest::rstest;
 
+    use super::*;
     use crate::{
-        enums::{OrderSide, OrderType, TimeInForce, TriggerType},
+        enums::{OrderSide, TimeInForce, TriggerType},
+        events::order::initialized::OrderInitializedBuilder,
+        identifiers::InstrumentId,
         instruments::{CurrencyPair, stubs::*},
-        orders::{Order, builder::OrderTestBuilder},
+        orders::{OrderTestBuilder, stubs::TestOrderStubs},
         types::{Price, Quantity},
     };
 
@@ -642,6 +638,20 @@ mod tests {
     }
 
     #[rstest]
+    fn test_display(audusd_sim: CurrencyPair) {
+        let order = OrderTestBuilder::new(OrderType::MarketToLimit)
+            .instrument_id(audusd_sim.id)
+            .side(OrderSide::Buy)
+            .quantity(Quantity::from(1))
+            .build();
+
+        assert_eq!(
+            order.to_string(),
+            "MarketToLimitOrder(BUY 1 AUD/USD.SIM MARKET_TO_LIMIT GTC, status=INITIALIZED, client_order_id=O-19700101-000000-001-001-1, venue_order_id=None, position_id=None, exec_algorithm_id=None, exec_spawn_id=None, tags=None)"
+        );
+    }
+
+    #[rstest]
     #[should_panic]
     fn test_display_qty_gt_quantity_err(audusd_sim: CurrencyPair) {
         OrderTestBuilder::new(OrderType::StopLimit)
@@ -652,20 +662,6 @@ mod tests {
             .trigger_type(TriggerType::LastPrice)
             .quantity(Quantity::from(1))
             .display_qty(Quantity::from(2))
-            .build();
-    }
-
-    #[rstest]
-    #[should_panic]
-    fn test_display_qty_zero_err(audusd_sim: CurrencyPair) {
-        OrderTestBuilder::new(OrderType::StopLimit)
-            .instrument_id(audusd_sim.id)
-            .side(OrderSide::Buy)
-            .trigger_price(Price::from("30300"))
-            .price(Price::from("30100"))
-            .trigger_type(TriggerType::LastPrice)
-            .quantity(Quantity::from(1))
-            .display_qty(Quantity::from(0))
             .build();
     }
 
@@ -685,32 +681,6 @@ mod tests {
 
     #[rstest]
     #[should_panic]
-    fn test_limit_price_zero_err(audusd_sim: CurrencyPair) {
-        OrderTestBuilder::new(OrderType::StopLimit)
-            .instrument_id(audusd_sim.id)
-            .side(OrderSide::Buy)
-            .trigger_price(Price::from("30300"))
-            .price(Price::from("0"))
-            .trigger_type(TriggerType::LastPrice)
-            .quantity(Quantity::from(1))
-            .build();
-    }
-
-    #[rstest]
-    #[should_panic]
-    fn test_limit_price_negative_err(audusd_sim: CurrencyPair) {
-        OrderTestBuilder::new(OrderType::StopLimit)
-            .instrument_id(audusd_sim.id)
-            .side(OrderSide::Buy)
-            .trigger_price(Price::from("30300"))
-            .price(Price::from("-1"))
-            .trigger_type(TriggerType::LastPrice)
-            .quantity(Quantity::from(1))
-            .build();
-    }
-
-    #[rstest]
-    #[should_panic]
     fn test_gtd_without_expire_time_err(audusd_sim: CurrencyPair) {
         OrderTestBuilder::new(OrderType::StopLimit)
             .instrument_id(audusd_sim.id)
@@ -721,5 +691,183 @@ mod tests {
             .time_in_force(TimeInForce::Gtd)
             .quantity(Quantity::from(1))
             .build();
+    }
+    #[rstest]
+    fn test_stop_limit_order_update() {
+        // Create and accept a basic stop limit order
+        let order = OrderTestBuilder::new(OrderType::StopLimit)
+            .instrument_id(InstrumentId::from("BTC-USDT.BINANCE"))
+            .quantity(Quantity::from(10))
+            .price(Price::new(100.0, 2))
+            .trigger_price(Price::new(95.0, 2))
+            .build();
+
+        let mut accepted_order = TestOrderStubs::make_accepted_order(&order);
+
+        // Update with new values
+        let updated_price = Price::new(105.0, 2);
+        let updated_trigger_price = Price::new(90.0, 2);
+        let updated_quantity = Quantity::from(5);
+
+        let event = OrderUpdated {
+            client_order_id: accepted_order.client_order_id(),
+            strategy_id: accepted_order.strategy_id(),
+            price: Some(updated_price),
+            trigger_price: Some(updated_trigger_price),
+            quantity: updated_quantity,
+            ..Default::default()
+        };
+
+        accepted_order.apply(OrderEventAny::Updated(event)).unwrap();
+
+        // Verify updates were applied correctly
+        assert_eq!(accepted_order.quantity(), updated_quantity);
+        assert_eq!(accepted_order.price(), Some(updated_price));
+        assert_eq!(accepted_order.trigger_price(), Some(updated_trigger_price));
+    }
+
+    #[rstest]
+    fn test_stop_limit_order_expire_time() {
+        // Create a stop limit order with an expire time
+        let expire_time = UnixNanos::from(1234567890);
+        let order = OrderTestBuilder::new(OrderType::StopLimit)
+            .instrument_id(InstrumentId::from("BTC-USDT.BINANCE"))
+            .quantity(Quantity::from(10))
+            .price(Price::new(100.0, 2))
+            .trigger_price(Price::new(95.0, 2))
+            .expire_time(expire_time)
+            .build();
+
+        // Assert that the expire time is set correctly
+        assert_eq!(order.expire_time(), Some(expire_time));
+    }
+
+    #[rstest]
+    fn test_stop_limit_order_post_only() {
+        // Create a stop limit order with post_only flag set to true
+        let order = OrderTestBuilder::new(OrderType::StopLimit)
+            .instrument_id(InstrumentId::from("BTC-USDT.BINANCE"))
+            .quantity(Quantity::from(10))
+            .price(Price::new(100.0, 2))
+            .trigger_price(Price::new(95.0, 2))
+            .post_only(true)
+            .build();
+
+        // Assert that post_only is set correctly
+        assert!(order.is_post_only());
+    }
+
+    #[rstest]
+    fn test_stop_limit_order_reduce_only() {
+        // Create a stop limit order with reduce_only flag set to true
+        let order = OrderTestBuilder::new(OrderType::StopLimit)
+            .instrument_id(InstrumentId::from("BTC-USDT.BINANCE"))
+            .quantity(Quantity::from(10))
+            .price(Price::new(100.0, 2))
+            .trigger_price(Price::new(95.0, 2))
+            .reduce_only(true)
+            .build();
+
+        // Assert that reduce_only is set correctly
+        assert!(order.is_reduce_only());
+    }
+
+    #[rstest]
+    fn test_stop_limit_order_trigger_instrument_id() {
+        // Create a stop limit order with a trigger instrument ID
+        let trigger_instrument_id = InstrumentId::from("ETH-USDT.BINANCE");
+        let order = OrderTestBuilder::new(OrderType::StopLimit)
+            .instrument_id(InstrumentId::from("BTC-USDT.BINANCE"))
+            .quantity(Quantity::from(10))
+            .price(Price::new(100.0, 2))
+            .trigger_price(Price::new(95.0, 2))
+            .trigger_instrument_id(trigger_instrument_id)
+            .build();
+
+        // Assert that the trigger instrument ID is set correctly
+        assert_eq!(order.trigger_instrument_id(), Some(trigger_instrument_id));
+    }
+
+    #[rstest]
+    fn test_stop_limit_order_would_reduce_only() {
+        // Create a stop limit order with a sell side
+        let order = OrderTestBuilder::new(OrderType::StopLimit)
+            .instrument_id(InstrumentId::from("BTC-USDT.BINANCE"))
+            .side(OrderSide::Sell)
+            .quantity(Quantity::from(10))
+            .price(Price::new(100.0, 2))
+            .trigger_price(Price::new(95.0, 2))
+            .build();
+
+        // Test would_reduce_only functionality
+        assert!(order.would_reduce_only(PositionSide::Long, Quantity::from(15)));
+        assert!(!order.would_reduce_only(PositionSide::Short, Quantity::from(15)));
+        assert!(!order.would_reduce_only(PositionSide::Long, Quantity::from(5)));
+    }
+
+    #[rstest]
+    fn test_stop_limit_order_display_string() {
+        // Create a stop limit order
+        let order = OrderTestBuilder::new(OrderType::StopLimit)
+            .instrument_id(InstrumentId::from("BTC-USDT.BINANCE"))
+            .side(OrderSide::Buy)
+            .quantity(Quantity::from(10))
+            .price(Price::new(100.0, 2))
+            .trigger_price(Price::new(95.0, 2))
+            .client_order_id(ClientOrderId::from("ORDER-001"))
+            .build();
+
+        // Expected string representation - updated to match the actual format
+        let expected = "StopLimitOrder(BUY 10 BTC-USDT.BINANCE STOP_LIMIT @ 95.00-STOP[DEFAULT] 100.00-LIMIT GTC, status=INITIALIZED, client_order_id=ORDER-001, venue_order_id=None, position_id=None, tags=None)";
+
+        // Assert string representations match
+        assert_eq!(order.to_string(), expected);
+        assert_eq!(format!("{order}"), expected);
+    }
+
+    #[rstest]
+    fn test_stop_limit_order_from_order_initialized() {
+        // Create an OrderInitialized event with all required fields for a StopLimitOrder
+        let order_initialized = OrderInitializedBuilder::default()
+            .order_type(OrderType::StopLimit)
+            .quantity(Quantity::from(10))
+            .price(Some(Price::new(100.0, 2)))
+            .trigger_price(Some(Price::new(95.0, 2)))
+            .trigger_type(Some(TriggerType::Default))
+            .post_only(true)
+            .reduce_only(true)
+            .expire_time(Some(UnixNanos::from(1234567890)))
+            .display_qty(Some(Quantity::from(5)))
+            .build()
+            .unwrap();
+
+        // Convert the OrderInitialized event into a StopLimitOrder
+        let order: StopLimitOrder = order_initialized.clone().into();
+
+        // Assert essential fields match the OrderInitialized fields
+        assert_eq!(order.trader_id(), order_initialized.trader_id);
+        assert_eq!(order.strategy_id(), order_initialized.strategy_id);
+        assert_eq!(order.instrument_id(), order_initialized.instrument_id);
+        assert_eq!(order.client_order_id(), order_initialized.client_order_id);
+        assert_eq!(order.order_side(), order_initialized.order_side);
+        assert_eq!(order.quantity(), order_initialized.quantity);
+
+        // Assert specific fields for StopLimitOrder
+        assert_eq!(order.price, order_initialized.price.unwrap());
+        assert_eq!(
+            order.trigger_price,
+            order_initialized.trigger_price.unwrap()
+        );
+        assert_eq!(order.trigger_type, order_initialized.trigger_type.unwrap());
+        assert_eq!(order.expire_time(), order_initialized.expire_time);
+        assert_eq!(order.is_post_only(), order_initialized.post_only);
+        assert_eq!(order.is_reduce_only(), order_initialized.reduce_only);
+        assert_eq!(order.display_qty(), order_initialized.display_qty);
+
+        // Verify order type
+        assert_eq!(order.order_type(), OrderType::StopLimit);
+
+        // Verify not triggered by default
+        assert_eq!(order.is_triggered(), Some(false));
     }
 }

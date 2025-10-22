@@ -13,6 +13,8 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
+import pathlib
+
 import pytest
 
 from nautilus_trader import TEST_DATA_DIR
@@ -54,7 +56,7 @@ def test_get_publishers() -> None:
     result = loader.get_publishers()
 
     # Assert
-    assert len(result) == 96  # From built-in map
+    assert len(result) == 104  # From built-in map
 
 
 def test_loader_definition_glbx_futures() -> None:
@@ -616,7 +618,18 @@ def test_loader_ohlcv_1s() -> None:
     assert bar.ts_init == 1609160401000000000
 
 
-def test_loader_with_ohlcv_1m() -> None:
+@pytest.mark.parametrize(
+    ("bars_timestamp_on_close", "expected_ts_event", "expected_ts_init"),
+    [
+        (True, 1715248860000000000, 1715248860000000000),  # Both close time
+        (False, 1715248800000000000, 1715248860000000000),  # ts_event=open, ts_init=close
+    ],
+)
+def test_loader_with_ohlcv_1m(
+    bars_timestamp_on_close: bool,
+    expected_ts_event: int,
+    expected_ts_init: int,
+) -> None:
     # Arrange
     loader = DatabentoDataLoader()
     path = (
@@ -627,7 +640,11 @@ def test_loader_with_ohlcv_1m() -> None:
     )
 
     # Act
-    data = loader.from_dbn_file(path, as_legacy_cython=True)
+    data = loader.from_dbn_file(
+        path,
+        as_legacy_cython=True,
+        bars_timestamp_on_close=bars_timestamp_on_close,
+    )
 
     # Assert
     assert len(data) == 5
@@ -636,11 +653,22 @@ def test_loader_with_ohlcv_1m() -> None:
     bar = data[0]
     assert bar.bar_type == BarType.from_str("ESM4.GLBX-1-MINUTE-LAST-EXTERNAL")
     assert bar.open == Price.from_str("5199.75")
-    assert bar.ts_event == 1715248800000000000
-    assert bar.ts_init == 1715248860000000000
+    assert bar.ts_event == expected_ts_event
+    assert bar.ts_init == expected_ts_init
 
 
-def test_loader_with_ohlcv_1m_and_xcme() -> None:
+@pytest.mark.parametrize(
+    ("bars_timestamp_on_close", "expected_ts_event", "expected_ts_init"),
+    [
+        (True, 1715248860000000000, 1715248860000000000),  # Close time (default)
+        (False, 1715248800000000000, 1715248860000000000),  # ts_event=open, ts_init=close
+    ],
+)
+def test_loader_with_ohlcv_1m_and_xcme(
+    bars_timestamp_on_close: bool,
+    expected_ts_event: int,
+    expected_ts_init: int,
+) -> None:
     # Arrange
     loader = DatabentoDataLoader()
     definition_path = (
@@ -660,7 +688,11 @@ def test_loader_with_ohlcv_1m_and_xcme() -> None:
         as_legacy_cython=True,
         use_exchange_as_venue=True,
     )
-    data = loader.from_dbn_file(path, as_legacy_cython=True)
+    data = loader.from_dbn_file(
+        path,
+        as_legacy_cython=True,
+        bars_timestamp_on_close=bars_timestamp_on_close,
+    )
 
     # Assert
     assert len(data) == 5
@@ -669,18 +701,33 @@ def test_loader_with_ohlcv_1m_and_xcme() -> None:
     bar = data[0]
     assert bar.bar_type == BarType.from_str("ESM4.XCME-1-MINUTE-LAST-EXTERNAL")
     assert bar.open == Price.from_str("5199.75")
-    assert bar.ts_event == 1715248800000000000
-    assert bar.ts_init == 1715248860000000000
+    assert bar.ts_event == expected_ts_event
+    assert bar.ts_init == expected_ts_init
 
 
 @pytest.mark.skip("requires updated test data")
-def test_loader_with_ohlcv_1m_pyo3() -> None:
+@pytest.mark.parametrize(
+    ("bars_timestamp_on_close", "expected_ts_event", "expected_ts_init"),
+    [
+        (True, 1609160460000000000, 1609160460000000000),  # Close time (default)
+        (False, 1609160400000000000, 1609160400000000000),  # Open time
+    ],
+)
+def test_loader_with_ohlcv_1m_pyo3(
+    bars_timestamp_on_close: bool,
+    expected_ts_event: int,
+    expected_ts_init: int,
+) -> None:
     # Arrange
     loader = DatabentoDataLoader()
     path = DATABENTO_TEST_DATA_DIR / "ohlcv-1m.dbn.zst"
 
     # Act
-    data = loader.from_dbn_file(path, as_legacy_cython=False)
+    data = loader.from_dbn_file(
+        path,
+        as_legacy_cython=False,
+        bars_timestamp_on_close=bars_timestamp_on_close,
+    )
 
     # Assert
     assert len(data) == 2
@@ -689,8 +736,8 @@ def test_loader_with_ohlcv_1m_pyo3() -> None:
     bar = data[0]
     assert bar.bar_type == nautilus_pyo3.BarType.from_str("ESH1.GLBX-1-MINUTE-LAST-EXTERNAL")
     assert bar.open == nautilus_pyo3.Price.from_str("3720.25")
-    assert bar.ts_event == 1609160400000000000
-    assert bar.ts_init == 1609160460000000000
+    assert bar.ts_event == expected_ts_event
+    assert bar.ts_init == expected_ts_init
 
 
 @pytest.mark.skip("requires updated test data")
@@ -966,3 +1013,129 @@ def test_load_status_pyo3_large() -> None:
 
     # Assert
     assert len(data) == 4_673_675
+
+
+def test_loader_cmbp_1() -> None:
+    # Arrange
+    loader = DatabentoDataLoader()
+    # Use the test data from the Rust crate
+    path = (
+        pathlib.Path(__file__).parent.parent.parent.parent.parent
+        / "crates"
+        / "adapters"
+        / "databento"
+        / "test_data"
+        / "test_data.cmbp-1.dbn.zst"
+    )
+
+    # Act
+    instrument_id = InstrumentId.from_str("ESM4.GLBX")
+    data = loader.from_dbn_file(path, instrument_id=instrument_id, as_legacy_cython=True)
+
+    # Assert
+    assert len(data) == 2
+    assert isinstance(data[0], QuoteTick)
+    assert isinstance(data[1], QuoteTick)
+    quote = data[0]
+    assert quote.instrument_id == InstrumentId.from_str("ESM4.GLBX")
+    assert quote.bid_price == Price.from_str("3720.25")
+    assert quote.ask_price == Price.from_str("3720.50")
+    assert quote.bid_size == Quantity.from_int(24)
+    assert quote.ask_size == Quantity.from_int(11)
+    assert quote.ts_event == 1609160400006136329
+    assert quote.ts_init == 1609160400006136329
+
+
+def test_loader_cmbp_1_pyo3() -> None:
+    # Arrange
+    loader = DatabentoDataLoader()
+    # Use the test data from the Rust crate
+    path = (
+        pathlib.Path(__file__).parent.parent.parent.parent.parent
+        / "crates"
+        / "adapters"
+        / "databento"
+        / "test_data"
+        / "test_data.cmbp-1.dbn.zst"
+    )
+
+    # Act
+    instrument_id = nautilus_pyo3.InstrumentId.from_str("ESM4.GLBX")
+    data = loader.from_dbn_file(path, instrument_id=instrument_id, as_legacy_cython=False)
+
+    # Assert
+    assert len(data) == 2
+    assert isinstance(data[0], nautilus_pyo3.QuoteTick)
+    assert isinstance(data[1], nautilus_pyo3.QuoteTick)
+    quote = data[0]
+    assert quote.instrument_id == nautilus_pyo3.InstrumentId.from_str("ESM4.GLBX")
+    assert quote.bid_price == nautilus_pyo3.Price.from_str("3720.25")
+    assert quote.ask_price == nautilus_pyo3.Price.from_str("3720.50")
+    assert quote.bid_size == nautilus_pyo3.Quantity.from_int(24)
+    assert quote.ask_size == nautilus_pyo3.Quantity.from_int(11)
+    assert quote.ts_event == 1609160400006136329
+    assert quote.ts_init == 1609160400006136329
+
+
+def test_loader_cbbo_1s() -> None:
+    # Arrange
+    loader = DatabentoDataLoader()
+    # Use the test data from the Rust crate
+    path = (
+        pathlib.Path(__file__).parent.parent.parent.parent.parent
+        / "crates"
+        / "adapters"
+        / "databento"
+        / "test_data"
+        / "test_data.cbbo-1s.dbn.zst"
+    )
+
+    # Act
+    instrument_id = InstrumentId.from_str("ESM4.GLBX")
+    data = loader.from_dbn_file(path, instrument_id=instrument_id, as_legacy_cython=True)
+
+    # Assert
+    assert len(data) == 4  # 2 quotes + 2 trades from CBBO
+    assert isinstance(data[0], QuoteTick)
+    assert isinstance(data[1], TradeTick)
+    assert isinstance(data[2], QuoteTick)
+    assert isinstance(data[3], TradeTick)
+    quote = data[0]
+    assert quote.instrument_id == InstrumentId.from_str("ESM4.GLBX")
+    assert quote.bid_price == Price.from_str("3720.25")
+    assert quote.ask_price == Price.from_str("3720.50")
+    assert quote.bid_size == Quantity.from_int(24)
+    assert quote.ask_size == Quantity.from_int(11)
+    assert quote.ts_event == 1609160400006136329
+    assert quote.ts_init == 1609160400006136329
+
+
+def test_loader_cbbo_1s_pyo3() -> None:
+    # Arrange
+    loader = DatabentoDataLoader()
+    # Use the test data from the Rust crate
+    path = (
+        pathlib.Path(__file__).parent.parent.parent.parent.parent
+        / "crates"
+        / "adapters"
+        / "databento"
+        / "test_data"
+        / "test_data.cbbo-1s.dbn.zst"
+    )
+
+    # Act
+    instrument_id = nautilus_pyo3.InstrumentId.from_str("ESM4.GLBX")
+    data = loader.from_dbn_file(path, instrument_id=instrument_id, as_legacy_cython=False)
+
+    # Assert
+    assert len(data) == 2
+    assert isinstance(data[0], nautilus_pyo3.QuoteTick)
+    assert isinstance(data[1], nautilus_pyo3.QuoteTick)
+    quote = data[0]
+    assert quote.instrument_id == nautilus_pyo3.InstrumentId.from_str("ESM4.GLBX")
+    assert quote.bid_price == nautilus_pyo3.Price.from_str("3720.25")
+    assert quote.ask_price == nautilus_pyo3.Price.from_str("3720.50")
+    assert quote.bid_size == nautilus_pyo3.Quantity.from_int(24)
+    assert quote.ask_size == nautilus_pyo3.Quantity.from_int(11)
+    assert quote.ts_event == 1609160400006136329
+    assert quote.ts_init == 1609160400006136329

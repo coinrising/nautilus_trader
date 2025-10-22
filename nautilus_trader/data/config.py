@@ -36,15 +36,22 @@ class DataEngineConfig(NautilusConfig, frozen=True):
         If time bar aggregators will skip emitting a bar if the aggregation starts mid-interval.
     time_bars_build_with_no_updates : bool, default True
         If time bar aggregators will build and emit bars with no new market updates.
-    time_bars_origins : dict[BarAggregation, pd.Timedelta | pd.DateOffset], optional
+    time_bars_origin_offset : dict[BarAggregation, pd.Timedelta | pd.DateOffset], optional
         A dictionary mapping time bar aggregations to their origin time offsets.
+    time_bars_build_delay : int, default 0
+        The time delay (microseconds) before building and emitting a composite bar type.
+        15 microseconds can be useful in a backtest context, when aggregating internal bars
+        from internal bars several times so all messages are processed before a timer triggers.
     validate_data_sequence : bool, default False
         If data objects timestamp sequencing will be validated and handled.
     buffer_deltas : bool, default False
         If order book deltas should be buffered until the F_LAST flag is set for a delta.
+    emit_quotes_from_book_depths : bool, default False
+        If order book depths should be emitted as quotes.
     external_clients : list[ClientId], optional
-        The client IDs declared for external stream processing.
-        The data engine will not attempt to send data commands to these client IDs.
+        Client IDs representing external data streams.
+        Commands with these client IDs will be published on the message bus only;
+        the data engine will not attempt to forward them to a local `DataClient`.
     debug : bool, default False
         If debug mode is active (will provide extra debug logging).
 
@@ -54,8 +61,10 @@ class DataEngineConfig(NautilusConfig, frozen=True):
     time_bars_timestamp_on_close: bool = True
     time_bars_skip_first_non_full_bar: bool = False
     time_bars_build_with_no_updates: bool = True
-    time_bars_origins: dict | None = None
+    time_bars_origin_offset: dict | None = None
+    time_bars_build_delay: int = 0
     validate_data_sequence: bool = False
     buffer_deltas: bool = False
+    emit_quotes_from_book_depths: bool = False
     external_clients: list[ClientId] | None = None
     debug: bool = False

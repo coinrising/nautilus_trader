@@ -13,18 +13,20 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
+use std::fmt::{self, Display};
+
 use nautilus_model::{enums::OrderSide, position::Position};
 
-use crate::statistic::PortfolioStatistic;
+use crate::{Returns, statistic::PortfolioStatistic};
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.analysis")
 )]
 pub struct LongRatio {
-    precision: usize,
+    pub precision: usize,
 }
 
 impl LongRatio {
@@ -37,11 +39,17 @@ impl LongRatio {
     }
 }
 
+impl Display for LongRatio {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Long Ratio")
+    }
+}
+
 impl PortfolioStatistic for LongRatio {
     type Item = f64;
 
     fn name(&self) -> String {
-        stringify!(LongRatio).to_string()
+        self.to_string()
     }
 
     fn calculate_from_positions(&self, positions: &[Position]) -> Option<Self::Item> {
@@ -59,13 +67,24 @@ impl PortfolioStatistic for LongRatio {
         let scale = 10f64.powi(self.precision as i32);
         Some((value * scale).round() / scale)
     }
+    fn calculate_from_returns(&self, _returns: &Returns) -> Option<Self::Item> {
+        None
+    }
+
+    fn calculate_from_realized_pnls(&self, _realized_pnls: &[f64]) -> Option<Self::Item> {
+        None
+    }
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Tests
+////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
-    use nautilus_core::UnixNanos;
+    use nautilus_core::{UnixNanos, approx_eq};
     use nautilus_model::{
         enums::OrderSide,
         identifiers::{
@@ -134,7 +153,7 @@ mod tests {
 
         let result = long_ratio.calculate_from_positions(&positions);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), 1.00);
+        assert!(approx_eq!(f64, result.unwrap(), 1.00, epsilon = 1e-9));
     }
 
     #[rstest]
@@ -148,7 +167,7 @@ mod tests {
 
         let result = long_ratio.calculate_from_positions(&positions);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), 0.00);
+        assert!(approx_eq!(f64, result.unwrap(), 0.00, epsilon = 1e-9));
     }
 
     #[rstest]
@@ -163,7 +182,7 @@ mod tests {
 
         let result = long_ratio.calculate_from_positions(&positions);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), 0.50);
+        assert!(approx_eq!(f64, result.unwrap(), 0.50, epsilon = 1e-9));
     }
 
     #[rstest]
@@ -177,7 +196,7 @@ mod tests {
 
         let result = long_ratio.calculate_from_positions(&positions);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), 0.667);
+        assert!(approx_eq!(f64, result.unwrap(), 0.667, epsilon = 1e-9));
     }
 
     #[rstest]
@@ -187,7 +206,7 @@ mod tests {
 
         let result = long_ratio.calculate_from_positions(&positions);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), 1.00);
+        assert!(approx_eq!(f64, result.unwrap(), 1.00, epsilon = 1e-9));
     }
 
     #[rstest]
@@ -197,7 +216,7 @@ mod tests {
 
         let result = long_ratio.calculate_from_positions(&positions);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), 0.00);
+        assert!(approx_eq!(f64, result.unwrap(), 0.00, epsilon = 1e-9));
     }
 
     #[rstest]
@@ -211,12 +230,12 @@ mod tests {
 
         let result = long_ratio.calculate_from_positions(&positions);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), 1.00);
+        assert!(approx_eq!(f64, result.unwrap(), 1.00, epsilon = 1e-9));
     }
 
     #[rstest]
     fn test_name() {
         let long_ratio = LongRatio::new(None);
-        assert_eq!(long_ratio.name(), "LongRatio");
+        assert_eq!(long_ratio.name(), "Long Ratio");
     }
 }

@@ -101,11 +101,12 @@ impl OrderBookDeltas {
         format!("{}:{}", PY_MODULE_MODEL, stringify!(OrderBookDeltas))
     }
 
-    #[staticmethod]
-    #[pyo3(name = "from_pycapsule")]
     /// # Panics
     ///
     /// Panics if downcasting the Python object to `PyCapsule` fails.
+    #[staticmethod]
+    #[pyo3(name = "from_pycapsule")]
+    #[allow(unsafe_code)]
     pub fn py_from_pycapsule(capsule: Bound<'_, PyAny>) -> Self {
         let capsule: &Bound<'_, PyCapsule> = capsule
             .downcast::<PyCapsule>()
@@ -131,7 +132,7 @@ impl OrderBookDeltas {
     /// The function will panic if the `PyCapsule` creation fails, which can occur if the
     /// [`Data::Deltas`] object cannot be converted into a raw pointer.
     #[pyo3(name = "as_pycapsule")]
-    fn py_as_pycapsule(&self, py: Python<'_>) -> PyObject {
+    fn py_as_pycapsule(&self, py: Python<'_>) -> Py<PyAny> {
         let deltas = OrderBookDeltas_API::new(self.clone());
         data_to_pycapsule(py, Data::Deltas(deltas))
     }

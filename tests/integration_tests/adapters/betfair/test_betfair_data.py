@@ -73,7 +73,9 @@ def instrument_list(mock_load_markets_metadata):
     global INSTRUMENTS
 
     # Setup
-    loop = asyncio.get_event_loop()
+    # Get the running loop from pytest-asyncio (session-scoped)
+    loop = asyncio.get_running_loop()
+
     client = BetfairTestStubs.betfair_client(loop=loop)
     market_ids = BetfairDataProvider.market_ids()
     config = BetfairInstrumentProviderConfig(market_ids=market_ids, account_currency="GBP")
@@ -90,6 +92,8 @@ def instrument_list(mock_load_markets_metadata):
     # Fill INSTRUMENTS global cache
     INSTRUMENTS.extend(instrument_provider.list_all())
     assert INSTRUMENTS  # TODO: Fix Betfair symbology
+    yield
+    # pytest-asyncio manages loop lifecycle, no need to close
 
 
 @pytest.mark.asyncio()
@@ -329,16 +333,23 @@ def test_orderbook_updates(data_client, parser):
 
     # Assert
     book = order_books[next(iter(order_books))]
-    expected = """╭───────────┬───────┬──────────╮
-│ bids      │ price │ asks     │
-├───────────┼───────┼──────────┤
-│           │ 1.21  │ [76.38]  │
-│           │ 1.20  │ [156.74] │
-│           │ 1.19  │ [147.79] │
-│ [151.96]  │ 1.18  │          │
-│ [1275.83] │ 1.17  │          │
-│ [932.64]  │ 1.16  │          │
-╰───────────┴───────┴──────────╯"""
+    expected = (
+        "bid_levels: 18\n"
+        "ask_levels: 41\n"
+        "sequence: 0\n"
+        "update_count: 60\n"
+        "ts_last: 1617253902640999936\n"
+        "╭───────────┬───────┬──────────╮\n"
+        "│ bids      │ price │ asks     │\n"
+        "├───────────┼───────┼──────────┤\n"
+        "│           │ 1.21  │ [76.38]  │\n"
+        "│           │ 1.20  │ [156.74] │\n"
+        "│           │ 1.19  │ [147.79] │\n"
+        "│ [151.96]  │ 1.18  │          │\n"
+        "│ [1275.83] │ 1.17  │          │\n"
+        "│ [932.64]  │ 1.16  │          │\n"
+        "╰───────────┴───────┴──────────╯"
+    )
 
     result = book.pprint()
     assert result == expected

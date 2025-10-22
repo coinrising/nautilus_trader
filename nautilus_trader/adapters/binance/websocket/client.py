@@ -17,6 +17,7 @@ import asyncio
 from collections.abc import Awaitable
 from collections.abc import Callable
 from typing import Any
+from weakref import WeakSet
 
 import msgspec
 
@@ -27,6 +28,7 @@ from nautilus_trader.common.enums import LogColor
 from nautilus_trader.core.nautilus_pyo3 import WebSocketClient
 from nautilus_trader.core.nautilus_pyo3 import WebSocketClientError
 from nautilus_trader.core.nautilus_pyo3 import WebSocketConfig
+from nautilus_trader.live.cancellation import cancel_tasks_with_timeout
 
 
 class BinanceWebSocketClient:
@@ -56,6 +58,7 @@ class BinanceWebSocketClient:
     """
 
     MAX_SUBSCRIPTIONS_PER_CLIENT = 200
+    MAX_CLIENTS = 20  # Allows up to 4000 total subscriptions (20 x 200)
 
     def __init__(
         self,
@@ -72,6 +75,7 @@ class BinanceWebSocketClient:
         self._handler: Callable[[bytes], None] = handler
         self._handler_reconnect: Callable[..., Awaitable[None]] | None = handler_reconnect
         self._loop = loop
+        self._tasks: WeakSet[asyncio.Task] = WeakSet()
 
         self._streams: list[str] = []
         self._clients: dict[int, WebSocketClient | None] = {}  # Client ID -> WebSocket client
@@ -140,13 +144,27 @@ class BinanceWebSocketClient:
         int
             The client ID to use for the new subscription.
 
+        Raises
+        ------
+        RuntimeError
+            If maximum number of clients and subscriptions are exceeded.
+
         """
         # Try to find an existing client with room for another subscription
         for client_id, streams in self._client_streams.items():
             if len(streams) < self.MAX_SUBSCRIPTIONS_PER_CLIENT:
                 return client_id
 
-        # If no suitable client found, create a new client ID
+        # Check if we can create a new client
+        if len(self._clients) >= self.MAX_CLIENTS:
+            max_total_streams = self.MAX_CLIENTS * self.MAX_SUBSCRIPTIONS_PER_CLIENT
+            raise RuntimeError(
+                f"Cannot create new subscription: maximum limit of {max_total_streams} "
+                f"total subscriptions ({self.MAX_CLIENTS} clients x "
+                f"{self.MAX_SUBSCRIPTIONS_PER_CLIENT} subscriptions) exceeded",
+            )
+
+        # Create a new client ID
         client_id = self._next_client_id
         self._next_client_id += 1
         self._clients[client_id] = None
@@ -201,7 +219,7 @@ class BinanceWebSocketClient:
         initial_stream = streams[0]
         ws_url = self._base_url + f"/stream?streams={initial_stream}"
 
-        self._log.debug(f"Client {client_id}: Connecting to {ws_url}...")
+        self._log.debug(f"ws-client {client_id}: Connecting to {ws_url}...")
         self._is_connecting[client_id] = True
 
         config = WebSocketConfig(
@@ -217,19 +235,20 @@ class BinanceWebSocketClient:
             post_reconnection=lambda: self._handle_reconnect(client_id),
         )
         self._is_connecting[client_id] = False
-        self._log.info(f"Client {client_id}: Connected to {self._base_url}", LogColor.BLUE)
-        self._log.debug(f"Client {client_id}: Subscribed to {initial_stream}")
+        self._log.info(f"ws-client {client_id}: Connected to {self._base_url}", LogColor.BLUE)
+        self._log.debug(f"ws-client {client_id}: Subscribed to {initial_stream}")
 
         # If there are multiple streams, subscribe to the rest
         if len(streams) > 1:
             msg = self._create_subscribe_msg(streams=streams[1:])
             await self._send(client_id, msg)
             self._log.debug(
-                f"Client {client_id}: Subscribed to additional {len(streams)-1} streams",
+                f"ws-client {client_id}: Subscribed to additional {len(streams) - 1} streams",
             )
 
     def _handle_ping(self, client_id: int, raw: bytes) -> None:
-        self._loop.create_task(self.send_pong(client_id, raw))
+        task = self._loop.create_task(self.send_pong(client_id, raw))
+        self._tasks.add(task)
 
     async def send_pong(self, client_id: int, raw: bytes) -> None:
         """
@@ -242,24 +261,26 @@ class BinanceWebSocketClient:
         try:
             await client.send_pong(raw)
         except WebSocketClientError as e:
-            self._log.error(f"Client {client_id}: {e!s}")
+            self._log.error(f"ws-client {client_id}: {e!s}")
 
     def _handle_reconnect(self, client_id: int) -> None:
         """
         Handle reconnection for a specific client.
         """
         if client_id not in self._client_streams or not self._client_streams[client_id]:
-            self._log.error(f"Client {client_id}: Cannot reconnect: no streams for this client")
+            self._log.error(f"ws-client {client_id}: Cannot reconnect: no streams for this client")
             return
 
-        self._log.warning(f"Client {client_id}: Reconnected to {self._base_url}")
+        self._log.warning(f"ws-client {client_id}: Reconnected to {self._base_url}")
 
         # Re-subscribe to all streams for this client
         streams = self._client_streams[client_id]
-        self._loop.create_task(self._resubscribe_client(client_id, streams))
+        task = self._loop.create_task(self._resubscribe_client(client_id, streams))
+        self._tasks.add(task)
 
         if self._handler_reconnect:
-            self._loop.create_task(self._handler_reconnect())  # type: ignore
+            task = self._loop.create_task(self._handler_reconnect())  # type: ignore
+            self._tasks.add(task)
 
     async def _resubscribe_client(self, client_id: int, streams: list[str]) -> None:
         """
@@ -270,12 +291,14 @@ class BinanceWebSocketClient:
 
         msg = self._create_subscribe_msg(streams=streams)
         await self._send(client_id, msg)
-        self._log.debug(f"Client {client_id}: Resubscribed to {len(streams)} streams")
+        self._log.debug(f"ws-client {client_id}: Resubscribed to {len(streams)} streams")
 
     async def disconnect(self) -> None:
         """
         Disconnect all clients from the server.
         """
+        await cancel_tasks_with_timeout(self._tasks, self._log)
+
         tasks = []
         for client_id in list(self._clients.keys()):
             tasks.append(self._disconnect_client(client_id))
@@ -292,14 +315,19 @@ class BinanceWebSocketClient:
         if client is None:
             return
 
-        self._log.debug(f"Client {client_id}: Disconnecting...")
+        # Check Rust-level state to make this idempotent
+        if client.is_disconnecting() or client.is_closed():
+            self._log.debug(f"ws-client {client_id}: Already disconnecting/closed, skipping")
+            return
+
+        self._log.debug(f"ws-client {client_id}: Disconnecting...")
         try:
             await client.disconnect()
         except WebSocketClientError as e:
-            self._log.error(f"Client {client_id}: {e!s}")
+            self._log.error(f"ws-client {client_id}: {e!s}")
 
         self._clients[client_id] = None  # Dispose (will go out of scope)
-        self._log.debug(f"Client {client_id}: Disconnected from {self._base_url}")
+        self._log.debug(f"ws-client {client_id}: Disconnected from {self._base_url}")
 
     async def subscribe_listen_key(self, listen_key: str) -> None:
         """
@@ -557,12 +585,17 @@ class BinanceWebSocketClient:
         """
         Subscribe to aggregate mark price stream.
         """
-        if speed not in (1000, 3000):
+        if speed and speed not in (1000, 3000):
             raise ValueError(f"`speed` options are 1000ms or 3000ms only, was {speed}")
+
         if symbol is None:
             stream = "!markPrice@arr"
         else:
-            stream = f"{BinanceSymbol(symbol).lower()}@markPrice@{int(speed / 1000)}s"
+            stream = f"{BinanceSymbol(symbol).lower()}@markPrice"
+
+        if speed:
+            stream += f"@{int(speed / 1000)}s"
+
         await self._subscribe(stream)
 
     async def unsubscribe_mark_price(
@@ -608,7 +641,7 @@ class BinanceWebSocketClient:
         # Otherwise, send subscription message to existing client
         msg = self._create_subscribe_msg(streams=[stream])
         await self._send(client_id, msg)
-        self._log.debug(f"Client {client_id}: Subscribed to {stream}")
+        self._log.debug(f"ws-client {client_id}: Subscribed to {stream}")
 
     async def _unsubscribe(self, stream: str) -> None:
         if stream not in self._streams:
@@ -633,12 +666,14 @@ class BinanceWebSocketClient:
         # Send unsubscribe message
         msg = self._create_unsubscribe_msg(streams=[stream])
         await self._send(client_id, msg)
-        self._log.debug(f"Client {client_id}: Unsubscribed from {stream}")
+        self._log.debug(f"ws-client {client_id}: Unsubscribed from {stream}")
 
         # If client has no more streams, disconnect it
         if client_id in self._client_streams and not self._client_streams[client_id]:
             await self._disconnect_client(client_id)
-            self._log.debug(f"Client {client_id}: Disconnected due to no remaining subscriptions")
+            self._log.debug(
+                f"ws-client {client_id}: Disconnected due to no remaining subscriptions",
+            )
 
     def _create_subscribe_msg(self, streams: list[str]) -> dict[str, Any]:
         message = {
@@ -661,12 +696,12 @@ class BinanceWebSocketClient:
     async def _send(self, client_id: int, msg: dict[str, Any]) -> None:
         client = self._clients.get(client_id)
         if client is None:
-            self._log.error(f"Client {client_id}: Cannot send message {msg}: not connected")
+            self._log.error(f"ws-client {client_id}: Cannot send message {msg}: not connected")
             return
 
-        self._log.debug(f"Client {client_id}: SENDING: {msg}")
+        self._log.debug(f"ws-client {client_id}: SENDING: {msg}")
 
         try:
             await client.send_text(msgspec.json.encode(msg))
         except WebSocketClientError as e:
-            self._log.error(f"Client {client_id}: {e!s}")
+            self._log.error(f"ws-client {client_id}: {e!s}")

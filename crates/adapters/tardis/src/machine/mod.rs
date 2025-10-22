@@ -68,6 +68,12 @@ pub enum Error {
     Deserialization(#[from] serde_json::Error),
 }
 
+/// Connects to the Tardis Machine WS replay endpoint and returns a stream of WebSocket messages.
+///
+/// # Errors
+///
+/// Returns `Error::EmptyOptions` if no options provided,
+/// or `Error::ConnectFailed`/`Error::ConnectRejected` if connection fails.
 pub async fn replay_normalized(
     base_url: &str,
     options: Vec<ReplayNormalizedRequestOptions>,
@@ -87,6 +93,12 @@ pub async fn replay_normalized(
     stream_from_websocket(base_url, url, signal).await
 }
 
+/// Connects to the Tardis Machine WS streaming endpoint and returns a stream of WebSocket messages.
+///
+/// # Errors
+///
+/// Returns `Error::EmptyOptions` if no options provided,
+/// or `Error::ConnectFailed`/`Error::ConnectRejected` if connection fails.
 pub async fn stream_normalized(
     base_url: &str,
     options: Vec<StreamNormalizedRequestOptions>,
@@ -194,6 +206,7 @@ async fn stream_from_websocket(
     })
 }
 
+#[allow(clippy::result_large_err)]
 fn handle_connection_response(ws_resp: tungstenite::http::Response<Option<Vec<u8>>>) -> Result<()> {
     if ws_resp.status() != tungstenite::http::StatusCode::SWITCHING_PROTOCOLS {
         return match ws_resp.body() {
@@ -214,19 +227,16 @@ async fn heartbeat(
     mut sender: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::Message>,
 ) {
     let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(10));
-    let retry_interval = Duration::from_secs(1);
 
     loop {
         heartbeat_interval.tick().await;
         tracing::trace!("Sending PING");
 
-        let mut count = 3;
-        let mut retry_interval = tokio::time::interval(retry_interval);
-
-        while count > 0 {
-            retry_interval.tick().await;
-            let _ = sender.send(tungstenite::Message::Ping(vec![].into())).await;
-            count -= 1;
+        if let Err(e) = sender.send(tungstenite::Message::Ping(vec![].into())).await {
+            tracing::debug!("Heartbeat send failed (connection closed): {e}");
+            break;
         }
     }
+
+    tracing::debug!("Heartbeat task exiting");
 }

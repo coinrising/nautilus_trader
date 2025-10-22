@@ -11,14 +11,14 @@ order management methods.
 
 **Key capabilities**:
 
-- Event subscription and handling
-- Market data reception
-- State management
-- System interaction primitives
+- Event subscription and handling.
+- Market data reception.
+- State management.
+- System interaction primitives.
 
 ## Basic example
 
-Just like strategies, actors support configuration through very similar pattern.
+Just like strategies, actors support configuration through a very similar pattern.
 
 ```python
 from nautilus_trader.config import ActorConfig
@@ -74,24 +74,26 @@ Here's how different data operations map to their handlers:
 
 | Operation                       | Category         | Handler                  | Purpose |
 |:--------------------------------|:-----------------|:-------------------------|:--------|
-| `subscribe_data()`              | Real-time&nbsp;  | `on_data()`              | Live data updates |
-| `subscribe_instrument()`        | Real-time&nbsp;  | `on_instrument()`        | Live instrument definition updates |
-| `subscribe_instruments()`       | Real-time&nbsp;  | `on_instrument()`        | Live instrument definition updates (for venue) |
-| `subscribe_order_book_deltas()` | Real-time&nbsp;  | `on_order_book_deltas()` | Live order book updates |
-| `subscribe_quote_ticks()`       | Real-time&nbsp;  | `on_quote_tick()`        | Live quote updates |
-| `subscribe_trade_ticks()`       | Real-time&nbsp;  | `on_trade_tick()`        | Live trade updates |
-| `subscribe_mark_prices()`       | Real-time&nbsp;  | `on_mark_price()`        | Live mark price updates |
-| `subscribe_index_prices()`      | Real-time&nbsp;  | `on_index_price()`       | Live index price updates |
-| `subscribe_bars()`              | Real-time&nbsp;  | `on_bar()`               | Live bar updates |
-| `subscribe_instrument_status()` | Real-time&nbsp;  | `on_instrument_status()` | Live instrument status updates |
-| `subscribe_instrument_close()`  | Real-time&nbsp;  | `on_instrument_close()`  | Live instrument close updates |
-| `request_data()`                | Historical       | `on_historical_data()`   | Historical data processing |
-| `request_instrument()`          | Historical       | `on_instrument()`        | Instrument definition updates |
-| `request_instruments()`         | Historical       | `on_historical_data()`   | Instrument definition updates |
-| `request_quote_ticks()`         | Historical       | `on_historical_data()`   | Historical quotes processing |
-| `request_trade_ticks()`         | Historical       | `on_historical_data()`   | Historical trades processing |
-| `request_bars()`                | Historical       | `on_historical_data()`   | Historical bars processing |
-| `request_aggregated_bars()`     | Historical       | `on_historical_data()`   | Historical aggregated bars (on-the-fly) |
+| `subscribe_data()`              | Real‑time        | `on_data()`              | Live data updates. |
+| `subscribe_instrument()`        | Real‑time        | `on_instrument()`        | Live instrument definition updates. |
+| `subscribe_instruments()`       | Real‑time        | `on_instrument()`        | Live instrument definition updates (for venue). |
+| `subscribe_order_book_deltas()` | Real‑time        | `on_order_book_deltas()` | Live order book updates. |
+| `subscribe_quote_ticks()`       | Real‑time        | `on_quote_tick()`        | Live quote updates. |
+| `subscribe_trade_ticks()`       | Real‑time        | `on_trade_tick()`        | Live trade updates. |
+| `subscribe_mark_prices()`       | Real‑time        | `on_mark_price()`        | Live mark price updates. |
+| `subscribe_index_prices()`      | Real‑time        | `on_index_price()`       | Live index price updates. |
+| `subscribe_funding_rates()`     | Real‑time        | `on_funding_rate()`      | Live funding rate updates. |
+| `subscribe_bars()`              | Real‑time        | `on_bar()`               | Live bar updates. |
+| `subscribe_instrument_status()` | Real‑time        | `on_instrument_status()` | Live instrument status updates. |
+| `subscribe_instrument_close()`  | Real‑time        | `on_instrument_close()`  | Live instrument close updates. |
+| `subscribe_order_fills()`       | Real‑time        | `on_order_filled()`      | Live order fill events for an instrument. |
+| `request_data()`                | Historical       | `on_historical_data()`   | Historical data processing. |
+| `request_instrument()`          | Historical       | `on_instrument()`        | Instrument definition updates. |
+| `request_instruments()`         | Historical       | `on_instrument()`        | Instrument definition updates. |
+| `request_quote_ticks()`         | Historical       | `on_historical_data()`   | Historical quotes processing. |
+| `request_trade_ticks()`         | Historical       | `on_historical_data()`   | Historical trades processing. |
+| `request_bars()`                | Historical       | `on_historical_data()`   | Historical bars processing. |
+| `request_aggregated_bars()`     | Historical       | `on_historical_data()`   | Historical aggregated bars (on-the-fly). |
 
 ### Example
 
@@ -101,8 +103,8 @@ Here's an example demonstrating both historical and real-time data handling:
 from nautilus_trader.common.actor import Actor
 from nautilus_trader.config import ActorConfig
 from nautilus_trader.core.data import Data
-from nautilus_trader.model.data import Bar, BarType
-from nautilus_trader.model.identifiers import ClientId, InstrumentId
+from nautilus_trader.model import Bar, BarType
+from nautilus_trader.model import ClientId, InstrumentId
 
 
 class MyActorConfig(ActorConfig):
@@ -120,20 +122,19 @@ class MyActor(Actor):
         self.request_bars(
             bar_type=self.bar_type,
             # Many optional parameters
-            start=None,            # datetime, optional
-            end=None,              # datetime, optional
-            callback=None,         # called with the request ID when the response has completed
-            update_catalog=False,  # bool, default False
-            params=None,           # dict[str, Any], optional
+            start=None,                # datetime, optional
+            end=None,                  # datetime, optional
+            callback=None,             # called with the request ID when completed
+            update_catalog_mode=None,  # UpdateCatalogMode | None, default None
+            params=None,               # dict[str, Any], optional
         )
 
         # Subscribe to real-time data - will be processed by on_bar() handler
         self.subscribe_bars(
             bar_type=self.bar_type,
             # Many optional parameters
-            client_id=None,       # ClientId, optional
-            await_partial=False,  # bool, default False
-            params=None,          # dict[str, Any], optional
+            client_id=None,  # ClientId, optional
+            params=None,     # dict[str, Any], optional
         )
 
     def on_historical_data(self, data: Data) -> None:
@@ -157,4 +158,55 @@ based on the data context. For example, you might want to:
 When debugging data flow issues, check that you're looking at the correct handler for your data source.
 If you're not seeing data in `on_bar()` but see log messages about receiving bars, check `on_historical_data()`
 as the data might be coming from a request rather than a subscription.
+:::
+
+## Order fill subscriptions
+
+Actors can subscribe to order fill events for specific instruments using `subscribe_order_fills()`. This is useful
+for monitoring trading activity, implementing custom fill analysis, or tracking execution quality.
+
+When subscribed, all order fills for the specified instrument are forwarded to the `on_order_filled()` handler,
+regardless of which strategy or component generated the original order.
+
+### Example
+
+```python
+from nautilus_trader.common.actor import Actor
+from nautilus_trader.config import ActorConfig
+from nautilus_trader.model import InstrumentId
+from nautilus_trader.model.events import OrderFilled
+
+
+class MyActorConfig(ActorConfig):
+    instrument_id: InstrumentId  # example value: "ETHUSDT-PERP.BINANCE"
+
+
+class FillMonitorActor(Actor):
+    def __init__(self, config: MyActorConfig) -> None:
+        super().__init__(config)
+        self.fill_count = 0
+        self.total_volume = 0.0
+
+    def on_start(self) -> None:
+        # Subscribe to all fills for the instrument
+        self.subscribe_order_fills(self.config.instrument_id)
+
+    def on_order_filled(self, event: OrderFilled) -> None:
+        # Handle order fill events
+        self.fill_count += 1
+        self.total_volume += float(event.last_qty)
+
+        self.log.info(
+            f"Fill received: {event.order_side} {event.last_qty} @ {event.last_px}, "
+            f"Total fills: {self.fill_count}, Volume: {self.total_volume}"
+        )
+
+    def on_stop(self) -> None:
+        # Unsubscribe from fills
+        self.unsubscribe_order_fills(self.config.instrument_id)
+```
+
+:::note
+Order fill subscriptions are message bus-only subscriptions and do not involve the data engine.
+The `on_order_filled()` handler will only receive events while the actor is in a running state.
 :::

@@ -22,7 +22,7 @@ use std::{
 
 use nautilus_common::{
     cache::Cache,
-    msgbus::{self, handler::MessageHandler},
+    msgbus::{self, MStr, Topic, handler::MessageHandler},
     timer::TimeEvent,
 };
 use nautilus_model::{
@@ -39,10 +39,16 @@ pub struct BookSnapshotInfo {
     pub venue: Venue,
     pub is_composite: bool,
     pub root: Ustr,
-    pub topic: Ustr,
+    pub topic: MStr<Topic>,
     pub interval_ms: NonZeroUsize,
 }
 
+/// Handles order book updates and delta processing for a specific instrument.
+///
+/// The `BookUpdater` processes incoming order book deltas and maintains
+/// the current state of an order book. It can handle both incremental
+/// updates and full snapshots for the instrument it's assigned to.
+#[derive(Debug)]
 pub struct BookUpdater {
     pub id: Ustr,
     pub instrument_id: InstrumentId,
@@ -67,18 +73,25 @@ impl MessageHandler for BookUpdater {
 
     fn handle(&self, message: &dyn Any) {
         // TODO: Temporary handler implementation (this will be removed soon)
-        if let Some(data) = message.downcast_ref::<Data>() {
-            if let Some(book) = self
+        if let Some(data) = message.downcast_ref::<Data>()
+            && let Some(book) = self
                 .cache
                 .borrow_mut()
                 .order_book_mut(&data.instrument_id())
-            {
-                match data {
-                    Data::Delta(delta) => book.apply_delta(delta),
-                    Data::Deltas(deltas) => book.apply_deltas(deltas),
-                    Data::Depth10(depth) => book.apply_depth(depth),
-                    _ => log::error!("Invalid data type for book update, was {data:?}"),
+        {
+            match data {
+                Data::Delta(delta) => {
+                    if let Err(e) = book.apply_delta(delta) {
+                        log::error!("Failed to apply delta: {e}");
+                    }
                 }
+                Data::Deltas(deltas) => {
+                    if let Err(e) = book.apply_deltas(deltas) {
+                        log::error!("Failed to apply deltas: {e}");
+                    }
+                }
+                Data::Depth10(depth) => book.apply_depth(depth),
+                _ => log::error!("Invalid data type for book update, was {data:?}"),
             }
         }
     }
@@ -88,6 +101,12 @@ impl MessageHandler for BookUpdater {
     }
 }
 
+/// Creates periodic snapshots of order books at configured intervals.
+///
+/// The `BookSnapshotter` generates order book snapshots on timer events,
+/// publishing them as market data. This is useful for providing periodic
+/// full order book state updates in addition to incremental delta updates.
+#[derive(Debug)]
 pub struct BookSnapshotter {
     pub id: Ustr,
     pub timer_name: Ustr,
@@ -123,14 +142,19 @@ impl BookSnapshotter {
             let topic = self.snap_info.topic;
             let underlying = self.snap_info.root;
             for instrument in cache.instruments(&self.snap_info.venue, Some(&underlying)) {
-                self.publish_order_book(&instrument.id(), &topic, &cache);
+                self.publish_order_book(&instrument.id(), topic, &cache);
             }
         } else {
-            self.publish_order_book(&self.snap_info.instrument_id, &self.snap_info.topic, &cache);
+            self.publish_order_book(&self.snap_info.instrument_id, self.snap_info.topic, &cache);
         }
     }
 
-    fn publish_order_book(&self, instrument_id: &InstrumentId, topic: &Ustr, cache: &Ref<Cache>) {
+    fn publish_order_book(
+        &self,
+        instrument_id: &InstrumentId,
+        topic: MStr<Topic>,
+        cache: &Ref<Cache>,
+    ) {
         let book = cache
             .order_book(instrument_id)
             .unwrap_or_else(|| panic!("OrderBook for {instrument_id} was not in cache"));

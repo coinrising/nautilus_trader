@@ -17,6 +17,7 @@ use nautilus_common::{clock::TestClock, timer::TimeEventHandlerV2};
 use nautilus_core::UnixNanos;
 
 /// Provides a means of accumulating and draining time event handlers.
+#[derive(Debug)]
 pub struct TimeEventAccumulator {
     event_handlers: Vec<TimeEventHandlerV2>,
 }
@@ -57,6 +58,7 @@ impl Default for TimeEventAccumulator {
 ////////////////////////////////////////////////////////////////////////////////
 // Tests
 ////////////////////////////////////////////////////////////////////////////////
+
 #[cfg(all(test, feature = "python"))]
 mod tests {
     use nautilus_common::timer::{TimeEvent, TimeEventCallback};
@@ -69,9 +71,8 @@ mod tests {
 
     #[rstest]
     fn test_accumulator_drain_sorted() {
-        pyo3::prepare_freethreaded_python();
-
-        Python::with_gil(|py| {
+        Python::initialize();
+        Python::attach(|py| {
             let py_list = PyList::empty(py);
             let py_append = Py::from(py_list.getattr("append").unwrap());
 

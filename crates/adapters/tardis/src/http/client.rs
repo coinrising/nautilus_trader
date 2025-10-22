@@ -23,11 +23,11 @@ use super::{
     TARDIS_BASE_URL,
     error::{Error, TardisErrorResponse},
     instruments::is_available,
-    models::InstrumentInfo,
+    models::TardisInstrumentInfo,
     parse::parse_instrument_any,
     query::InstrumentFilter,
 };
-use crate::enums::Exchange;
+use crate::enums::TardisExchange;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -47,6 +47,11 @@ pub struct TardisHttpClient {
 
 impl TardisHttpClient {
     /// Creates a new [`TardisHttpClient`] instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no API key is provided (argument or `TARDIS_API_KEY` env var),
+    /// or if the HTTP client cannot be built.
     pub fn new(
         api_key: Option<&str>,
         base_url: Option<&str>,
@@ -80,7 +85,13 @@ impl TardisHttpClient {
 
     async fn handle_error_response<T>(resp: Response) -> Result<T> {
         let status = resp.status().as_u16();
-        let error_text = resp.text().await.unwrap_or_default();
+        let error_text = match resp.text().await {
+            Ok(text) => text,
+            Err(e) => {
+                tracing::warn!("Failed to extract error response body: {e}");
+                String::from("Failed to extract error response")
+            }
+        };
 
         if let Ok(error) = serde_json::from_str::<TardisErrorResponse>(&error_text) {
             Err(Error::ApiError {
@@ -99,21 +110,25 @@ impl TardisHttpClient {
 
     /// Returns all Tardis instrument definitions for the given `exchange`.
     ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails or the response cannot be parsed.
+    ///
     /// See <https://docs.tardis.dev/api/instruments-metadata-api>.
     pub async fn instruments_info(
         &self,
-        exchange: Exchange,
+        exchange: TardisExchange,
         symbol: Option<&str>,
         filter: Option<&InstrumentFilter>,
-    ) -> Result<Vec<InstrumentInfo>> {
+    ) -> Result<Vec<TardisInstrumentInfo>> {
         let mut url = format!("{}/instruments/{exchange}", &self.base_url);
         if let Some(symbol) = symbol {
             url.push_str(&format!("/{symbol}"));
         }
-        if let Some(filter) = filter {
-            if let Ok(filter_json) = serde_json::to_string(filter) {
-                url.push_str(&format!("?filter={}", urlencoding::encode(&filter_json)));
-            }
+        if let Some(filter) = filter
+            && let Ok(filter_json) = serde_json::to_string(filter)
+        {
+            url.push_str(&format!("?filter={}", urlencoding::encode(&filter_json)));
         }
         tracing::debug!("Requesting: {url}");
 
@@ -132,7 +147,7 @@ impl TardisHttpClient {
         let body = resp.text().await?;
         tracing::trace!("{body}");
 
-        if let Ok(instrument) = serde_json::from_str::<InstrumentInfo>(&body) {
+        if let Ok(instrument) = serde_json::from_str::<TardisInstrumentInfo>(&body) {
             return Ok(vec![instrument]);
         }
 
@@ -148,11 +163,15 @@ impl TardisHttpClient {
 
     /// Returns all Nautilus instrument definitions for the given `exchange`, and filter params.
     ///
+    /// # Errors
+    ///
+    /// Returns an error if fetching instrument info or parsing into domain types fails.
+    ///
     /// See <https://docs.tardis.dev/api/instruments-metadata-api>.
     #[allow(clippy::too_many_arguments)]
     pub async fn instruments(
         &self,
-        exchange: Exchange,
+        exchange: TardisExchange,
         symbol: Option<&str>,
         filter: Option<&InstrumentFilter>,
         start: Option<UnixNanos>,

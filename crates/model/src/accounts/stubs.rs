@@ -13,6 +13,9 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
+//! Lightweight stub implementations useful in unit tests where a full account object is
+//! unnecessary.
+
 use rstest::fixture;
 
 use crate::{
@@ -43,14 +46,14 @@ impl Default for CashAccount {
             0.into(),
             Some(Currency::USD()),
         );
-        Self::new(init_event, false)
+        Self::new(init_event, false, false)
     }
 }
 
 impl Default for AccountAny {
     /// Creates a new default [`AccountAny`] instance.
     fn default() -> Self {
-        AccountAny::Cash(CashAccount::default())
+        Self::Cash(CashAccount::default())
     }
 }
 
@@ -61,17 +64,17 @@ pub fn margin_account(margin_account_state: AccountState) -> MarginAccount {
 
 #[fixture]
 pub fn cash_account(cash_account_state: AccountState) -> CashAccount {
-    CashAccount::new(cash_account_state, true)
+    CashAccount::new(cash_account_state, true, false)
 }
 
 #[fixture]
 pub fn cash_account_million_usd(cash_account_state_million_usd: AccountState) -> CashAccount {
-    CashAccount::new(cash_account_state_million_usd, true)
+    CashAccount::new(cash_account_state_million_usd, true, false)
 }
 
 #[fixture]
 pub fn cash_account_multi(cash_account_state_multi: AccountState) -> CashAccount {
-    CashAccount::new(cash_account_state_multi, true)
+    CashAccount::new(cash_account_state_multi, true, false)
 }
 
 /// Helper to calculate commission in test fixtures.

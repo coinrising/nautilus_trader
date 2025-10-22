@@ -25,6 +25,8 @@
 
 use std::fmt::{Debug, Display};
 
+use rust_decimal::Decimal;
+
 use crate::collections::{MapLike, SetLike};
 
 /// A message prefix that can be used with calls to `expect` or other assertion-related functions.
@@ -67,7 +69,7 @@ pub fn check_predicate_false(predicate: bool, fail_msg: &str) -> anyhow::Result<
 ///
 /// # Errors
 ///
-/// This function returns an error if `s` is empty.
+/// Returns an error if `s` is empty.
 #[inline(always)]
 pub fn check_nonempty_string<T: AsRef<str>>(s: T, param: &str) -> anyhow::Result<()> {
     if s.as_ref().is_empty() {
@@ -80,12 +82,12 @@ pub fn check_nonempty_string<T: AsRef<str>>(s: T, param: &str) -> anyhow::Result
 ///
 /// # Errors
 ///
-/// This function returns an error:
-/// - If `s` is an empty string.
-/// - If `s` consists solely of whitespace characters.
-/// - If `s` contains one or more non-ASCII characters.
+/// Returns an error if:
+/// - `s` is an empty string.
+/// - `s` consists solely of whitespace characters.
+/// - `s` contains one or more non-ASCII characters.
 #[inline(always)]
-pub fn check_valid_string<T: AsRef<str>>(s: T, param: &str) -> anyhow::Result<()> {
+pub fn check_valid_string_ascii<T: AsRef<str>>(s: T, param: &str) -> anyhow::Result<()> {
     let s = s.as_ref();
 
     if s.is_empty() {
@@ -110,18 +112,48 @@ pub fn check_valid_string<T: AsRef<str>>(s: T, param: &str) -> anyhow::Result<()
     Ok(())
 }
 
+/// Checks the string `s` has semantic meaning and allows UTF-8 characters.
+///
+/// This is a relaxed version of [`check_valid_string_ascii`] that permits non-ASCII UTF-8 characters.
+/// Use this for external identifiers (e.g., exchange symbols) that may contain Unicode characters.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - `s` is an empty string.
+/// - `s` consists solely of whitespace characters.
+#[inline(always)]
+pub fn check_valid_string_utf8<T: AsRef<str>>(s: T, param: &str) -> anyhow::Result<()> {
+    let s = s.as_ref();
+
+    if s.is_empty() {
+        anyhow::bail!("invalid string for '{param}', was empty");
+    }
+
+    let has_non_whitespace = s.chars().any(|c| !c.is_whitespace());
+
+    if !has_non_whitespace {
+        anyhow::bail!("invalid string for '{param}', was all whitespace");
+    }
+
+    Ok(())
+}
+
 /// Checks the string `s` if Some, contains only ASCII characters and has semantic meaning.
 ///
 /// # Errors
 ///
-/// This function returns an error:
-/// - If `s` is an empty string.
-/// - If `s` consists solely of whitespace characters.
-/// - If `s` contains one or more non-ASCII characters.
+/// Returns an error if:
+/// - `s` is an empty string.
+/// - `s` consists solely of whitespace characters.
+/// - `s` contains one or more non-ASCII characters.
 #[inline(always)]
-pub fn check_valid_string_optional<T: AsRef<str>>(s: Option<T>, param: &str) -> anyhow::Result<()> {
+pub fn check_valid_string_ascii_optional<T: AsRef<str>>(
+    s: Option<T>,
+    param: &str,
+) -> anyhow::Result<()> {
     if let Some(s) = s {
-        check_valid_string(s, param)?;
+        check_valid_string_ascii(s, param)?;
     }
     Ok(())
 }
@@ -236,12 +268,12 @@ pub fn check_positive_i64(value: i64, param: &str) -> anyhow::Result<()> {
 #[inline(always)]
 pub fn check_positive_i128(value: i128, param: &str) -> anyhow::Result<()> {
     if value <= 0 {
-        anyhow::bail!("invalid i64 for '{param}' not positive, was {value}")
+        anyhow::bail!("invalid i128 for '{param}' not positive, was {value}")
     }
     Ok(())
 }
 
-/// Checks the `f64` value is non-negative (< 0).
+/// Checks the `f64` value is non-negative (>= 0).
 ///
 /// # Errors
 ///
@@ -303,7 +335,12 @@ pub fn check_in_range_inclusive_i64(value: i64, l: i64, r: i64, param: &str) -> 
 /// Returns an error if the validation check fails.
 #[inline(always)]
 pub fn check_in_range_inclusive_f64(value: f64, l: f64, r: f64, param: &str) -> anyhow::Result<()> {
-    const EPSILON: f64 = 1e-15; // Epsilon to account for floating-point precision issues
+    // SAFETY: Hardcoded epsilon is intentional and appropriate here because:
+    // - 1e-15 is conservative for IEEE 754 double precision (machine epsilon ~2.22e-16)
+    // - This function is used for validation, not high-precision calculations
+    // - The epsilon prevents spurious failures due to floating-point representation
+    // - Making it configurable would complicate the API for minimal benefit
+    const EPSILON: f64 = 1e-15;
 
     if value.is_nan() || value.is_infinite() {
         anyhow::bail!("invalid f64 for '{param}', was {value}")
@@ -502,6 +539,19 @@ where
     Ok(())
 }
 
+/// Checks the `Decimal` value is positive (> 0).
+///
+/// # Errors
+///
+/// Returns an error if the validation check fails.
+#[inline(always)]
+pub fn check_positive_decimal(value: Decimal, param: &str) -> anyhow::Result<()> {
+    if value <= Decimal::ZERO {
+        anyhow::bail!("invalid Decimal for '{param}' not positive, was {value}")
+    }
+    Ok(())
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Tests
 ////////////////////////////////////////////////////////////////////////////////
@@ -510,9 +560,11 @@ mod tests {
     use std::{
         collections::{HashMap, HashSet},
         fmt::Display,
+        str::FromStr,
     };
 
     use rstest::rstest;
+    use rust_decimal::Decimal;
 
     use super::*;
 
@@ -556,8 +608,8 @@ mod tests {
     #[case("a a")]
     #[case(" a ")]
     #[case("abc")]
-    fn test_check_valid_string_with_valid_value(#[case] s: &str) {
-        assert!(check_valid_string(s, "value").is_ok());
+    fn test_check_valid_string_ascii_with_valid_value(#[case] s: &str) {
+        assert!(check_valid_string_ascii(s, "value").is_ok());
     }
 
     #[rstest]
@@ -565,8 +617,25 @@ mod tests {
     #[case(" ")] // <-- whitespace-only
     #[case("  ")] // <-- whitespace-only string
     #[case("🦀")] // <-- contains non-ASCII char
-    fn test_check_valid_string_with_invalid_values(#[case] s: &str) {
-        assert!(check_valid_string(s, "value").is_err());
+    fn test_check_valid_string_ascii_with_invalid_values(#[case] s: &str) {
+        assert!(check_valid_string_ascii(s, "value").is_err());
+    }
+
+    #[rstest]
+    #[case(" a")]
+    #[case("a ")]
+    #[case("abc")]
+    #[case("ETHUSDT")]
+    fn test_check_valid_string_utf8_with_valid_values(#[case] s: &str) {
+        assert!(check_valid_string_utf8(s, "value").is_ok());
+    }
+
+    #[rstest]
+    #[case("")] // <-- empty string
+    #[case(" ")] // <-- whitespace-only
+    #[case("  ")] // <-- whitespace-only string
+    fn test_check_valid_string_utf8_with_invalid_values(#[case] s: &str) {
+        assert!(check_valid_string_utf8(s, "value").is_err());
     }
 
     #[rstest]
@@ -576,8 +645,8 @@ mod tests {
     #[case(Some("a a"))]
     #[case(Some(" a "))]
     #[case(Some("abc"))]
-    fn test_check_valid_string_optional_with_valid_value(#[case] s: Option<&str>) {
-        assert!(check_valid_string_optional(s, "value").is_ok());
+    fn test_check_valid_string_ascii_optional_with_valid_value(#[case] s: Option<&str>) {
+        assert!(check_valid_string_ascii_optional(s, "value").is_ok());
     }
 
     #[rstest]
@@ -899,6 +968,19 @@ mod tests {
         #[case] expected: bool,
     ) {
         let result = check_member_in_set(&member, set, member_name, set_name).is_ok();
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case("1", true)] // simple positive integer
+    #[case("0.0000000000000000000000000001", true)] // smallest positive (1 × 10⁻²⁸)
+    #[case("79228162514264337593543950335", true)] // very large positive (≈ Decimal::MAX)
+    #[case("0", false)] // zero should fail
+    #[case("-0.0000000000000000000000000001", false)] // tiny negative
+    #[case("-1", false)] // simple negative integer
+    fn test_check_positive_decimal(#[case] raw: &str, #[case] expected: bool) {
+        let value = Decimal::from_str(raw).expect("valid decimal literal");
+        let result = super::check_positive_decimal(value, "param").is_ok();
         assert_eq!(result, expected);
     }
 }

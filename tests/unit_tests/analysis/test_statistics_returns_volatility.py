@@ -17,7 +17,8 @@ import pandas as pd
 from numpy import float64
 from numpy import nan
 
-from nautilus_trader.analysis.statistics.returns_volatility import ReturnsVolatility
+from nautilus_trader.analysis import ReturnsVolatility
+from tests.unit_tests.analysis.conftest import convert_series_to_dict
 
 
 class TestReturnsAnnualVolatilityPortfolioStatistic:
@@ -38,7 +39,7 @@ class TestReturnsAnnualVolatilityPortfolioStatistic:
         stat = ReturnsVolatility()
 
         # Act
-        result = stat.calculate_from_returns(data)
+        result = stat.calculate_from_returns(convert_series_to_dict(data))
 
         # Assert
         assert pd.isna(result)
@@ -51,7 +52,7 @@ class TestReturnsAnnualVolatilityPortfolioStatistic:
         stat = ReturnsVolatility()
 
         # Act
-        result = stat.calculate_from_returns(data)
+        result = stat.calculate_from_returns(convert_series_to_dict(data))
 
         # Assert
         assert pd.isna(result)
@@ -64,20 +65,20 @@ class TestReturnsAnnualVolatilityPortfolioStatistic:
         stat = ReturnsVolatility()
 
         # Act
-        result = stat.calculate_from_returns(data)
+        result = stat.calculate_from_returns(convert_series_to_dict(data))
 
         # Assert
         assert result == 22.449944320643652
 
     def test_calculate_given_mix_of_pnls1_returns_expected(self):
         # Arrange
-        index = pd.date_range("1/1/2000", periods=5, freq="12H")
+        index = pd.date_range("1/1/2000", periods=5, freq="12h")
         data = pd.Series([3.0, 2.0, 1.0, -1.0, -2.0], index=index, dtype=float64)
 
         stat = ReturnsVolatility()
 
         # Act
-        result = stat.calculate_from_returns(data)
+        result = stat.calculate_from_returns(convert_series_to_dict(data))
 
         # Assert
         assert result == 57.23635208501674

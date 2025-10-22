@@ -17,10 +17,11 @@ cdef extern from "../includes/core.h":
     const uint64_t NANOSECONDS_IN_MICROSECOND # = 1000
 
     # `CVec` is a C compatible struct that stores an opaque pointer to a block of
-    # memory, it's length and the capacity of the vector it was allocated from.
+    # memory, its length and the capacity of the vector it was allocated from.
     #
-    # NOTE: Changing the values here may lead to undefined behavior when the
-    # memory is dropped.
+    # # Safety
+    #
+    # Changing the values here may lead to undefined behavior when the memory is dropped.
     cdef struct CVec:
         # Opaque pointer to block of memory storing elements to access the
         # elements cast it to the underlying type.
@@ -36,6 +37,16 @@ cdef extern from "../includes/core.h":
     cdef struct UUID4_t:
         # The UUID v4 value as a fixed-length C string byte array (includes null terminator).
         uint8_t value[37];
+
+    # Construct a new *empty* [`CVec`] value for use as initialiser/sentinel in foreign code.
+    CVec cvec_new();
+
+    # Converts a UNIX nanoseconds timestamp to an ISO 8601 (RFC 3339) format C string pointer.
+    const char *unix_nanos_to_iso8601_cstr(uint64_t timestamp_ns);
+
+    # Converts a UNIX nanoseconds timestamp to an ISO 8601 (RFC 3339) format C string pointer
+    # with millisecond precision.
+    const char *unix_nanos_to_iso8601_millis_cstr(uint64_t timestamp_ns);
 
     # Converts seconds to nanoseconds (ns).
     uint64_t secs_to_nanos(double secs);
@@ -58,22 +69,11 @@ cdef extern from "../includes/core.h":
     # Converts nanoseconds (ns) to microseconds (μs).
     uint64_t nanos_to_micros(uint64_t nanos);
 
-    void cvec_drop(CVec cvec);
-
-    CVec cvec_new();
-
-    # Converts a UNIX nanoseconds timestamp to an ISO 8601 (RFC 3339) format C string pointer.
-    const char *unix_nanos_to_iso8601_cstr(uint64_t timestamp_ns);
-
-    # Converts a UNIX nanoseconds timestamp to an ISO 8601 (RFC 3339) format C string pointer
-    # with millisecond precision.
-    const char *unix_nanos_to_iso8601_millis_cstr(uint64_t timestamp_ns);
-
     # Return the decimal precision inferred from the given C string.
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     #
     # # Panics
     #
@@ -84,7 +84,7 @@ cdef extern from "../includes/core.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     #
     # # Panics
     #
@@ -102,21 +102,28 @@ cdef extern from "../includes/core.h":
     # Panics if `ptr` is null.
     void cstr_drop(const char *ptr);
 
+    # Generate a new random (version-4) UUID and return it by value.
     UUID4_t uuid4_new();
 
     # Returns a [`UUID4`] from C string pointer.
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     #
     # # Panics
     #
     # Panics if `ptr` cannot be cast to a valid C string.
     UUID4_t uuid4_from_cstr(const char *ptr);
 
+    # Return a borrowed *null-terminated* UTF-8 C string representing `uuid`.
+    #
+    # The pointer remains valid for as long as the input `UUID4` reference lives – callers **must
+    # not** attempt to free it.
     const char *uuid4_to_cstr(const UUID4_t *uuid);
 
+    # Compare two UUID values, returning `1` when they are equal and `0` otherwise.
     uint8_t uuid4_eq(const UUID4_t *lhs, const UUID4_t *rhs);
 
+    # Compute the stable [`u64`] hash of `uuid` using Rust’s default hasher.
     uint64_t uuid4_hash(const UUID4_t *uuid);

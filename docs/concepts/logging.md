@@ -1,6 +1,6 @@
 # Logging
 
-The platform provides logging for both backtesting and live trading using a high-performance logging system implemented in Rust
+The platform provides logging for both backtesting and live trading using a high-performance logging subsystem implemented in Rust
 with a standardized facade from the `log` crate.
 
 The core logger operates in a separate thread and uses a multi-producer single-consumer (MPSC) channel to receive log messages.
@@ -20,31 +20,38 @@ Infrastructure such as [Vector](https://github.com/vectordotdev/vector) can be i
 Logging can be configured by importing the `LoggingConfig` object.
 By default, log events with an 'INFO' `LogLevel` and higher are written to stdout/stderr.
 
-Log level (`LogLevel`) values include (and generally match Rusts `tracing` level filters):
+Log level (`LogLevel`) values include (and generally match Rust's `tracing` level filters).
+
+Python loggers expose the following levels:
 
 - `OFF`
+- `TRACE` (can be set as a filter level, but not directly generated from Python)
 - `DEBUG`
 - `INFO`
-- `WARNING` or `WARN`
+- `WARNING`
 - `ERROR`
 
-:::info
-See the `LoggingConfig` [API Reference](../api_reference/config.md) for further details.
+:::warning
+The Python `Logger` does not provide a `trace()` method; `TRACE` level logs are only emitted by the underlying Rust components and cannot be generated directly from Python code. However, you can set `TRACE` as a logging level filter to see trace logs from Rust components.
+
+See the `LoggingConfig` [API Reference](../api_reference/config.md#class-loggingconfig) for further details.
 :::
 
 Logging can be configured in the following ways:
 
-- Minimum `LogLevel` for stdout/stderr
-- Minimum `LogLevel` for log files
-- Maximum size before rotating a log file
-- Maximum number of backup log files to maintain when rotating
-- Automatic log file naming with date or timestamp components, or custom log file name
-- Directory for writing log files
-- Plain text or JSON log file formatting
-- Filtering of individual components by log level
-- ANSI colors in log lines
-- Bypass logging entirely
-- Print Rust config to stdout at initialization
+- Minimum `LogLevel` for stdout/stderr.
+- Minimum `LogLevel` for log files.
+- Maximum size before rotating a log file.
+- Maximum number of backup log files to maintain when rotating.
+- Automatic log file naming with date or timestamp components, or custom log file name.
+- Directory for writing log files.
+- Plain text or JSON log file formatting.
+- Filtering of individual components by log level.
+- ANSI colors in log lines.
+- Bypass logging entirely.
+- Print Rust config to stdout at initialization.
+- Optionally initialize logging via the PyO3 bridge (`use_pyo3`) to capture log events emitted by Rust components.
+- Truncate existing log file on startup if it already exists (`clear_log_file`)
 
 ### Standard output logging
 
@@ -89,7 +96,7 @@ The format depends on whether file rotation is enabled:
   - `{instance_id}`: A unique instance identifier.
   - `{log|json}`: File suffix based on format setting.
 
-**With file rotation disabled**:
+**Without size-based rotation (default naming)**:
 
 - **Format**: `{trader_id}_{%Y-%m-%d}_{instance_id}.{log|json}`
 - **Example**: `TESTER-001_2025-04-09_d7dc12c8-7008-4042-8ac4-017c3db0fc38.log`
@@ -98,6 +105,7 @@ The format depends on whether file rotation is enabled:
   - `{%Y-%m-%d}`: Date only (YYYY-MM-DD).
   - `{instance_id}`: A unique instance identifier.
   - `{log|json}`: File suffix based on format setting.
+- **Note**: With default naming and no size limit, logs rotate daily at UTC midnight.
 
 **Custom naming**:
 
@@ -131,6 +139,33 @@ config_node = TradingNodeConfig(
 
 For backtesting, the `BacktestEngineConfig` class can be used instead of `TradingNodeConfig`, as the same options are available.
 
+### Components-only logging
+
+When focusing on a subset of noisy systems, enable `log_components_only` to log messages only from components explicitly listed in `log_component_levels`. All other components are suppressed regardless of the global `log_level` or file level.
+
+Example (Python configuration):
+
+```python
+logging = LoggingConfig(
+    log_level="INFO",
+    log_component_levels={
+        "RiskEngine": "DEBUG",
+        "Portfolio": "INFO",
+    },
+    log_components_only=True,
+)
+```
+
+If configuring via the environment using the Rust spec string, include `log_components_only` alongside component filters, for example:
+
+```bash
+export NAUTILUS_LOG="stdout=Info;log_components_only;RiskEngine=Debug;Portfolio=Info"
+```
+
+:::warning
+If `log_components_only=True` (or `log_components_only` is present in the spec string) and `log_component_levels` is empty, no log messages will be emitted to stdout/stderr or files. Add at least one component filter or disable components-only logging.
+:::
+
 ### Log Colors
 
 ANSI color codes are utilized to enhance the readability of logs when viewed in a terminal.
@@ -142,7 +177,7 @@ To accommodate for such scenarios, the `LoggingConfig.log_colors` option can be 
 Disabling `log_colors` will prevent the addition of ANSI color codes to the log messages, ensuring
 compatibility across different environments where color rendering is not supported.
 
-## Using a Logger directly
+## Using a logger directly
 
 It's possible to use `Logger` objects directly, and these can be initialized anywhere (very similar to the Python built-in `logging` API).
 
@@ -162,13 +197,28 @@ See the `init_logging` [API Reference](../api_reference/common) for further deta
 :::
 
 :::warning
-Only one logging system can be initialized per process with an `init_logging` call, and the `LogGuard` which is returned must be kept alive for the lifetime of the program.
+Only one logging subsystem can be initialized per process with an `init_logging` call. Multiple `LogGuard` instances (up to 255) can exist concurrently, and the logging thread will remain active until all guards are dropped.
 :::
 
-## LogGuard: Managing log lifecycle
+## LogGuard: managing log lifecycle
 
-The `LogGuard` ensures that the logging system remains active and operational throughout the lifecycle of a process.
-It prevents premature shutdown of the logging system when running multiple engines in the same process.
+The `LogGuard` ensures that the logging subsystem remains active and operational throughout the lifecycle of a process.
+It prevents premature shutdown of the logging subsystem when running multiple engines in the same process.
+
+### Reference Counting Implementation
+
+The logging system uses reference counting to track active `LogGuard` instances:
+
+- **Counter increments**: When a new `LogGuard` is created, an atomic counter is incremented.
+- **Counter decrements**: When a `LogGuard` is dropped, the counter is decremented.
+- **Logging thread termination**: When the counter reaches zero (last `LogGuard` dropped), the logging thread is properly joined to ensure all pending log messages are written before the process terminates.
+- **Maximum guards**: The system supports up to 255 concurrent `LogGuard` instances. Attempting to create more will cause a panic.
+
+This mechanism ensures that:
+
+1. Log messages are never lost due to premature thread termination.
+2. The logging thread remains active as long as any `LogGuard` exists.
+3. All buffered logs are properly flushed to their destinations when the program ends.
 
 ### Why use LogGuard?
 
@@ -178,11 +228,11 @@ Without a `LogGuard`, any attempt to run sequential engines in the same process 
 Error sending log event: [INFO] ...
 ```
 
-This occurs because the logging system's underlying channel and Rust `Logger` are closed when the first engine is disposed.
-As a result, subsequent engines lose access to the logging system, leading to these errors.
+This occurs because the logging subsystem's underlying channel and Rust `Logger` are closed when the first engine is disposed.
+As a result, subsequent engines lose access to the logging subsystem, leading to these errors.
 
 By leveraging a `LogGuard`, you can ensure robust logging behavior across multiple backtests or engine runs in the same process.
-The `LogGuard` retains the resources of the logging system and ensures that logs continue to function correctly,
+The `LogGuard` retains the resources of the logging subsystem and ensures that logs continue to function correctly,
 even as engines are disposed and initialized.
 
 :::note
@@ -212,12 +262,25 @@ for i in range(number_of_backtests):
 
 ### Steps
 
-- **Initialize LogGuard once**: The `LogGuard` is obtained from the first engine (`engine.get_log_guard()`) and is retained throughout the process. This ensures that the logging system remains active.
-- **Dispose engines safely**: Each engine is safely disposed of after its backtest completes, without affecting the logging system.
-- **Reuse LogGuard**: The same `LogGuard` instance is reused for subsequent engines, preventing the logging system from shutting down prematurely.
+- **Initialize LogGuard once**: The `LogGuard` is obtained from the first engine (`engine.get_log_guard()`) and is retained throughout the process. This ensures that the logging subsystem remains active.
+- **Dispose engines safely**: Each engine is safely disposed of after its backtest completes, without affecting the logging subsystem.
+- **Reuse LogGuard**: The same `LogGuard` instance is reused for subsequent engines, preventing the logging subsystem from shutting down prematurely.
 
 ### Considerations
 
-- **Single LogGuard per process**: Only one `LogGuard` can be used per process.
-- **Thread safety**: The logging system, including `LogGuard`, is thread-safe, ensuring consistent behavior even in multi-threaded environments.
-- **Flush logs on termination**: Always ensure that logs are properly flushed when the process terminates. The `LogGuard` automatically handles this as it goes out of scope.
+- **Multiple LogGuards per process**: The system supports up to 255 concurrent `LogGuard` instances per process. Each guard increments a reference counter when created and decrements it when dropped.
+- **Thread safety**: The logging subsystem, including `LogGuard`, is thread-safe, ensuring consistent behavior even in multi-threaded environments.
+- **Automatic cleanup**: When the last `LogGuard` is dropped (reference count reaches zero), the logging thread is properly joined to ensure all pending logs are written before the process terminates.
+
+## Platform-specific considerations
+
+### Windows shutdown behavior
+
+On Windows, non-deterministic garbage collection during interpreter shutdown can occasionally
+prevent the logging thread from joining properly. When the last `LogGuard` is dropped, the
+logging subsystem signals the background thread to close and joins it to ensure all pending
+messages are written. If Python's garbage collector delays dropping the guard until after
+interpreter shutdown has begun, this join may not complete, resulting in truncated logs.
+
+This issue is tracked in GitHub [issue #3027](https://github.com/nautechsystems/nautilus_trader/issues/3027).
+A more deterministic shutdown mechanism is under consideration.

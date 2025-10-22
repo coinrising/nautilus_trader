@@ -13,22 +13,46 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-use super::{loser_avg::AvgLoser, winner_avg::AvgWinner};
-use crate::statistic::PortfolioStatistic;
+use std::fmt::{self, Display};
 
+use nautilus_model::position::Position;
+
+use super::{loser_avg::AvgLoser, winner_avg::AvgWinner};
+use crate::{Returns, statistic::PortfolioStatistic};
+
+/// Calculates the expectancy of a trading strategy based on realized PnLs.
+///
+/// Expectancy is defined as: `(Average Win × Win Rate) + (Average Loss × Loss Rate)`
+/// This metric provides insight into the expected profitability per trade and helps
+/// evaluate the overall edge of a trading strategy.
+///
+/// A positive expectancy indicates a profitable system over time, while a negative
+/// expectancy suggests losses.
+///
+/// # References
+///
+/// - Tharp, V. K. (1998). *Trade Your Way to Financial Freedom*. McGraw-Hill.
+/// - Elder, A. (1993). *Trading for a Living*. John Wiley & Sons.
+/// - Vince, R. (1992). *The Mathematics of Money Management*. John Wiley & Sons.
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.analysis")
 )]
 pub struct Expectancy {}
 
+impl Display for Expectancy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Expectancy")
+    }
+}
+
 impl PortfolioStatistic for Expectancy {
     type Item = f64;
 
     fn name(&self) -> String {
-        stringify!(Expectancy).to_string()
+        self.to_string()
     }
 
     fn calculate_from_realized_pnls(&self, realized_pnls: &[f64]) -> Option<Self::Item> {
@@ -52,10 +76,22 @@ impl PortfolioStatistic for Expectancy {
 
         Some(avg_winner.mul_add(win_rate, avg_loser * loss_rate))
     }
+    fn calculate_from_returns(&self, _returns: &Returns) -> Option<Self::Item> {
+        None
+    }
+
+    fn calculate_from_positions(&self, _positions: &[Position]) -> Option<Self::Item> {
+        None
+    }
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Tests
+////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
+    use nautilus_core::approx_eq;
     use rstest::rstest;
 
     use super::*;
@@ -65,7 +101,7 @@ mod tests {
         let expectancy = Expectancy {};
         let result = expectancy.calculate_from_realized_pnls(&[]);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), 0.0);
+        assert!(approx_eq!(f64, result.unwrap(), 0.0, epsilon = 1e-9));
     }
 
     #[rstest]
@@ -77,7 +113,7 @@ mod tests {
         assert!(result.is_some());
         // Expected: avg_winner = 20.0, win_rate = 1.0, loss_rate = 0.0
         // Expectancy = (20.0 * 1.0) + (0.0 * 0.0) = 20.0
-        assert_eq!(result.unwrap(), 20.0);
+        assert!(approx_eq!(f64, result.unwrap(), 20.0, epsilon = 1e-9));
     }
 
     #[rstest]
@@ -89,7 +125,7 @@ mod tests {
         assert!(result.is_some());
         // Expected: avg_loser = -20.0, win_rate = 0.0, loss_rate = 1.0
         // Expectancy = (0.0 * 0.0) + (-20.0 * 1.0) = -20.0
-        assert_eq!(result.unwrap(), -20.0);
+        assert!(approx_eq!(f64, result.unwrap(), -20.0, epsilon = 1e-9));
     }
 
     #[rstest]
@@ -105,7 +141,7 @@ mod tests {
         // win_rate = 0.5 (2 winners out of 4 trades)
         // loss_rate = 0.5
         // Expectancy = (12.5 * 0.5) + (-7.5 * 0.5) = 2.5
-        assert_eq!(result.unwrap(), 2.5);
+        assert!(approx_eq!(f64, result.unwrap(), 2.5, epsilon = 1e-9));
     }
 
     #[rstest]
@@ -117,7 +153,7 @@ mod tests {
         assert!(result.is_some());
         // Expected: avg_winner = 10.0, win_rate = 1.0, loss_rate = 0.0
         // Expectancy = (10.0 * 1.0) + (0.0 * 0.0) = 10.0
-        assert_eq!(result.unwrap(), 10.0);
+        assert!(approx_eq!(f64, result.unwrap(), 10.0, epsilon = 1e-9));
     }
 
     #[rstest]

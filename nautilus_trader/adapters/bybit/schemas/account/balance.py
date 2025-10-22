@@ -13,8 +13,6 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
-from decimal import Decimal
-
 import msgspec
 
 from nautilus_trader.adapters.bybit.schemas.common import BybitListResult
@@ -51,20 +49,22 @@ class BybitCoinBalance(msgspec.Struct):
 
     def parse_to_account_balance(self) -> AccountBalance:
         currency = Currency.from_str(self.coin)
-        total = Decimal(self.walletBalance)
-        locked = Decimal(self.locked)  # TODO: Locked only valid for Spot
-        free = total - locked
+        total = Money.from_str(f"{self.walletBalance or '0'} {currency}")
+        locked = Money.from_str(f"{self.locked or '0'} {currency}")
+        free = Money.from_raw(total.raw - locked.raw, currency)
+
         return AccountBalance(
-            total=Money(total, currency),
-            locked=Money(locked, currency),
-            free=Money(free, currency),
+            total=total,
+            locked=locked,
+            free=free,
         )
 
     def parse_to_margin_balance(self) -> MarginBalance:
-        currency: Currency = Currency.from_str(self.coin)
+        currency = Currency.from_str(self.coin)
+
         return MarginBalance(
-            initial=Money(Decimal(self.totalPositionIM), currency),
-            maintenance=Money(Decimal(self.totalPositionMM), currency),
+            initial=Money.from_str(f"{self.totalPositionIM or '0'} {currency}"),
+            maintenance=Money.from_str(f"{self.totalPositionMM or '0'} {currency}"),
         )
 
 

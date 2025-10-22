@@ -49,7 +49,7 @@ pub trait Serializable: Serialize + for<'de> Deserialize<'de> {
     /// # Errors
     ///
     /// Returns serialization errors.
-    fn as_json_bytes(&self) -> Result<Bytes, serde_json::Error> {
+    fn to_json_bytes(&self) -> Result<Bytes, serde_json::Error> {
         serde_json::to_vec(self).map(Bytes::from)
     }
 
@@ -58,7 +58,7 @@ pub trait Serializable: Serialize + for<'de> Deserialize<'de> {
     /// # Errors
     ///
     /// Returns serialization errors.
-    fn as_msgpack_bytes(&self) -> Result<Bytes, rmp_serde::encode::Error> {
+    fn to_msgpack_bytes(&self) -> Result<Bytes, rmp_serde::encode::Error> {
         rmp_serde::to_vec_named(self).map(Bytes::from)
     }
 }
@@ -82,7 +82,11 @@ impl Visitor<'_> for BoolVisitor {
     where
         E: serde::de::Error,
     {
-        if value > u64::from(u8::MAX) {
+        // Only 0 or 1 are considered valid representations when provided as an
+        // integer. We deliberately reject values outside this range to avoid
+        // silently truncating larger integers into impl-defined boolean
+        // semantics.
+        if value > 1 {
             Err(E::invalid_value(Unexpected::Unsigned(value), &self))
         } else {
             Ok(value as u8)
@@ -108,9 +112,9 @@ where
 #[cfg(test)]
 mod tests {
     use rstest::*;
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
 
-    use super::from_bool_as_u8;
+    use super::{Serializable, from_bool_as_u8};
 
     #[derive(Deserialize)]
     pub struct TestStruct {
@@ -132,5 +136,92 @@ mod tests {
     fn test_deserialize_bool_as_u8_with_u64(#[case] json_str: &str, #[case] expected: u8) {
         let test_struct: TestStruct = serde_json::from_str(json_str).unwrap();
         assert_eq!(test_struct.value, expected);
+    }
+
+    #[rstest]
+    fn test_deserialize_bool_as_u8_with_invalid_integer() {
+        // Any integer other than 0/1 is invalid and should error
+        let json = r#"{"value": 2}"#;
+        let result: Result<TestStruct, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[derive(Serialize, Deserialize, PartialEq, Debug)]
+    struct SerializableTestStruct {
+        id: u32,
+        name: String,
+        value: f64,
+    }
+
+    impl Serializable for SerializableTestStruct {}
+
+    #[rstest]
+    fn test_serializable_json_roundtrip() {
+        let original = SerializableTestStruct {
+            id: 42,
+            name: "test".to_string(),
+            value: std::f64::consts::PI,
+        };
+
+        let json_bytes = original.to_json_bytes().unwrap();
+        let deserialized = SerializableTestStruct::from_json_bytes(&json_bytes).unwrap();
+
+        assert_eq!(original, deserialized);
+    }
+
+    #[rstest]
+    fn test_serializable_msgpack_roundtrip() {
+        let original = SerializableTestStruct {
+            id: 123,
+            name: "msgpack_test".to_string(),
+            value: std::f64::consts::E,
+        };
+
+        let msgpack_bytes = original.to_msgpack_bytes().unwrap();
+        let deserialized = SerializableTestStruct::from_msgpack_bytes(&msgpack_bytes).unwrap();
+
+        assert_eq!(original, deserialized);
+    }
+
+    #[rstest]
+    fn test_serializable_json_invalid_data() {
+        let invalid_json = b"invalid json data";
+        let result = SerializableTestStruct::from_json_bytes(invalid_json);
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_serializable_msgpack_invalid_data() {
+        let invalid_msgpack = b"invalid msgpack data";
+        let result = SerializableTestStruct::from_msgpack_bytes(invalid_msgpack);
+        assert!(result.is_err());
+    }
+
+    #[rstest]
+    fn test_serializable_json_empty_values() {
+        let test_struct = SerializableTestStruct {
+            id: 0,
+            name: String::new(),
+            value: 0.0,
+        };
+
+        let json_bytes = test_struct.to_json_bytes().unwrap();
+        let deserialized = SerializableTestStruct::from_json_bytes(&json_bytes).unwrap();
+
+        assert_eq!(test_struct, deserialized);
+    }
+
+    #[rstest]
+    fn test_serializable_msgpack_empty_values() {
+        let test_struct = SerializableTestStruct {
+            id: 0,
+            name: String::new(),
+            value: 0.0,
+        };
+
+        let msgpack_bytes = test_struct.to_msgpack_bytes().unwrap();
+        let deserialized = SerializableTestStruct::from_msgpack_bytes(&msgpack_bytes).unwrap();
+
+        assert_eq!(test_struct, deserialized);
     }
 }

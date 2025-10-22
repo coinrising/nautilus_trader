@@ -37,6 +37,11 @@ use crate::common::{
 };
 
 /// Parses a Coinbase spot instrument into an `InstrumentAny::CurrencyPair`.
+/// Parses a spot instrument message into an `InstrumentAny::CurrencyPair`.
+///
+/// # Errors
+///
+/// Returns an error if any numeric field cannot be parsed or required data is missing.
 pub fn parse_spot_instrument(
     definition: &CoinbaseIntxWsInstrumentMsg,
     margin_init: Option<Decimal>,
@@ -53,8 +58,9 @@ pub fn parse_spot_instrument(
 
     let price_increment = Price::from(&definition.quote_increment);
     let size_increment = Quantity::from(&definition.base_increment);
-
+    let multiplier = Some(Quantity::from(&definition.base_asset_multiplier));
     let lot_size = None;
+
     let max_quantity = None;
     let min_quantity = None;
     let max_notional = None;
@@ -71,6 +77,7 @@ pub fn parse_spot_instrument(
         size_increment.precision,
         price_increment,
         size_increment,
+        multiplier,
         lot_size,
         max_quantity,
         min_quantity,
@@ -90,6 +97,11 @@ pub fn parse_spot_instrument(
 }
 
 /// Parses a Coinbase perpetual instrument into an `InstrumentAny::CryptoPerpetual`.
+/// Parses a perpetual instrument message into an `InstrumentAny::CryptoPerpetual`.
+///
+/// # Errors
+///
+/// Returns an error if any numeric field cannot be parsed or required data is missing.
 pub fn parse_perp_instrument(
     definition: &CoinbaseIntxWsInstrumentMsg,
     margin_init: Option<Decimal>,
@@ -104,21 +116,19 @@ pub fn parse_perp_instrument(
     let base_currency = get_currency(&definition.base_asset_name);
     let quote_currency = get_currency(&definition.quote_asset_name);
     let settlement_currency = quote_currency;
+    let is_inverse = false;
 
     let price_increment = Price::from(&definition.quote_increment);
     let size_increment = Quantity::from(&definition.base_increment);
-
     let multiplier = Some(Quantity::from(&definition.base_asset_multiplier));
-
     let lot_size = None;
+
     let max_quantity = None;
     let min_quantity = None;
     let max_notional = None;
     let min_notional = None;
     let max_price = None;
     let min_price = None;
-
-    let is_inverse = false;
 
     let instrument = CryptoPerpetual::new(
         instrument_id,
@@ -180,6 +190,11 @@ pub fn parse_instrument_any(
     }
 }
 
+/// Parses a snapshot order book message into `OrderBookDeltas`.
+///
+/// # Errors
+///
+/// Returns an error if any price or size value cannot be parsed.
 pub fn parse_orderbook_snapshot_msg(
     msg: &CoinbaseIntxWsOrderBookSnapshotMsg,
     instrument_id: InstrumentId,
@@ -190,7 +205,7 @@ pub fn parse_orderbook_snapshot_msg(
     let ts_event = UnixNanos::from(msg.time);
 
     // Set the snapshot flag
-    let flags = RecordFlag::F_SNAPSHOT.value();
+    let flags = RecordFlag::F_SNAPSHOT as u8;
 
     // Allocate capacity for all bids and asks
     let mut deltas = Vec::with_capacity(msg.bids.len() + msg.asks.len());
@@ -270,6 +285,11 @@ pub fn parse_orderbook_snapshot_msg(
     Ok(OrderBookDeltas::new(instrument_id, deltas))
 }
 
+/// Parses an order book update message into `OrderBookDeltas`.
+///
+/// # Errors
+///
+/// Returns an error if any price, size, or side cannot be parsed.
 pub fn parse_orderbook_update_msg(
     msg: &CoinbaseIntxWsOrderBookUpdateMsg,
     instrument_id: InstrumentId,
@@ -309,7 +329,7 @@ pub fn parse_orderbook_update_msg(
         let side = match side_str.as_str() {
             "BUY" => OrderSide::Buy,
             "SELL" => OrderSide::Sell,
-            _ => return Err(anyhow::anyhow!("Unknown order side: {side_str}")),
+            _ => anyhow::bail!("Unknown order side: {side_str}"),
         };
 
         // Determine book action based on size
@@ -338,6 +358,11 @@ pub fn parse_orderbook_update_msg(
     Ok(OrderBookDeltas::new(instrument_id, deltas))
 }
 
+/// Parses a level 1 quote message into `QuoteTick`.
+///
+/// # Errors
+///
+/// Returns an error if any price or size value cannot be parsed.
 pub fn parse_quote_msg(
     msg: &CoinbaseIntxWsQuoteMsg,
     instrument_id: InstrumentId,
@@ -362,6 +387,11 @@ pub fn parse_quote_msg(
     ))
 }
 
+/// Parses a trade message into `TradeTick`.
+///
+/// # Errors
+///
+/// Returns an error if any price, size, or aggressor side cannot be parsed.
 pub fn parse_trade_msg(
     msg: &CoinbaseIntxWsTradeMsg,
     instrument_id: InstrumentId,
@@ -371,7 +401,7 @@ pub fn parse_trade_msg(
 ) -> anyhow::Result<TradeTick> {
     let price = Price::new(msg.trade_price.parse::<f64>()?, price_precision);
     let size = Quantity::new(msg.trade_qty.parse::<f64>()?, size_precision);
-    let aggressor_side: AggressorSide = msg.aggressor_side.clone().into();
+    let aggressor_side: AggressorSide = msg.aggressor_side.into();
     let trade_id = TradeId::new(&msg.match_id);
     let ts_event = UnixNanos::from(msg.time);
 
@@ -386,6 +416,11 @@ pub fn parse_trade_msg(
     ))
 }
 
+/// Parses a mark price message into `MarkPriceUpdate`.
+///
+/// # Errors
+///
+/// Returns an error if the price value cannot be parsed.
 pub fn parse_mark_price_msg(
     msg: &CoinbaseIntxWsRiskMsg,
     instrument_id: InstrumentId,
@@ -403,6 +438,11 @@ pub fn parse_mark_price_msg(
     ))
 }
 
+/// Parses an index price message into `IndexPriceUpdate`.
+///
+/// # Errors
+///
+/// Returns an error if the price value cannot be parsed.
 pub fn parse_index_price_msg(
     msg: &CoinbaseIntxWsRiskMsg,
     instrument_id: InstrumentId,
@@ -420,6 +460,11 @@ pub fn parse_index_price_msg(
     ))
 }
 
+/// Parses a candlestick snapshot message into `Bar`.
+///
+/// # Errors
+///
+/// Returns an error if the candle data is missing or any price/quantity cannot be parsed.
 pub fn parse_candle_msg(
     msg: &CoinbaseIntxWsCandleSnapshotMsg,
     instrument_id: InstrumentId,
@@ -429,7 +474,10 @@ pub fn parse_candle_msg(
 ) -> anyhow::Result<Bar> {
     let bar_spec = coinbase_channel_as_bar_spec(&msg.channel)?;
     let bar_type = BarType::new(instrument_id, bar_spec, AggregationSource::External);
-    let candle = msg.candles.last().unwrap();
+    let candle = msg
+        .candles
+        .last()
+        .ok_or_else(|| anyhow::anyhow!("Empty candles in snapshot for channel {}", msg.channel))?;
     let ts_event = UnixNanos::from(candle.start); // TODO: Convert to close
 
     let open_price = Price::new(candle.open.parse::<f64>()?, price_precision);

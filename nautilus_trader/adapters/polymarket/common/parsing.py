@@ -25,7 +25,7 @@ from nautilus_trader.adapters.polymarket.common.enums import PolymarketOrderType
 from nautilus_trader.adapters.polymarket.common.symbol import get_polymarket_instrument_id
 from nautilus_trader.adapters.polymarket.common.symbol import get_polymarket_token_id
 from nautilus_trader.adapters.polymarket.schemas.book import PolymarketTickSizeChange
-from nautilus_trader.model.currencies import USDC
+from nautilus_trader.model.currencies import USDC_POS
 from nautilus_trader.model.enums import AssetClass
 from nautilus_trader.model.enums import LiquiditySide
 from nautilus_trader.model.enums import OrderSide
@@ -48,7 +48,7 @@ def parse_order_side(order_side: PolymarketOrderSide) -> OrderSide:
             raise ValueError(f"invalid order side, was {order_side}")
 
 
-def parse_liquidity_side(liquidity_side: PolymarketLiquiditySide) -> OrderSide:
+def parse_liquidity_side(liquidity_side: PolymarketLiquiditySide) -> LiquiditySide:
     match liquidity_side:
         case PolymarketLiquiditySide.MAKER:
             return LiquiditySide.MAKER
@@ -59,7 +59,7 @@ def parse_liquidity_side(liquidity_side: PolymarketLiquiditySide) -> OrderSide:
             raise ValueError(f"invalid liquidity side, was {liquidity_side}")
 
 
-def parse_time_in_force(order_type: PolymarketOrderType) -> OrderSide:
+def parse_time_in_force(order_type: PolymarketOrderType) -> TimeInForce:
     match order_type:
         case PolymarketOrderType.GTC:
             return TimeInForce.GTC
@@ -103,7 +103,8 @@ def parse_instrument(
     if end_date_iso:
         expiration_ns = pd.Timestamp(end_date_iso).value
     else:
-        expiration_ns = 0
+        # end_date_iso can be missing in some conditions that are part of an event that has it
+        expiration_ns = (pd.Timestamp.now(tz="UTC") + pd.DateOffset(years=10)).value
 
     maker_fee = Decimal(str(market_info["maker_base_fee"]))
     taker_fee = Decimal(str(market_info["taker_base_fee"]))
@@ -114,7 +115,7 @@ def parse_instrument(
         outcome=outcome,
         description=description,
         asset_class=AssetClass.ALTERNATIVE,
-        currency=USDC,
+        currency=USDC_POS,
         price_increment=price_increment,
         price_precision=price_increment.precision,
         size_increment=size_increment,
@@ -144,7 +145,7 @@ def update_instrument(
         outcome=instrument.outcome,
         description=instrument.description,
         asset_class=AssetClass.ALTERNATIVE,
-        currency=USDC,
+        currency=USDC_POS,
         price_increment=price_increment,
         price_precision=price_increment.precision,
         size_increment=instrument.size_increment,

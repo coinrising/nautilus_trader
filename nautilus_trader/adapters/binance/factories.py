@@ -18,8 +18,6 @@ from functools import lru_cache
 
 from nautilus_trader.adapters.binance.common.credentials import get_api_key
 from nautilus_trader.adapters.binance.common.credentials import get_api_secret
-from nautilus_trader.adapters.binance.common.credentials import get_ed25519_private_key
-from nautilus_trader.adapters.binance.common.credentials import get_rsa_private_key
 from nautilus_trader.adapters.binance.common.enums import BinanceAccountType
 from nautilus_trader.adapters.binance.common.enums import BinanceKeyType
 from nautilus_trader.adapters.binance.common.urls import get_http_base_url
@@ -92,29 +90,37 @@ def get_cached_binance_http_client(
             rsa_private_key = None
             ed25519_private_key = None
         case BinanceKeyType.RSA:
-            rsa_private_key = get_rsa_private_key(account_type, is_testnet)
+            rsa_private_key = api_secret
             ed25519_private_key = None
         case BinanceKeyType.ED25519:
             rsa_private_key = None
-            ed25519_private_key = get_ed25519_private_key(account_type, is_testnet)
+            ed25519_private_key = api_secret
         case _:
             # Theoretically unreachable but retained to keep the match exhaustive
             raise ValueError(f"invalid `key_type`, was {key_type}")
 
     # Set up rate limit quotas
+    global_key = "binance:global"
+
     if account_type.is_spot:
         # Spot
-        ratelimiter_default_quota = Quota.rate_per_minute(6000)
+        global_quota = Quota.rate_per_minute(6000)
+        ratelimiter_default_quota = global_quota
         ratelimiter_quotas: list[tuple[str, Quota]] = [
-            ("order", Quota.rate_per_minute(3000)),
-            ("allOrders", Quota.rate_per_minute(int(3000 / 20))),
+            (global_key, global_quota),
+            ("binance:api/v3/order", Quota.rate_per_minute(3000)),
+            ("binance:api/v3/allOrders", Quota.rate_per_minute(int(3000 / 20))),
+            ("binance:api/v3/klines", Quota.rate_per_minute(600)),
         ]
     else:
         # Futures
-        ratelimiter_default_quota = Quota.rate_per_minute(2400)
+        global_quota = Quota.rate_per_minute(2400)
+        ratelimiter_default_quota = global_quota
         ratelimiter_quotas = [
-            ("order", Quota.rate_per_minute(1200)),
-            ("allOrders", Quota.rate_per_minute(int(1200 / 20))),
+            (global_key, global_quota),
+            ("binance:fapi/v1/order", Quota.rate_per_minute(1200)),
+            ("binance:fapi/v1/allOrders", Quota.rate_per_minute(int(1200 / 20))),
+            ("binance:fapi/v1/klines", Quota.rate_per_minute(600)),
         ]
 
     return BinanceHttpClient(
@@ -170,6 +176,7 @@ def get_cached_binance_spot_instrument_provider(
         account_type=account_type,
         is_testnet=is_testnet,
         config=config,
+        venue=venue,
     )
 
 

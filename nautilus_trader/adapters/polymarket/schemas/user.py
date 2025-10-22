@@ -53,7 +53,7 @@ class PolymarketUserOrder(msgspec.Struct, tag="order", tag_field="event_type", f
 
     References
     ----------
-    https://docs.polymarket.com/#user-channel
+    https://docs.polymarket.com/developers/CLOB/websocket/user-channel#order-message
 
     """
 
@@ -143,12 +143,12 @@ class PolymarketUserTrade(msgspec.Struct, tag="trade", tag_field="event_type", f
 
     References
     ----------
-    https://docs.polymarket.com/#user-channel
+    https://docs.polymarket.com/developers/CLOB/websocket/user-channel
 
     """
 
     asset_id: str  # asset ID (token ID) of taker order (market order)
-    bucket_index: str
+    bucket_index: int
     fee_rate_bps: str
     id: str  # trade ID
     last_update: str  # time of last update to trade
@@ -188,7 +188,7 @@ class PolymarketUserTrade(msgspec.Struct, tag="trade", tag_field="event_type", f
         order_side = parse_order_side(self.side)
         if self.trader_side == PolymarketLiquiditySide.TAKER:
             return order_side
-        else:
+        else:  # MAKER
             return OrderSide.BUY if order_side == OrderSide.SELL else OrderSide.SELL
 
     def venue_order_id(self, maker_address: str) -> VenueOrderId:
@@ -255,7 +255,7 @@ class PolymarketOpenOrder(msgspec.Struct, frozen=True):
 
     References
     ----------
-    https://docs.polymarket.com/#get-order
+    https://docs.polymarket.com/developers/CLOB/websocket/user-channel#order-message
 
     """
 

@@ -16,19 +16,20 @@
 
 from decimal import Decimal
 
-from nautilus_trader.adapters.bybit.common.enums import BybitProductType
-from nautilus_trader.adapters.bybit.config import BybitDataClientConfig
-from nautilus_trader.adapters.bybit.config import BybitExecClientConfig
-from nautilus_trader.adapters.bybit.factories import BybitLiveDataClientFactory
-from nautilus_trader.adapters.bybit.factories import BybitLiveExecClientFactory
+from nautilus_trader.adapters.bybit import BYBIT
+from nautilus_trader.adapters.bybit import BybitDataClientConfig
+from nautilus_trader.adapters.bybit import BybitExecClientConfig
+from nautilus_trader.adapters.bybit import BybitLiveDataClientFactory
+from nautilus_trader.adapters.bybit import BybitLiveExecClientFactory
+from nautilus_trader.adapters.bybit import BybitProductType
 from nautilus_trader.config import InstrumentProviderConfig
 from nautilus_trader.config import LiveExecEngineConfig
+from nautilus_trader.config import LiveRiskEngineConfig
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.config import TradingNodeConfig
 from nautilus_trader.examples.algorithms.twap import TWAPExecAlgorithm
 from nautilus_trader.examples.strategies.ema_cross_bracket_algo import EMACrossBracketAlgo
 from nautilus_trader.examples.strategies.ema_cross_bracket_algo import EMACrossBracketAlgoConfig
-from nautilus_trader.live.config import LiveRiskEngineConfig
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.data import BarType
 from nautilus_trader.model.identifiers import InstrumentId
@@ -69,7 +70,7 @@ config_node = TradingNodeConfig(
     #     heartbeat_interval_secs=1,
     # ),
     data_clients={
-        "BYBIT": BybitDataClientConfig(
+        BYBIT: BybitDataClientConfig(
             api_key=None,  # 'BYBIT_API_KEY' env var
             api_secret=None,  # 'BYBIT_API_SECRET' env var
             base_url_http=None,  # Override with custom endpoint
@@ -79,7 +80,7 @@ config_node = TradingNodeConfig(
         ),
     },
     exec_clients={
-        "BYBIT": BybitExecClientConfig(
+        BYBIT: BybitExecClientConfig(
             api_key=None,  # 'BYBIT_API_KEY' env var
             api_secret=None,  # 'BYBIT_API_SECRET' env var
             base_url_http=None,  # Override with custom endpoint
@@ -123,8 +124,8 @@ node.trader.add_strategy(strategy)
 node.trader.add_exec_algorithm(exec_algorithm)
 
 # Register your client factories with the node (can take user-defined factories)
-node.add_data_client_factory("BYBIT", BybitLiveDataClientFactory)
-node.add_exec_client_factory("BYBIT", BybitLiveExecClientFactory)
+node.add_data_client_factory(BYBIT, BybitLiveDataClientFactory)
+node.add_exec_client_factory(BYBIT, BybitLiveExecClientFactory)
 node.build()
 
 

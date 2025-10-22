@@ -25,6 +25,7 @@ use std::{
     rc::Rc,
 };
 
+use nautilus_core::UUID4;
 use ustr::Ustr;
 
 pub trait MessageHandler: Any {
@@ -54,9 +55,10 @@ pub struct TypedMessageHandler<T: 'static + ?Sized, F: Fn(&T) + 'static> {
 impl<T: 'static, F: Fn(&T) + 'static> TypedMessageHandler<T, F> {
     /// Creates a new handler with an optional custom ID.
     pub fn new<S: AsRef<str>>(id: Option<S>, callback: F) -> Self {
-        let id_ustr = id
-            .map(|s| Ustr::from(s.as_ref()))
-            .unwrap_or_else(|| generate_deterministic_handler_id(&callback));
+        let id_ustr = id.map_or_else(
+            || generate_handler_id(&callback),
+            |s| Ustr::from(s.as_ref()),
+        );
 
         Self {
             id: id_ustr,
@@ -92,9 +94,10 @@ impl<T: 'static, F: Fn(&T) + 'static> MessageHandler for TypedMessageHandler<T, 
 impl<F: Fn(&dyn Any) + 'static> TypedMessageHandler<dyn Any, F> {
     /// Creates a new handler for dynamic Any messages with an optional custom ID.
     pub fn new_any<S: AsRef<str>>(id: Option<S>, callback: F) -> Self {
-        let id_ustr = id
-            .map(|s| Ustr::from(s.as_ref()))
-            .unwrap_or_else(|| generate_deterministic_handler_id(&callback));
+        let id_ustr = id.map_or_else(
+            || generate_handler_id(&callback),
+            |s| Ustr::from(s.as_ref()),
+        );
 
         Self {
             id: id_ustr,
@@ -128,13 +131,16 @@ impl<F: Fn(&dyn Any) + 'static> MessageHandler for TypedMessageHandler<dyn Any, 
     }
 }
 
-fn generate_deterministic_handler_id<T: 'static + ?Sized, F: 'static + Fn(&T)>(
-    callback: &F,
-) -> Ustr {
+fn generate_handler_id<T: 'static + ?Sized, F: 'static + Fn(&T)>(callback: &F) -> Ustr {
     let callback_ptr = std::ptr::from_ref(callback);
-    Ustr::from(&format!("<{callback_ptr:?}>"))
+    let uuid = UUID4::new();
+    Ustr::from(&format!("<{callback_ptr:?}>-{uuid}"))
 }
 
+// ShareableMessageHandler contains Rc<dyn MessageHandler> which is not Send/Sync.
+// This is intentional - message handlers are designed for single-threaded use within
+// each async runtime. The MessageBus uses thread-local storage to ensure each thread
+// gets its own handlers, eliminating the need for unsafe Send/Sync implementations.
 #[repr(transparent)]
 #[derive(Clone)]
 pub struct ShareableMessageHandler(pub Rc<dyn MessageHandler>);
@@ -159,6 +165,3 @@ impl From<Rc<dyn MessageHandler>> for ShareableMessageHandler {
         Self(value)
     }
 }
-
-// SAFETY: Message handlers cannot be sent across thread boundaries
-unsafe impl Send for ShareableMessageHandler {}

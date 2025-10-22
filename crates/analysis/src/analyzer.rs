@@ -32,8 +32,8 @@ use crate::{
     Returns,
     statistic::PortfolioStatistic,
     statistics::{
-        expectancy::Expectancy, long_ratio::LongRatio, loser_max::MaxLoser, loser_min::MinLoser,
-        profit_factor::ProfitFactor, returns_avg::ReturnsAverage,
+        expectancy::Expectancy, long_ratio::LongRatio, loser_avg::AvgLoser, loser_max::MaxLoser,
+        loser_min::MinLoser, profit_factor::ProfitFactor, returns_avg::ReturnsAverage,
         returns_avg_loss::ReturnsAverageLoss, returns_avg_win::ReturnsAverageWin,
         returns_volatility::ReturnsVolatility, risk_return_ratio::RiskReturnRatio,
         sharpe_ratio::SharpeRatio, sortino_ratio::SortinoRatio, win_rate::WinRate,
@@ -55,12 +55,12 @@ pub type Statistic = Arc<dyn PortfolioStatistic<Item = f64> + Send + Sync>;
     pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.analysis")
 )]
 pub struct PortfolioAnalyzer {
-    statistics: HashMap<String, Statistic>,
-    account_balances_starting: HashMap<Currency, Money>,
-    account_balances: HashMap<Currency, Money>,
-    positions: Vec<Position>,
-    realized_pnls: HashMap<Currency, Vec<(PositionId, f64)>>,
-    returns: Returns,
+    pub statistics: HashMap<String, Statistic>,
+    pub account_balances_starting: HashMap<Currency, Money>,
+    pub account_balances: HashMap<Currency, Money>,
+    pub positions: Vec<Position>,
+    pub realized_pnls: HashMap<Currency, Vec<(PositionId, f64)>>,
+    pub returns: Returns,
 }
 
 impl Default for PortfolioAnalyzer {
@@ -71,6 +71,7 @@ impl Default for PortfolioAnalyzer {
         analyzer.register_statistic(Arc::new(AvgWinner {}));
         analyzer.register_statistic(Arc::new(MinWinner {}));
         analyzer.register_statistic(Arc::new(MinLoser {}));
+        analyzer.register_statistic(Arc::new(AvgLoser {}));
         analyzer.register_statistic(Arc::new(MaxLoser {}));
         analyzer.register_statistic(Arc::new(Expectancy {}));
         analyzer.register_statistic(Arc::new(WinRate {}));
@@ -168,7 +169,7 @@ impl PortfolioAnalyzer {
         }
     }
 
-    /// Records a trade's `PnL`.
+    /// Records a trade's PnL.
     pub fn add_trade(&mut self, position_id: &PositionId, pnl: &Money) {
         let currency = pnl.currency;
         let entry = self.realized_pnls.entry(currency).or_default();
@@ -183,7 +184,7 @@ impl PortfolioAnalyzer {
             .or_insert(value);
     }
 
-    /// Retrieves realized `PnLs` for a specific currency.
+    /// Retrieves realized PnLs for a specific currency.
     #[must_use]
     pub fn realized_pnls(&self, currency: Option<&Currency>) -> Option<Vec<(PositionId, f64)>> {
         if self.realized_pnls.is_empty() {
@@ -193,7 +194,14 @@ impl PortfolioAnalyzer {
         self.realized_pnls.get(currency).cloned()
     }
 
-    /// Calculates total `PnL` including unrealized `PnL` if provided.
+    /// Calculates total PnL including unrealized PnL if provided.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - No currency is specified in a multi-currency portfolio.
+    /// - The specified currency is not found in account balances.
+    /// - The unrealized PnL currency does not match the specified currency.
     pub fn total_pnl(
         &self,
         currency: Option<&Currency>,
@@ -207,10 +215,10 @@ impl PortfolioAnalyzer {
             .or_else(|| self.account_balances.keys().next())
             .ok_or("Currency not specified for multi-currency portfolio")?;
 
-        if let Some(unrealized_pnl) = unrealized_pnl {
-            if unrealized_pnl.currency != *currency {
-                return Err("Unrealized PnL currency does not match specified currency");
-            }
+        if let Some(unrealized_pnl) = unrealized_pnl
+            && unrealized_pnl.currency != *currency
+        {
+            return Err("Unrealized PnL currency does not match specified currency");
         }
 
         let account_balance = self
@@ -228,7 +236,14 @@ impl PortfolioAnalyzer {
         Ok((account_balance.as_f64() - account_balance_starting.as_f64()) + unrealized_pnl_f64)
     }
 
-    /// Calculates total `PnL` as a percentage of starting balance.
+    /// Calculates total PnL as a percentage of starting balance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - No currency is specified in a multi-currency portfolio.
+    /// - The specified currency is not found in account balances.
+    /// - The unrealized PnL currency does not match the specified currency.
     pub fn total_pnl_percentage(
         &self,
         currency: Option<&Currency>,
@@ -242,10 +257,10 @@ impl PortfolioAnalyzer {
             .or_else(|| self.account_balances.keys().next())
             .ok_or("Currency not specified for multi-currency portfolio")?;
 
-        if let Some(unrealized_pnl) = unrealized_pnl {
-            if unrealized_pnl.currency != *currency {
-                return Err("Unrealized PnL currency does not match specified currency");
-            }
+        if let Some(unrealized_pnl) = unrealized_pnl
+            && unrealized_pnl.currency != *currency
+        {
+            return Err("Unrealized PnL currency does not match specified currency");
         }
 
         let account_balance = self
@@ -272,6 +287,14 @@ impl PortfolioAnalyzer {
     }
 
     /// Gets all PnL-related performance statistics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if PnL calculations fail, for example due to:
+    ///
+    /// - No currency specified for a multi-currency portfolio.
+    /// - Unrealized PnL currency not matching the specified currency.
+    /// - Specified currency not found in account balances.
     pub fn get_performance_stats_pnls(
         &self,
         currency: Option<&Currency>,
@@ -337,7 +360,11 @@ impl PortfolioAnalyzer {
         self.statistics.keys().map(String::len).max().unwrap_or(0)
     }
 
-    /// Gets formatted `PnL` statistics as strings.
+    /// Gets formatted PnL statistics as strings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if PnL statistics calculation fails.
     pub fn get_stats_pnls_formatted(
         &self,
         currency: Option<&Currency>,
@@ -390,10 +417,15 @@ impl PortfolioAnalyzer {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// Tests
+////////////////////////////////////////////////////////////////////////////////
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
+    use nautilus_core::approx_eq;
     use nautilus_model::{
         enums::{AccountType, LiquiditySide, OrderSide},
         events::{AccountState, OrderFilled},
@@ -415,10 +447,10 @@ mod tests {
     }
 
     impl MockStatistic {
-        fn new(name: &str) -> Arc<dyn PortfolioStatistic<Item = f64> + Send + Sync> {
-            Arc::new(Self {
+        fn new(name: &str) -> Self {
+            Self {
                 name: name.to_string(),
-            })
+            }
         }
     }
 
@@ -580,12 +612,17 @@ mod tests {
         fn balance(&self, _: Option<Currency>) -> Option<&AccountBalance> {
             todo!()
         }
+
+        fn purge_account_events(&mut self, _: UnixNanos, _: u64) {
+            // MockAccount doesn't need purging
+        }
     }
 
     #[rstest]
     fn test_register_and_deregister_statistics() {
         let mut analyzer = PortfolioAnalyzer::new();
-        let stat = Arc::new(MockStatistic::new("test_stat"));
+        let stat: Arc<dyn PortfolioStatistic<Item = f64> + Send + Sync> =
+            Arc::new(MockStatistic::new("test_stat"));
 
         // Test registration
         analyzer.register_statistic(Arc::clone(&stat));
@@ -596,8 +633,10 @@ mod tests {
         assert!(analyzer.statistic("test_stat").is_none());
 
         // Test deregister all
-        let stat1 = Arc::new(MockStatistic::new("stat1"));
-        let stat2 = Arc::new(MockStatistic::new("stat2"));
+        let stat1: Arc<dyn PortfolioStatistic<Item = f64> + Send + Sync> =
+            Arc::new(MockStatistic::new("stat1"));
+        let stat2: Arc<dyn PortfolioStatistic<Item = f64> + Send + Sync> =
+            Arc::new(MockStatistic::new("stat2"));
         analyzer.register_statistic(Arc::clone(&stat1));
         analyzer.register_statistic(Arc::clone(&stat2));
         analyzer.deregister_statistics();
@@ -625,14 +664,14 @@ mod tests {
 
         // Test total PnL calculation
         let result = analyzer.total_pnl(Some(&currency), None).unwrap();
-        assert_eq!(result, 500.0);
+        assert!(approx_eq!(f64, result, 500.0, epsilon = 1e-9));
 
         // Test with unrealized PnL
         let unrealized_pnl = Money::new(100.0, currency);
         let result = analyzer
             .total_pnl(Some(&currency), Some(&unrealized_pnl))
             .unwrap();
-        assert_eq!(result, 600.0);
+        assert!(approx_eq!(f64, result, 600.0, epsilon = 1e-9));
     }
 
     #[rstest]
@@ -658,14 +697,14 @@ mod tests {
         let result = analyzer
             .total_pnl_percentage(Some(&currency), None)
             .unwrap();
-        assert_eq!(result, 50.0); // (1500 - 1000) / 1000 * 100
+        assert!(approx_eq!(f64, result, 50.0, epsilon = 1e-9)); // (1500 - 1000) / 1000 * 100
 
         // Test with unrealized PnL
         let unrealized_pnl = Money::new(500.0, currency);
         let result = analyzer
             .total_pnl_percentage(Some(&currency), Some(&unrealized_pnl))
             .unwrap();
-        assert_eq!(result, 100.0); // (2000 - 1000) / 1000 * 100
+        assert!(approx_eq!(f64, result, 100.0, epsilon = 1e-9)); // (2000 - 1000) / 1000 * 100
     }
 
     #[rstest]
@@ -683,20 +722,26 @@ mod tests {
         // Verify realized PnLs were recorded
         let pnls = analyzer.realized_pnls(Some(&currency)).unwrap();
         assert_eq!(pnls.len(), 2);
-        assert_eq!(pnls[0].1, 100.0);
-        assert_eq!(pnls[1].1, 200.0);
+        assert!(approx_eq!(f64, pnls[0].1, 100.0, epsilon = 1e-9));
+        assert!(approx_eq!(f64, pnls[1].1, 200.0, epsilon = 1e-9));
 
         // Verify returns were recorded
         let returns = analyzer.returns();
         assert_eq!(returns.len(), 1);
-        assert_eq!(*returns.values().next().unwrap(), 0.30000000000000004);
+        assert!(approx_eq!(
+            f64,
+            *returns.values().next().unwrap(),
+            0.30000000000000004,
+            epsilon = 1e-9
+        ));
     }
 
     #[rstest]
     fn test_performance_stats_calculation() {
         let mut analyzer = PortfolioAnalyzer::new();
         let currency = Currency::USD();
-        let stat = Arc::new(MockStatistic::new("test_stat"));
+        let stat: Arc<dyn PortfolioStatistic<Item = f64> + Send + Sync> =
+            Arc::new(MockStatistic::new("test_stat"));
         analyzer.register_statistic(Arc::clone(&stat));
 
         // Add some positions
@@ -739,7 +784,8 @@ mod tests {
     fn test_formatted_output() {
         let mut analyzer = PortfolioAnalyzer::new();
         let currency = Currency::USD();
-        let stat = Arc::new(MockStatistic::new("test_stat"));
+        let stat: Arc<dyn PortfolioStatistic<Item = f64> + Send + Sync> =
+            Arc::new(MockStatistic::new("test_stat"));
         analyzer.register_statistic(Arc::clone(&stat));
 
         let positions = vec![

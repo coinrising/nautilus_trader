@@ -20,7 +20,7 @@ use nautilus_core::{UUID4, UnixNanos};
 use super::any::OrderAny;
 use crate::{
     enums::{LiquiditySide, OrderType},
-    events::{OrderAccepted, OrderEventAny, OrderFilled, OrderSubmitted},
+    events::{OrderAccepted, OrderCanceled, OrderEventAny, OrderFilled, OrderSubmitted},
     identifiers::{
         AccountId, ClientOrderId, InstrumentId, PositionId, TradeId, Venue, VenueOrderId,
     },
@@ -68,10 +68,30 @@ impl TestOrderEventStubs {
         OrderEventAny::Accepted(event)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    pub fn canceled(
+        order: &OrderAny,
+        account_id: AccountId,
+        venue_order_id: Option<VenueOrderId>,
+    ) -> OrderEventAny {
+        let event = OrderCanceled::new(
+            order.trader_id(),
+            order.strategy_id(),
+            order.instrument_id(),
+            order.client_order_id(),
+            UUID4::new(),
+            UnixNanos::default(),
+            UnixNanos::default(),
+            false, // reconciliation
+            venue_order_id,
+            Some(account_id),
+        );
+        OrderEventAny::Canceled(event)
+    }
+
     /// # Panics
     ///
     /// Panics if parsing the fallback price string fails or unwrapping default values fails.
+    #[allow(clippy::too_many_arguments)]
     pub fn filled(
         order: &OrderAny,
         instrument: &InstrumentAny,
@@ -150,7 +170,7 @@ impl TestOrderStubs {
         instrument: &InstrumentAny,
         liquidity_side: LiquiditySide,
     ) -> OrderAny {
-        let mut accepted_order = TestOrderStubs::make_accepted_order(order);
+        let mut accepted_order = Self::make_accepted_order(order);
         let fill = TestOrderEventStubs::filled(
             &accepted_order,
             instrument,
@@ -194,7 +214,7 @@ impl TestOrdersGenerator {
 
     fn generate_order(&self, instrument_id: InstrumentId, client_order_id_index: u32) -> OrderAny {
         let client_order_id =
-            ClientOrderId::from(format!("O-{}-{}", instrument_id, client_order_id_index));
+            ClientOrderId::from(format!("O-{instrument_id}-{client_order_id_index}"));
         OrderTestBuilder::new(self.order_type)
             .quantity(Quantity::from("1"))
             .price(Price::from("1"))
@@ -207,7 +227,7 @@ impl TestOrdersGenerator {
         let mut orders = Vec::new();
         for (venue, total_instruments) in self.venue_instruments.iter() {
             for i in 0..*total_instruments {
-                let instrument_id = InstrumentId::from(format!("SYMBOL-{}.{}", i, venue));
+                let instrument_id = InstrumentId::from(format!("SYMBOL-{i}.{venue}"));
                 for order_index in 0..self.orders_per_instrument {
                     let order = self.generate_order(instrument_id, order_index);
                     orders.push(order);
@@ -227,7 +247,7 @@ pub fn create_order_list_sample(
     // x venues * x instruments * x orders per instrument
     let mut order_generator = TestOrdersGenerator::new(OrderType::Limit);
     for i in 0..total_venues {
-        let venue = Venue::from(format!("VENUE-{}", i));
+        let venue = Venue::from(format!("VENUE-{i}"));
         order_generator.add_venue_and_total_instruments(venue, total_instruments);
     }
     order_generator.set_orders_per_instrument(orders_per_instrument);

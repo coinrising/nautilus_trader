@@ -15,8 +15,6 @@
 
 //! Enumerations for common components.
 
-use std::fmt::Debug;
-
 use log::Level;
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumIter, EnumString, FromRepr};
@@ -76,6 +74,13 @@ pub enum ComponentState {
     Faulting = 12,
     /// When a component has successfully shut down due to a detected fault.
     Faulted = 13,
+}
+
+impl ComponentState {
+    pub fn variant_name(&self) -> String {
+        let s = self.to_string();
+        format!("{}{}", s[0..1].to_uppercase(), s[1..].to_lowercase())
+    }
 }
 
 /// A trigger condition for a component within the system.

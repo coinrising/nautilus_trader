@@ -20,11 +20,12 @@ use crate::rpc::{
     types::BlockchainMessage,
 };
 
-pub struct PolygonRpclient {
+#[derive(Debug)]
+pub struct PolygonRpcClient {
     base_client: CoreBlockchainRpcClient,
 }
 
-impl PolygonRpclient {
+impl PolygonRpcClient {
     pub fn new(wss_rpc_url: String) -> Self {
         let base_client = CoreBlockchainRpcClient::new(chains::POLYGON.clone(), wss_rpc_url);
 
@@ -33,7 +34,7 @@ impl PolygonRpclient {
 }
 
 #[async_trait::async_trait]
-impl BlockchainRpcClient for PolygonRpclient {
+impl BlockchainRpcClient for PolygonRpcClient {
     async fn connect(&mut self) -> anyhow::Result<()> {
         self.base_client.connect().await
     }

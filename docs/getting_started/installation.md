@@ -2,16 +2,24 @@
 
 NautilusTrader is officially supported for Python 3.11-3.13 on the following 64-bit platforms:
 
-| Operating System       | Supported Versions    | CPU Architecture  |
-|------------------------|-----------------------|-------------------|
-| Linux (Ubuntu)         | 22.04 and later       | x86_64            |
-| Linux (Ubuntu)         | 22.04 and later       | ARM64             |
-| macOS                  | 14.7 and later        | ARM64             |
-| Windows Server         | 2022 and later        | x86_64            |
+| Operating System       | Supported Versions | CPU Architecture  |
+|------------------------|--------------------|-------------------|
+| Linux (Ubuntu)         | 22.04 and later    | x86_64            |
+| Linux (Ubuntu)         | 22.04 and later    | ARM64             |
+| macOS                  | 15.0 and later     | ARM64             |
+| Windows Server         | 2022 and later     | x86_64            |
 
 :::note
 NautilusTrader may work on other platforms, but only those listed above are regularly used by developers and tested in CI.
 :::
+
+Continuous CI coverage comes from the GitHub Actions runners we build on:
+
+- `Linux (Ubuntu)` builds currently pin to `ubuntu-22.04` to keep glibc 2.35 compatibility even as `ubuntu-latest` moves ahead.
+- `macOS (ARM64)` builds run on `macos-latest`, so support tracks that runner image as it moves ahead.
+- `Windows (x86_64)` builds run on `windows-latest`, so support tracks that runner image as it moves ahead.
+
+On Linux, confirm your glibc version with `ldd --version` and ensure it reports 2.35 or newer before proceeding.
 
 We recommend using the latest supported version of Python and installing [nautilus_trader](https://pypi.org/project/nautilus_trader/) inside a virtual environment to isolate dependencies.
 
@@ -28,7 +36,7 @@ Conda and other Python distributions *may* work but aren’t officially supporte
 
 ## From PyPI
 
-To install the latest [nautilus_trader]([nautilus_trader](https://pypi.org/project/nautilus_trader/)) binary wheel (or sdist package) from PyPI using Pythons pip package manager:
+To install the latest [nautilus_trader](https://pypi.org/project/nautilus_trader/) binary wheel (or sdist package) from PyPI using Python's pip package manager:
 
 ```bash
 pip install -U nautilus_trader
@@ -52,7 +60,7 @@ pip install -U "nautilus_trader[docker,ib]"
 
 ## From the Nautech Systems package index
 
-The Nautech Systems package index (`packages.nautechsystems.io`) is [PEP-503](https://peps.python.org/pep-0503/) compliant and hosts both stable and development binary wheels for `nautilus_trader`.
+The Nautech Systems package index (`packages.nautechsystems.io`) complies with [PEP-503](https://peps.python.org/pep-0503/) and hosts both stable and development binary wheels for `nautilus_trader`.
 This enables users to install either the latest stable release or pre-release versions for testing.
 
 ### Stable wheels
@@ -65,34 +73,39 @@ To install the latest stable release:
 pip install -U nautilus_trader --index-url=https://packages.nautechsystems.io/simple
 ```
 
+:::tip
+Use `--extra-index-url` instead of `--index-url` if you want pip to fall back to PyPI automatically:
+
+:::
+
 ### Development wheels
 
 Development wheels are published from both the `nightly` and `develop` branches,
 allowing users to test features and fixes ahead of stable releases.
 
-**Note**: Wheels from the `develop` branch are only built for the Linux x86_64 platform to save time
-and compute resources, while `nightly` wheels support additional platforms as shown below.
-
-| Platform           | Nightly | Develop |
-| :----------------- | :------ | :------ |
-| `Linux (x86_64)`   | ✓       | ✓       |
-| `Linux (ARM64)`    | ✓       | -       |
-| `macOS (ARM64)`    | ✓       | -       |
-| `Windows (x86_64)` | ✓       | -       |
-
-This process also helps preserve compute resources and ensures easy access to the exact binaries tested in CI pipelines,
+This process also helps preserve compute resources and provides easy access to the exact binaries tested in CI pipelines,
 while adhering to [PEP-440](https://peps.python.org/pep-0440/) versioning standards:
 
 - `develop` wheels use the version format `dev{date}+{build_number}` (e.g., `1.208.0.dev20241212+7001`).
 - `nightly` wheels use the version format `a{date}` (alpha) (e.g., `1.208.0a20241212`).
 
+| Platform           | Nightly | Develop |
+| :----------------- | :------ | :------ |
+| `Linux (x86_64)`   | ✓       | ✓       |
+| `Linux (ARM64)`    | ✓       | -       |
+| `macOS (ARM64)`    | ✓       | ✓       |
+| `Windows (x86_64)` | ✓       | ✓       |
+
+**Note**: Development wheels from the `develop` branch publish for every supported platform except Linux ARM64.
+Skipping that target keeps CI feedback fast while avoiding unnecessary build resource usage.
+
 :::warning
-We don't recommend using development wheels in production environments, such as live trading controlling real capital.
+We do not recommend using development wheels in production environments, such as live trading controlling real capital.
 :::
 
 ### Installation commands
 
-By default, pip installs the latest stable release. Adding the `--pre` flag ensures that pre-release versions, including development wheels, are considered.
+By default, pip will install the latest stable release. Adding the `--pre` flag ensures that pre-release versions, including development wheels, are considered.
 
 To install the latest available pre-release (including development wheels):
 
@@ -100,10 +113,10 @@ To install the latest available pre-release (including development wheels):
 pip install -U nautilus_trader --pre --index-url=https://packages.nautechsystems.io/simple
 ```
 
-To install a specific development wheel (e.g., `1.208.0a20241212` for December 12, 2024):
+To install a specific development wheel (e.g., `1.221.0a20250912` for September 12, 2025):
 
 ```bash
-pip install nautilus_trader==1.208.0a20241212 --index-url=https://packages.nautechsystems.io/simple
+pip install nautilus_trader==1.221.0a20250912 --index-url=https://packages.nautechsystems.io/simple
 ```
 
 ### Available versions
@@ -118,15 +131,15 @@ curl -s https://packages.nautechsystems.io/simple/nautilus-trader/index.html | g
 
 ### Branch updates
 
-- `develop` branch wheels (`.dev`): Are built and published continuously with every merged commit.
-- `nightly` branch wheels (`a`): Are built and published daily when `develop` branch is automatically merged at **14:00 UTC** (if there are changes).
+- `develop` branch wheels (`.dev`): Build and publish continuously with every merged commit.
+- `nightly` branch wheels (`a`): Build and publish daily when we automatically merge the `develop` branch at **14:00 UTC** (if there are changes).
 
 ### Retention policies
 
-- `develop` branch wheels (`.dev`): Only the most recent wheel build is retained.
-- `nightly` branch wheels (`a`): Only the 10 most recent wheel builds are retained.
+- `develop` branch wheels (`.dev`): We retain only the most recent wheel build.
+- `nightly` branch wheels (`a`): We retain only the 30 most recent wheel builds.
 
-## From Source
+## From source
 
 It's possible to install from source using pip if you first install the build dependencies as specified in the `pyproject.toml`.
 
@@ -139,7 +152,7 @@ curl https://sh.rustup.rs -sSf | sh
 
 - Windows:
   - Download and install [`rustup-init.exe`](https://win.rustup.rs/x86_64)
-  - Install "Desktop development with C++" with [Build Tools for Visual Studio 2019](https://visualstudio.microsoft.com/thank-you-downloading-visual-studio/?sku=BuildTools&rel=16)
+  - Install "Desktop development with C++" using [Build Tools for Visual Studio 2022](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
 - Verify (any system):
     from a terminal session run: `rustc --version`
 
@@ -162,27 +175,35 @@ sudo apt-get install clang
 
 - Windows:
 
-1. Add Clang to your [Build Tools for Visual Studio 2019](https://visualstudio.microsoft.com/thank-you-downloading-visual-studio/?sku=BuildTools&rel=16):
+1. Add Clang to your [Build Tools for Visual Studio 2022](https://visualstudio.microsoft.com/visual-cpp-build-tools/):
 
-- Start | Visual Studio Installer | Modify | C++ Clang tools for Windows (12.0.0 - x64…) = checked | Modify
+- Start | Visual Studio Installer | Modify | C++ Clang tools for Windows (latest) = checked | Modify
 
 2. Enable `clang` in the current shell:
 
 ```powershell
-[System.Environment]::SetEnvironmentVariable('path', "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Tools\Llvm\x64\bin\;" + $env:Path,"User")
+[System.Environment]::SetEnvironmentVariable('path', "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\Llvm\x64\bin\;" + $env:Path,"User")
 ```
 
 - Verify (any system):
   from a terminal session run:
 
 ```bash
-clang --version`
+clang --version
 ```
 
 3. Install uv (see the [uv installation guide](https://docs.astral.sh/uv/getting-started/installation) for more details):
 
+   - Linux and macOS:
+
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+- Windows (PowerShell):
+
+```powershell
+irm https://astral.sh/uv/install.ps1 | iex
 ```
 
 4. Clone the source with `git`, and install from the project's root directory:
@@ -197,7 +218,22 @@ uv sync --all-extras
 The `--depth 1` flag fetches just the latest commit for a faster, lightweight clone.
 :::
 
-## From GitHub Release
+5. Set environment variables for PyO3 compilation (Linux and macOS only):
+
+```bash
+# Set the library path for the Python interpreter (in this case Python 3.13.4)
+export LD_LIBRARY_PATH="$HOME/.local/share/uv/python/cpython-3.13.4-linux-x86_64-gnu/lib:$LD_LIBRARY_PATH"
+
+# Set the Python executable path for PyO3
+export PYO3_PYTHON=$(pwd)/.venv/bin/python
+```
+
+:::note
+Adjust the Python version and architecture in the `LD_LIBRARY_PATH` to match your system.
+Use `uv python list` to find the exact path for your Python installation.
+:::
+
+## From GitHub release
 
 To install a binary wheel from GitHub, first navigate to the [latest release](https://github.com/nautechsystems/nautilus_trader/releases/latest).
 Download the appropriate `.whl` for your operating system and Python version, then run:
@@ -288,6 +324,15 @@ make install-debug
 ```bash
 export HIGH_PRECISION=false
 make install-debug
+```
+
+### Rust feature flag
+
+To enable high-precision (128-bit) mode in Rust, add the `high-precision` feature to your `Cargo.toml`:
+
+```toml
+[dependencies]
+nautilus_core = { version = "*", features = ["high-precision"] }
 ```
 
 :::info

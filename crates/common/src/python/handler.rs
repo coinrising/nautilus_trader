@@ -13,8 +13,9 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-use std::{any::Any, sync::Arc};
+use std::any::Any;
 
+use nautilus_core::python::clone_py_object;
 use pyo3::prelude::*;
 use ustr::Ustr;
 
@@ -24,10 +25,19 @@ use crate::msgbus::handler::MessageHandler;
     feature = "python",
     pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.common")
 )]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PythonMessageHandler {
     id: Ustr,
-    handler: Arc<PyObject>,
+    handler: Py<PyAny>,
+}
+
+impl Clone for PythonMessageHandler {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            handler: clone_py_object(&self.handler),
+        }
+    }
 }
 
 #[pymethods]
@@ -35,22 +45,19 @@ impl PythonMessageHandler {
     /// Creates a new [`PythonMessageHandler`] instance.
     #[new]
     #[must_use]
-    pub fn new(id: &str, handler: PyObject) -> Self {
+    pub fn new(id: &str, handler: Py<PyAny>) -> Self {
         let id = Ustr::from(id);
-        Self {
-            id,
-            handler: Arc::new(handler),
-        }
+        Self { id, handler }
     }
 }
 
 impl MessageHandler for PythonMessageHandler {
     #[allow(unused_variables)]
     fn handle(&self, message: &dyn Any) {
-        // TODO: convert message to PyObject
+        // TODO: convert message to Py<PyAny>
         let py_event = ();
         let result =
-            pyo3::Python::with_gil(|py| self.handler.call_method1(py, "handle", (py_event,)));
+            pyo3::Python::attach(|py| self.handler.call_method1(py, "handle", (py_event,)));
         if let Err(e) = result {
             eprintln!("Error calling handle method: {e:?}");
         }

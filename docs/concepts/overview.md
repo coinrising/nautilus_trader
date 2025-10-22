@@ -14,18 +14,18 @@ NautilusTrader's design, architecture, and implementation philosophy prioritizes
 highest level, with the aim of supporting Python-native, mission-critical, trading system backtesting
 and live deployment workloads.
 
-The platform is also universal, and asset-class-agnostic —  with any REST API or WebSocket stream able to be integrated via modular
+The platform is also universal and asset-class-agnostic — with any REST API or WebSocket stream able to be integrated via modular
 adapters. It supports high-frequency trading across a wide range of asset classes and instrument types
-including FX, Equities, Futures, Options, Crypto and Betting, enabling seamless operations across multiple venues simultaneously.
+including FX, Equities, Futures, Options, Crypto, DeFi, and Betting — enabling seamless operations across multiple venues simultaneously.
 
 ## Features
 
 - **Fast**: Core is written in Rust with asynchronous networking using [tokio](https://crates.io/crates/tokio).
-- **Reliable**: Type safety and thread safety through Rust. Redis-backed performant state persistence (optional).
+- **Reliable**: Rust-powered type- and thread-safety, with optional Redis-backed state persistence.
 - **Portable**: OS independent, runs on Linux, macOS, and Windows. Deploy using Docker.
 - **Flexible**: Modular adapters mean any REST API or WebSocket stream can be integrated.
 - **Advanced**: Time in force `IOC`, `FOK`, `GTC`, `GTD`, `DAY`, `AT_THE_OPEN`, `AT_THE_CLOSE`, advanced order types and conditional triggers. Execution instructions `post-only`, `reduce-only`, and icebergs. Contingency orders including `OCO`, `OUO`, `OTO`.
-- **Customizable**: Add user-defined custom components, or assemble entire systems from scratch leveraging the cache and message bus.
+- **Customizable**: Add user-defined custom components, or assemble entire systems from scratch leveraging the [cache](cache.md) and [message bus](message_bus.md).
 - **Backtesting**: Run with multiple venues, instruments and strategies simultaneously using historical quote tick, trade tick, bar, order book and custom data with nanosecond resolution.
 - **Live**: Use identical strategy implementations between backtesting and live deployments.
 - **Multi-venue**: Multiple venue capabilities facilitate market-making and statistical arbitrage strategies.
@@ -59,11 +59,11 @@ with CPython C extension modules then able to offer a Python-native environment,
 
 There are three main use cases for this software package:
 
-- Backtesting trading systems with historical data (`backtest`).
-- Testing trading systems with real-time data and simulated execution (`sandbox`).
-- Deploying trading systems with real-time data and executing on venues with real (or paper) accounts (`live`).
+- Backtest trading systems on historical data (`backtest`).
+- Simulate trading systems with real-time data and virtual execution (`sandbox`).
+- Deploy trading systems live on real or paper accounts (`live`).
 
-The projects codebase provides a framework for implementing the software layer of systems which achieve the above. You will find
+The project's codebase provides a framework for implementing the software layer of systems which achieve the above. You will find
 the default `backtest` and `live` system implementations in their respectively named subpackages. A `sandbox` environment can
 be built using the sandbox adapter.
 
@@ -140,7 +140,7 @@ A valid UUID v4 consists of:
 
 Example: `2d89666b-1a1e-4a75-b193-4eb3b454c757`
 
-For the complete specification, refer to [RFC 4122: A Universally Unique IDentifier (UUID) URN Namespace](https://datatracker.ietf.org/doc/html/rfc4122).
+For the complete specification, refer to [RFC 4122: A Universally Unique IIdentifier (UUID) URN Namespace](https://datatracker.ietf.org/doc/html/rfc4122).
 
 ## Data types
 
@@ -174,9 +174,11 @@ The following `BarAggregation` methods are available:
 - `DAY`
 - `WEEK`
 - `MONTH`
+- `YEAR`
 - `TICK`
 - `VOLUME`
 - `VALUE` (a.k.a Dollar bars)
+- `RENKO` (price-based bricks)
 - `TICK_IMBALANCE`
 - `TICK_RUNS`
 - `VOLUME_IMBALANCE`
@@ -184,10 +186,27 @@ The following `BarAggregation` methods are available:
 - `VALUE_IMBALANCE`
 - `VALUE_RUNS`
 
+Currently implemented aggregations:
+
+- `MILLISECOND`
+- `SECOND`
+- `MINUTE`
+- `HOUR`
+- `DAY`
+- `WEEK`
+- `MONTH`
+- `YEAR`
+- `TICK`
+- `VOLUME`
+- `VALUE`
+- `RENKO`
+
+Aggregations listed above that are not repeated in the implemented list are planned but not yet available.
+
 The price types and bar aggregations can be combined with step sizes >= 1 in any way through a `BarSpecification`.
 This enables maximum flexibility and now allows alternative bars to be aggregated for live trading.
 
-## Account Types
+## Account types
 
 The following account types are available for both live and backtest environments:
 
@@ -197,7 +216,7 @@ The following account types are available for both live and backtest environment
 - `Margin` multi-currency
 - `Betting` single-currency
 
-## Order Types
+## Order types
 
 The following order types are available (when possible on a venue):
 
@@ -211,7 +230,7 @@ The following order types are available (when possible on a venue):
 - `TRAILING_STOP_MARKET`
 - `TRAILING_STOP_LIMIT`
 
-## Value Types
+## Value types
 
 The following value types are backed by either 128-bit or 64-bit raw integer values, depending on the
 [precision mode](../getting_started/installation.md#precision-mode) used during compilation.

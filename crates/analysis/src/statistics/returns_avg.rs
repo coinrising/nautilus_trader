@@ -13,21 +13,31 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
+use std::fmt::{self, Display};
+
+use nautilus_model::position::Position;
+
 use crate::{Returns, statistic::PortfolioStatistic};
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.analysis")
 )]
 pub struct ReturnsAverage {}
 
+impl Display for ReturnsAverage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Average (Return)")
+    }
+}
+
 impl PortfolioStatistic for ReturnsAverage {
     type Item = f64;
 
     fn name(&self) -> String {
-        stringify!(ReturnsAverage).to_string()
+        self.to_string()
     }
 
     fn calculate_from_returns(&self, returns: &Returns) -> Option<Self::Item> {
@@ -46,13 +56,24 @@ impl PortfolioStatistic for ReturnsAverage {
 
         Some(sum / count)
     }
+    fn calculate_from_realized_pnls(&self, _realized_pnls: &[f64]) -> Option<Self::Item> {
+        None
+    }
+
+    fn calculate_from_positions(&self, _positions: &[Position]) -> Option<Self::Item> {
+        None
+    }
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Tests
+////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use nautilus_core::UnixNanos;
+    use nautilus_core::{UnixNanos, approx_eq};
     use rstest::rstest;
 
     use super::*;
@@ -90,12 +111,12 @@ mod tests {
         let result = avg.calculate_from_returns(&returns);
         assert!(result.is_some());
         // Average of [10.0, -20.0, 30.0, -40.0] = (-20 + -40 + 10 + 30) / 4 = -5.0
-        assert_eq!(result.unwrap(), -5.0);
+        assert!(approx_eq!(f64, result.unwrap(), -5.0, epsilon = 1e-9));
     }
 
     #[rstest]
     fn test_name() {
         let avg = ReturnsAverage {};
-        assert_eq!(avg.name(), "ReturnsAverage");
+        assert_eq!(avg.name(), "Average (Return)");
     }
 }

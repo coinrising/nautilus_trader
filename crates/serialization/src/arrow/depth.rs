@@ -62,11 +62,7 @@ impl ArrowSchemaProvider for OrderBookDepth10 {
         // bid_price_0, bid_price_1, ..., bid_price_9, ask_price_0, ask_price_1
         for (name, data_type) in field_data {
             for i in 0..DEPTH10_LEN {
-                fields.push(Field::new(
-                    format!("{}_{i}", name),
-                    data_type.clone(),
-                    false,
-                ));
+                fields.push(Field::new(format!("{name}_{i}"), data_type.clone(), false));
             }
         }
 
@@ -214,7 +210,7 @@ impl EncodeToRecordBatch for OrderBookDepth10 {
     }
 
     fn metadata(&self) -> HashMap<String, String> {
-        OrderBookDepth10::get_metadata(
+        Self::get_metadata(
             &self.instrument_id,
             self.bids[0].price.precision,
             self.bids[0].size.precision,
@@ -289,26 +285,42 @@ impl DecodeFromRecordBatch for OrderBookDepth10 {
         }
 
         for i in 0..DEPTH10_LEN {
-            assert_eq!(
-                bid_prices[i].value_length(),
-                PRECISION_BYTES,
-                "Price precision uses {PRECISION_BYTES} byte value"
-            );
-            assert_eq!(
-                ask_prices[i].value_length(),
-                PRECISION_BYTES,
-                "Price precision uses {PRECISION_BYTES} byte value"
-            );
-            assert_eq!(
-                bid_sizes[i].value_length(),
-                PRECISION_BYTES,
-                "Size precision uses {PRECISION_BYTES} byte value"
-            );
-            assert_eq!(
-                ask_sizes[i].value_length(),
-                PRECISION_BYTES,
-                "Size precision uses {PRECISION_BYTES} byte value"
-            );
+            if bid_prices[i].value_length() != PRECISION_BYTES {
+                return Err(EncodingError::ParseError(
+                    "bid_price",
+                    format!(
+                        "Invalid value length at index {i}: expected {PRECISION_BYTES}, found {}",
+                        bid_prices[i].value_length()
+                    ),
+                ));
+            }
+            if ask_prices[i].value_length() != PRECISION_BYTES {
+                return Err(EncodingError::ParseError(
+                    "ask_price",
+                    format!(
+                        "Invalid value length at index {i}: expected {PRECISION_BYTES}, found {}",
+                        ask_prices[i].value_length()
+                    ),
+                ));
+            }
+            if bid_sizes[i].value_length() != PRECISION_BYTES {
+                return Err(EncodingError::ParseError(
+                    "bid_size",
+                    format!(
+                        "Invalid value length at index {i}: expected {PRECISION_BYTES}, found {}",
+                        bid_sizes[i].value_length()
+                    ),
+                ));
+            }
+            if ask_sizes[i].value_length() != PRECISION_BYTES {
+                return Err(EncodingError::ParseError(
+                    "ask_size",
+                    format!(
+                        "Invalid value length at index {i}: expected {PRECISION_BYTES}, found {}",
+                        ask_sizes[i].value_length()
+                    ),
+                ));
+            }
         }
 
         let flags = extract_column::<UInt8Array>(cols, "flags", 6 * DEPTH10_LEN, DataType::UInt8)?;
@@ -397,7 +409,7 @@ mod tests {
     fn test_get_schema() {
         let instrument_id = InstrumentId::from("AAPL.XNAS");
         let metadata = OrderBookDepth10::get_metadata(&instrument_id, 2, 0);
-        let schema = OrderBookDepth10::get_schema(Some(metadata.clone()));
+        let schema = OrderBookDepth10::get_schema(Some(metadata));
 
         let mut group_count = 0;
         let field_data = get_field_data();
@@ -406,7 +418,7 @@ mod tests {
                 let field = schema.field(i + group_count * DEPTH10_LEN).clone();
                 assert_eq!(
                     field,
-                    Field::new(format!("{}_{i}", name), data_type.clone(), false)
+                    Field::new(format!("{name}_{i}"), data_type.clone(), false)
                 );
             }
 
@@ -443,7 +455,7 @@ mod tests {
         let field_data = get_field_data();
         for (name, data_type) in field_data {
             for i in 0..DEPTH10_LEN {
-                let field = schema_map.get(&format!("{}_{i}", name)).map(String::as_str);
+                let field = schema_map.get(&format!("{name}_{i}")).map(String::as_str);
                 assert_eq!(field, Some(format!("{data_type:?}").as_str()));
             }
         }

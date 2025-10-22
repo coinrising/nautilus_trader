@@ -29,10 +29,11 @@ pub mod stop_market;
 pub mod trailing_stop_limit;
 pub mod trailing_stop_market;
 
-#[cfg(feature = "stubs")]
+#[cfg(any(test, feature = "stubs"))]
 pub mod stubs;
 
 // Re-exports
+use ahash::AHashSet;
 use enum_dispatch::enum_dispatch;
 use indexmap::IndexMap;
 use nautilus_core::{UUID4, UnixNanos};
@@ -73,28 +74,56 @@ use crate::{
     types::{Currency, Money, Price, Quantity},
 };
 
-#[allow(dead_code)] // TODO: Will be used
-const STOP_ORDER_TYPES: &[OrderType] = &[
+/// Order types that have stop/trigger prices.
+pub const STOP_ORDER_TYPES: &[OrderType] = &[
     OrderType::StopMarket,
     OrderType::StopLimit,
     OrderType::MarketIfTouched,
     OrderType::LimitIfTouched,
 ];
 
-#[allow(dead_code)] // TODO: Will be used
-const LIMIT_ORDER_TYPES: &[OrderType] = &[
+/// Order types that have limit prices.
+pub const LIMIT_ORDER_TYPES: &[OrderType] = &[
     OrderType::Limit,
     OrderType::StopLimit,
     OrderType::LimitIfTouched,
     OrderType::MarketIfTouched,
 ];
 
-#[allow(dead_code)] // TODO: Will be used
-const LOCAL_ACTIVE_ORDER_STATUS: &[OrderStatus] = &[
+/// Order statuses for locally active orders (pre-submission to venue).
+pub const LOCAL_ACTIVE_ORDER_STATUSES: &[OrderStatus] = &[
     OrderStatus::Initialized,
     OrderStatus::Emulated,
     OrderStatus::Released,
 ];
+
+/// Order statuses that are safe for cancellation queries.
+///
+/// These are statuses where an order is working on the venue but not already
+/// in the process of being cancelled. Including `PENDING_CANCEL` in cancellation
+/// filters can cause duplicate cancel attempts or incorrect open order counts.
+///
+/// Note: `PENDING_UPDATE` is included as orders being updated can typically still
+/// be cancelled (update and cancel are independent operations on most venues).
+pub const CANCELLABLE_ORDER_STATUSES: &[OrderStatus] = &[
+    OrderStatus::Accepted,
+    OrderStatus::Triggered,
+    OrderStatus::PendingUpdate,
+    OrderStatus::PartiallyFilled,
+];
+
+/// Returns a cached `AHashSet` of cancellable order statuses for O(1) lookups.
+///
+/// For the small set (4 elements), using `CANCELLABLE_ORDER_STATUSES.contains()` may be
+/// equally fast due to better cache locality. Use this function when you need set operations
+/// or are building HashSet-based filters.
+///
+/// Note: This is a module-level convenience function. You can also use
+/// `OrderStatus::cancellable_statuses_set()` directly.
+#[must_use]
+pub fn cancellable_order_statuses_set() -> &'static AHashSet<OrderStatus> {
+    OrderStatus::cancellable_statuses_set()
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum OrderError {
@@ -110,8 +139,11 @@ pub enum OrderError {
     AlreadyInitialized,
     #[error("Order had no previous state")]
     NoPreviousState,
+    #[error("{0}")]
+    Invariant(#[from] anyhow::Error),
 }
 
+/// Converts an IndexMap with `Ustr` keys and values to `String` keys and values.
 #[must_use]
 pub fn ustr_indexmap_to_str(h: IndexMap<Ustr, Ustr>) -> IndexMap<String, String> {
     h.into_iter()
@@ -119,11 +151,40 @@ pub fn ustr_indexmap_to_str(h: IndexMap<Ustr, Ustr>) -> IndexMap<String, String>
         .collect()
 }
 
+/// Converts an IndexMap with `String` keys and values to `Ustr` keys and values.
 #[must_use]
 pub fn str_indexmap_to_ustr(h: IndexMap<String, String>) -> IndexMap<Ustr, Ustr> {
     h.into_iter()
         .map(|(k, v)| (Ustr::from(&k), Ustr::from(&v)))
         .collect()
+}
+
+#[inline]
+pub(crate) fn check_display_qty(
+    display_qty: Option<Quantity>,
+    quantity: Quantity,
+) -> Result<(), OrderError> {
+    if let Some(q) = display_qty
+        && q > quantity
+    {
+        return Err(OrderError::Invariant(anyhow::anyhow!(
+            "`display_qty` may not exceed `quantity`"
+        )));
+    }
+    Ok(())
+}
+
+#[inline]
+pub(crate) fn check_time_in_force(
+    time_in_force: TimeInForce,
+    expire_time: Option<UnixNanos>,
+) -> Result<(), OrderError> {
+    if time_in_force == TimeInForce::Gtd && expire_time.unwrap_or_default() == 0 {
+        return Err(OrderError::Invariant(anyhow::anyhow!(
+            "`expire_time` is required for `GTD` order"
+        )));
+    }
+    Ok(())
 }
 
 impl OrderStatus {
@@ -173,9 +234,11 @@ impl OrderStatus {
             (Self::PendingUpdate, OrderEventAny::Triggered(_)) => Self::Triggered,
             (Self::PendingUpdate, OrderEventAny::PendingUpdate(_)) => Self::PendingUpdate,  // Allow multiple requests
             (Self::PendingUpdate, OrderEventAny::PendingCancel(_)) => Self::PendingCancel,
+            (Self::PendingUpdate, OrderEventAny::ModifyRejected(_)) => Self::PendingUpdate,  // Handled by modify_rejected to restore previous_status
             (Self::PendingUpdate, OrderEventAny::Filled(_)) => Self::Filled,
             (Self::PendingCancel, OrderEventAny::Rejected(_)) => Self::Rejected,
             (Self::PendingCancel, OrderEventAny::PendingCancel(_)) => Self::PendingCancel,  // Allow multiple requests
+            (Self::PendingCancel, OrderEventAny::CancelRejected(_)) => Self::PendingCancel,  // Handled by cancel_rejected to restore previous_status
             (Self::PendingCancel, OrderEventAny::Canceled(_)) => Self::Canceled,
             (Self::PendingCancel, OrderEventAny::Expired(_)) => Self::Expired,
             (Self::PendingCancel, OrderEventAny::Accepted(_)) => Self::Accepted,  // Allow failed cancel requests
@@ -219,6 +282,9 @@ pub trait Order: 'static + Send {
     fn expire_time(&self) -> Option<UnixNanos>;
     fn price(&self) -> Option<Price>;
     fn trigger_price(&self) -> Option<Price>;
+    fn activation_price(&self) -> Option<Price> {
+        None
+    }
     fn trigger_type(&self) -> Option<TriggerType>;
     fn liquidity_side(&self) -> Option<LiquiditySide>;
     fn is_post_only(&self) -> bool;
@@ -307,15 +373,17 @@ pub trait Order: 'static + Send {
     }
 
     fn is_primary(&self) -> bool {
-        // TODO: Guarantee `exec_spawn_id` is some if `exec_algorithm_id` is some
         self.exec_algorithm_id().is_some()
-            && self.client_order_id() == self.exec_spawn_id().unwrap()
+            && self
+                .exec_spawn_id()
+                .is_some_and(|spawn_id| self.client_order_id() == spawn_id)
     }
 
     fn is_secondary(&self) -> bool {
-        // TODO: Guarantee `exec_spawn_id` is some if `exec_algorithm_id` is some
         self.exec_algorithm_id().is_some()
-            && self.client_order_id() != self.exec_spawn_id().unwrap()
+            && self
+                .exec_spawn_id()
+                .is_some_and(|spawn_id| self.client_order_id() != spawn_id)
     }
 
     fn is_contingency(&self) -> bool {
@@ -334,10 +402,10 @@ pub trait Order: 'static + Send {
     }
 
     fn is_open(&self) -> bool {
-        if let Some(emulation_trigger) = self.emulation_trigger() {
-            if emulation_trigger != TriggerType::NoTrigger {
-                return false;
-            }
+        if let Some(emulation_trigger) = self.emulation_trigger()
+            && emulation_trigger != TriggerType::NoTrigger
+        {
+            return false;
         }
 
         matches!(
@@ -366,10 +434,10 @@ pub trait Order: 'static + Send {
     }
 
     fn is_inflight(&self) -> bool {
-        if let Some(emulation_trigger) = self.emulation_trigger() {
-            if emulation_trigger != TriggerType::NoTrigger {
-                return false;
-            }
+        if let Some(emulation_trigger) = self.emulation_trigger()
+            && emulation_trigger != TriggerType::NoTrigger
+        {
+            return false;
         }
 
         matches!(
@@ -403,8 +471,8 @@ pub trait Order: 'static + Send {
             self.time_in_force(),
             self.status(),
             self.ts_last(),
-            self.ts_submitted().unwrap_or_default(),
             self.ts_accepted().unwrap_or_default(),
+            self.ts_submitted().unwrap_or_default(),
             self.ts_init(),
         )
     }
@@ -570,8 +638,23 @@ impl OrderCore {
         assert_eq!(self.client_order_id, event.client_order_id());
         assert_eq!(self.strategy_id, event.strategy_id());
 
+        // Save current status as previous_status for ALL transitions except:
+        // - Initialized (no prior state exists)
+        // - ModifyRejected/CancelRejected (need to preserve the pre Pending state)
+        // - When already in Pending* state (avoid overwriting the pre Pending state when receiving multiple pending requests)
+        if !matches!(
+            event,
+            OrderEventAny::Initialized(_)
+                | OrderEventAny::ModifyRejected(_)
+                | OrderEventAny::CancelRejected(_)
+        ) && !matches!(
+            self.status,
+            OrderStatus::PendingUpdate | OrderStatus::PendingCancel
+        ) {
+            self.previous_status = Some(self.status);
+        }
+
         let new_status = self.status.transition(&event)?;
-        self.previous_status = Some(self.status);
         self.status = new_status;
 
         match &event {
@@ -616,7 +699,9 @@ impl OrderCore {
     }
 
     fn accepted(&mut self, event: &OrderAccepted) {
+        self.account_id = Some(event.account_id);
         self.venue_order_id = Some(event.venue_order_id);
+        self.venue_order_ids.push(event.venue_order_id);
         self.ts_accepted = Some(event.ts_event);
     }
 
@@ -655,18 +740,23 @@ impl OrderCore {
     }
 
     fn updated(&mut self, event: &OrderUpdated) {
-        if let Some(venue_order_id) = &event.venue_order_id {
-            if self.venue_order_id.is_none()
-                || venue_order_id != self.venue_order_id.as_ref().unwrap()
-            {
-                self.venue_order_id = Some(*venue_order_id);
-                self.venue_order_ids.push(*venue_order_id);
-            }
+        if let Some(venue_order_id) = &event.venue_order_id
+            && (self.venue_order_id.is_none()
+                || venue_order_id != self.venue_order_id.as_ref().unwrap())
+        {
+            self.venue_order_id = Some(*venue_order_id);
+            self.venue_order_ids.push(*venue_order_id);
         }
     }
 
     fn filled(&mut self, event: &OrderFilled) {
-        if self.filled_qty + event.last_qty < self.quantity {
+        // Use saturating arithmetic to prevent overflow
+        let new_filled_qty = Quantity::from_raw(
+            self.filled_qty.raw.saturating_add(event.last_qty.raw),
+            self.filled_qty.precision,
+        );
+
+        if new_filled_qty < self.quantity {
             self.status = OrderStatus::PartiallyFilled;
         } else {
             self.status = OrderStatus::Filled;
@@ -678,8 +768,8 @@ impl OrderCore {
         self.trade_ids.push(event.trade_id);
         self.last_trade_id = Some(event.trade_id);
         self.liquidity_side = Some(event.liquidity_side);
-        self.filled_qty += event.last_qty;
-        self.leaves_qty -= event.last_qty;
+        self.filled_qty = new_filled_qty;
+        self.leaves_qty = self.leaves_qty.saturating_sub(event.last_qty);
         self.ts_last = event.ts_event;
         if self.ts_accepted.is_none() {
             // Set ts_accepted to time of first fill if not previously set
@@ -692,15 +782,18 @@ impl OrderCore {
     fn set_avg_px(&mut self, last_qty: Quantity, last_px: Price) {
         if self.avg_px.is_none() {
             self.avg_px = Some(last_px.as_f64());
+            return;
         }
 
-        let filled_qty = self.filled_qty.as_f64();
-        let total_qty = filled_qty + last_qty.as_f64();
+        // Use previous filled quantity (before current fill) to avoid double-counting
+        let prev_filled_qty = (self.filled_qty - last_qty).as_f64();
+        let last_qty_f64 = last_qty.as_f64();
+        let total_qty = prev_filled_qty + last_qty_f64;
 
         let avg_px = self
             .avg_px
             .unwrap()
-            .mul_add(filled_qty, last_px.as_f64() * last_qty.as_f64())
+            .mul_add(prev_filled_qty, last_px.as_f64() * last_qty_f64)
             / total_qty;
         self.avg_px = Some(avg_px);
     }
@@ -716,6 +809,7 @@ impl OrderCore {
         });
     }
 
+    /// Returns the opposite order side.
     #[must_use]
     pub fn opposite_side(side: OrderSide) -> OrderSide {
         match side {
@@ -725,6 +819,7 @@ impl OrderCore {
         }
     }
 
+    /// Returns the order side needed to close a position.
     #[must_use]
     pub fn closing_side(side: PositionSide) -> OrderSide {
         match side {
@@ -774,7 +869,7 @@ impl OrderCore {
 
     #[must_use]
     pub fn commissions_vec(&self) -> Vec<Money> {
-        self.commissions.values().cloned().collect()
+        self.commissions.values().copied().collect()
     }
 
     #[must_use]
@@ -795,14 +890,15 @@ mod tests {
     use crate::{
         enums::{OrderSide, OrderStatus, PositionSide},
         events::order::{
-            accepted::OrderAcceptedBuilder, denied::OrderDeniedBuilder, filled::OrderFilledBuilder,
+            accepted::OrderAcceptedBuilder, canceled::OrderCanceledBuilder,
+            denied::OrderDeniedBuilder, filled::OrderFilledBuilder,
             initialized::OrderInitializedBuilder, submitted::OrderSubmittedBuilder,
         },
         orders::MarketOrder,
     };
 
     // TODO: WIP
-    // fn test_initialize_market_order() {
+    // fn test_display_market_order() {
     //     let order = MarketOrder::default();
     //     assert_eq!(order.events().len(), 1);
     //     assert_eq!(
@@ -910,5 +1006,191 @@ mod tests {
         assert!(order.is_closed());
         assert_eq!(order.commission(&Currency::USD()), None);
         assert_eq!(order.commissions(), &IndexMap::new());
+    }
+
+    #[rstest]
+    fn test_order_state_transition_to_canceled() {
+        let mut order: MarketOrder = OrderInitializedBuilder::default().build().unwrap().into();
+        let submitted = OrderSubmittedBuilder::default().build().unwrap();
+        let canceled = OrderCanceledBuilder::default().build().unwrap();
+
+        order.apply(OrderEventAny::Submitted(submitted)).unwrap();
+        order.apply(OrderEventAny::Canceled(canceled)).unwrap();
+
+        assert_eq!(order.status(), OrderStatus::Canceled);
+        assert!(order.is_closed());
+        assert!(!order.is_open());
+    }
+
+    #[rstest]
+    fn test_order_life_cycle_to_partially_filled() {
+        let init = OrderInitializedBuilder::default().build().unwrap();
+        let submitted = OrderSubmittedBuilder::default().build().unwrap();
+        let accepted = OrderAcceptedBuilder::default().build().unwrap();
+        let filled = OrderFilledBuilder::default()
+            .last_qty(Quantity::from(50_000))
+            .build()
+            .unwrap();
+
+        let mut order: MarketOrder = init.clone().into();
+        order.apply(OrderEventAny::Submitted(submitted)).unwrap();
+        order.apply(OrderEventAny::Accepted(accepted)).unwrap();
+        order.apply(OrderEventAny::Filled(filled)).unwrap();
+
+        assert_eq!(order.client_order_id, init.client_order_id);
+        assert_eq!(order.status(), OrderStatus::PartiallyFilled);
+        assert_eq!(order.filled_qty(), Quantity::from(50_000));
+        assert_eq!(order.leaves_qty(), Quantity::from(50_000));
+        assert!(order.is_open());
+        assert!(!order.is_closed());
+    }
+
+    #[rstest]
+    fn test_order_commission_calculation() {
+        let mut order: MarketOrder = OrderInitializedBuilder::default().build().unwrap().into();
+        order
+            .commissions
+            .insert(Currency::USD(), Money::new(10.0, Currency::USD()));
+
+        assert_eq!(
+            order.commission(&Currency::USD()),
+            Some(Money::new(10.0, Currency::USD()))
+        );
+        assert_eq!(
+            order.commissions_vec(),
+            vec![Money::new(10.0, Currency::USD())]
+        );
+    }
+
+    #[rstest]
+    fn test_order_is_primary() {
+        let order: MarketOrder = OrderInitializedBuilder::default()
+            .exec_algorithm_id(Some(ExecAlgorithmId::from("ALGO-001")))
+            .exec_spawn_id(Some(ClientOrderId::from("O-001")))
+            .client_order_id(ClientOrderId::from("O-001"))
+            .build()
+            .unwrap()
+            .into();
+
+        assert!(order.is_primary());
+        assert!(!order.is_secondary());
+    }
+
+    #[rstest]
+    fn test_order_is_secondary() {
+        let order: MarketOrder = OrderInitializedBuilder::default()
+            .exec_algorithm_id(Some(ExecAlgorithmId::from("ALGO-001")))
+            .exec_spawn_id(Some(ClientOrderId::from("O-002")))
+            .client_order_id(ClientOrderId::from("O-001"))
+            .build()
+            .unwrap()
+            .into();
+
+        assert!(!order.is_primary());
+        assert!(order.is_secondary());
+    }
+
+    #[rstest]
+    fn test_order_is_contingency() {
+        let order: MarketOrder = OrderInitializedBuilder::default()
+            .contingency_type(Some(ContingencyType::Oto))
+            .build()
+            .unwrap()
+            .into();
+
+        assert!(order.is_contingency());
+        assert!(order.is_parent_order());
+        assert!(!order.is_child_order());
+    }
+
+    #[rstest]
+    fn test_order_is_child_order() {
+        let order: MarketOrder = OrderInitializedBuilder::default()
+            .parent_order_id(Some(ClientOrderId::from("PARENT-001")))
+            .build()
+            .unwrap()
+            .into();
+
+        assert!(order.is_child_order());
+        assert!(!order.is_parent_order());
+    }
+
+    #[rstest]
+    fn test_to_own_book_order_timestamp_ordering() {
+        use crate::orders::limit::LimitOrder;
+
+        // Create order with distinct timestamps to verify parameter ordering
+        let init = OrderInitializedBuilder::default()
+            .price(Some(Price::from("100.00")))
+            .build()
+            .unwrap();
+        let submitted = OrderSubmittedBuilder::default()
+            .ts_event(UnixNanos::from(1_000_000))
+            .build()
+            .unwrap();
+        let accepted = OrderAcceptedBuilder::default()
+            .ts_event(UnixNanos::from(2_000_000))
+            .build()
+            .unwrap();
+
+        let mut order: LimitOrder = init.into();
+        order.apply(OrderEventAny::Submitted(submitted)).unwrap();
+        order.apply(OrderEventAny::Accepted(accepted)).unwrap();
+
+        let own_book_order = order.to_own_book_order();
+
+        // Verify timestamps are in correct positions
+        assert_eq!(own_book_order.ts_submitted, UnixNanos::from(1_000_000));
+        assert_eq!(own_book_order.ts_accepted, UnixNanos::from(2_000_000));
+        assert_eq!(own_book_order.ts_last, UnixNanos::from(2_000_000));
+    }
+
+    #[rstest]
+    fn test_order_accepted_without_submitted_sets_account_id() {
+        // Test external order flow: Initialized -> Accepted (no Submitted)
+        let init = OrderInitializedBuilder::default().build().unwrap();
+        let accepted = OrderAcceptedBuilder::default()
+            .account_id(AccountId::from("EXTERNAL-001"))
+            .build()
+            .unwrap();
+
+        let mut order: MarketOrder = init.into();
+
+        // Verify account_id is initially None
+        assert_eq!(order.account_id(), None);
+
+        // Apply accepted event directly (external order case)
+        order.apply(OrderEventAny::Accepted(accepted)).unwrap();
+
+        // Verify account_id is now set from the accepted event
+        assert_eq!(order.account_id(), Some(AccountId::from("EXTERNAL-001")));
+        assert_eq!(order.status(), OrderStatus::Accepted);
+    }
+
+    #[rstest]
+    fn test_order_accepted_after_submitted_preserves_account_id() {
+        // Test normal order flow: Initialized -> Submitted -> Accepted
+        let init = OrderInitializedBuilder::default().build().unwrap();
+        let submitted = OrderSubmittedBuilder::default()
+            .account_id(AccountId::from("SUBMITTED-001"))
+            .build()
+            .unwrap();
+        let accepted = OrderAcceptedBuilder::default()
+            .account_id(AccountId::from("ACCEPTED-001"))
+            .build()
+            .unwrap();
+
+        let mut order: MarketOrder = init.into();
+        order.apply(OrderEventAny::Submitted(submitted)).unwrap();
+
+        // After submitted, account_id should be set
+        assert_eq!(order.account_id(), Some(AccountId::from("SUBMITTED-001")));
+
+        // Apply accepted event
+        order.apply(OrderEventAny::Accepted(accepted)).unwrap();
+
+        // account_id should now be updated to the accepted event's account_id
+        assert_eq!(order.account_id(), Some(AccountId::from("ACCEPTED-001")));
+        assert_eq!(order.status(), OrderStatus::Accepted);
     }
 }

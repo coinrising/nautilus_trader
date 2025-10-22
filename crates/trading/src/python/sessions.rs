@@ -16,7 +16,6 @@
 use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
-use chrono_tz::Tz;
 use nautilus_core::python::to_pyvalue_err;
 use nautilus_model::python::common::EnumIterator;
 use pyo3::{PyTypeInfo, prelude::*, types::PyType};
@@ -104,19 +103,24 @@ impl ForexSession {
 ///
 /// The `time_now` must be timezone-aware with its tzinfo set to a built-in `datetime.timezone`
 /// (e.g. `datetime.timezone.utc`). Third-party tzinfo objects (like those from `pytz`) are not supported.
+///
+/// # Errors
+///
+/// Returns a `PyErr` if an error occurs during session conversion or value conversion to Python.
 #[pyfunction]
 #[pyo3(name = "fx_local_from_utc")]
-pub fn py_fx_local_from_utc(
-    session: ForexSession,
-    time_now: DateTime<Utc>,
-) -> PyResult<DateTime<Tz>> {
-    Ok(fx_local_from_utc(session, time_now))
+pub fn py_fx_local_from_utc(session: ForexSession, time_now: DateTime<Utc>) -> PyResult<String> {
+    Ok(fx_local_from_utc(session, time_now).to_rfc3339())
 }
 
 /// Returns the next session start time in UTC.
 ///
 /// The `time_now` must be timezone-aware with its tzinfo set to a built-in `datetime.timezone`
 /// (e.g. `datetime.timezone.utc`). Third-party tzinfo objects (like those from `pytz`) are not supported.
+///
+/// # Errors
+///
+/// Returns a `PyErr` if an error occurs during session conversion or value conversion to Python.
 #[pyfunction]
 #[pyo3(name = "fx_next_start")]
 pub fn py_fx_next_start(session: ForexSession, time_now: DateTime<Utc>) -> PyResult<DateTime<Utc>> {
@@ -127,6 +131,10 @@ pub fn py_fx_next_start(session: ForexSession, time_now: DateTime<Utc>) -> PyRes
 ///
 /// The `time_now` must be timezone-aware with its tzinfo set to a built-in `datetime.timezone`
 /// (e.g. `datetime.timezone.utc`). Third-party tzinfo objects (like those from `pytz`) are not supported.
+///
+/// # Errors
+///
+/// Returns a `PyErr` if an error occurs during session conversion or value conversion to Python.
 #[pyfunction]
 #[pyo3(name = "fx_next_end")]
 pub fn py_fx_next_end(session: ForexSession, time_now: DateTime<Utc>) -> PyResult<DateTime<Utc>> {
@@ -137,6 +145,10 @@ pub fn py_fx_next_end(session: ForexSession, time_now: DateTime<Utc>) -> PyResul
 ///
 /// The `time_now` must be timezone-aware with its tzinfo set to a built-in `datetime.timezone`
 /// (e.g. `datetime.timezone.utc`). Third-party tzinfo objects (like those from `pytz`) are not supported.
+///
+/// # Errors
+///
+/// Returns a `PyErr` if an error occurs during session conversion or value conversion to Python.
 #[pyfunction]
 #[pyo3(name = "fx_prev_start")]
 pub fn py_fx_prev_start(session: ForexSession, time_now: DateTime<Utc>) -> PyResult<DateTime<Utc>> {
@@ -147,6 +159,10 @@ pub fn py_fx_prev_start(session: ForexSession, time_now: DateTime<Utc>) -> PyRes
 ///
 /// The `time_now` must be timezone-aware with its tzinfo set to a built-in `datetime.timezone`
 /// (e.g. `datetime.timezone.utc`). Third-party tzinfo objects (like those from `pytz`) are not supported.
+///
+/// # Errors
+///
+/// Returns a `PyErr` if an error occurs during session conversion or value conversion to Python.
 #[pyfunction]
 #[pyo3(name = "fx_prev_end")]
 pub fn py_fx_prev_end(session: ForexSession, time_now: DateTime<Utc>) -> PyResult<DateTime<Utc>> {

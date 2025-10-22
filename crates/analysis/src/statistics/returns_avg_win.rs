@@ -13,21 +13,31 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
+use std::fmt::{self, Display};
+
+use nautilus_model::position::Position;
+
 use crate::{Returns, statistic::PortfolioStatistic};
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.analysis")
 )]
 pub struct ReturnsAverageWin {}
 
+impl Display for ReturnsAverageWin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Average Win (Return)")
+    }
+}
+
 impl PortfolioStatistic for ReturnsAverageWin {
     type Item = f64;
 
     fn name(&self) -> String {
-        stringify!(ReturnsAverageWin).to_string()
+        self.to_string()
     }
 
     fn calculate_from_returns(&self, returns: &Returns) -> Option<Self::Item> {
@@ -46,13 +56,24 @@ impl PortfolioStatistic for ReturnsAverageWin {
 
         Some(sum / count)
     }
+    fn calculate_from_realized_pnls(&self, _realized_pnls: &[f64]) -> Option<Self::Item> {
+        None
+    }
+
+    fn calculate_from_positions(&self, _positions: &[Position]) -> Option<Self::Item> {
+        None
+    }
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Tests
+////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use nautilus_core::UnixNanos;
+    use nautilus_core::{UnixNanos, approx_eq};
     use rstest::rstest;
 
     use super::*;
@@ -90,7 +111,7 @@ mod tests {
         let result = avg_win.calculate_from_returns(&returns);
         assert!(result.is_some());
         // Average of [10.0, 20.0, 30.0] = (10 + 20 + 30) / 3 = 20.0
-        assert_eq!(result.unwrap(), 20.0);
+        assert!(approx_eq!(f64, result.unwrap(), 20.0, epsilon = 1e-9));
     }
 
     #[rstest]
@@ -100,12 +121,12 @@ mod tests {
         let result = avg_win.calculate_from_returns(&returns);
         assert!(result.is_some());
         // Average of [10.0, 30.0] = (10 + 30) / 2 = 20.0
-        assert_eq!(result.unwrap(), 20.0);
+        assert!(approx_eq!(f64, result.unwrap(), 20.0, epsilon = 1e-9));
     }
 
     #[rstest]
     fn test_name() {
         let avg_win = ReturnsAverageWin {};
-        assert_eq!(avg_win.name(), "ReturnsAverageWin");
+        assert_eq!(avg_win.name(), "Average Win (Return)");
     }
 }

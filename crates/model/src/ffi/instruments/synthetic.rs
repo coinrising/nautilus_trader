@@ -69,8 +69,9 @@ impl DerefMut for SyntheticInstrument_API {
 ///
 /// # Safety
 ///
-/// - Assumes `components_ptr` is a valid C string pointer of a JSON format list of strings.
-/// - Assumes `formula_ptr` is a valid C string pointer.
+/// This function assumes:
+/// - `components_ptr` is a valid C string pointer of a JSON format list of strings.
+/// - `formula_ptr` is a valid C string pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn synthetic_instrument_new(
     symbol: Symbol,
@@ -133,7 +134,7 @@ pub extern "C" fn synthetic_instrument_components_to_cstr(
     let components_vec = synth
         .components
         .iter()
-        .map(std::string::ToString::to_string)
+        .map(ToString::to_string)
         .collect::<Vec<String>>();
 
     string_vec_to_bytes(&components_vec)
@@ -156,7 +157,7 @@ pub extern "C" fn synthetic_instrument_ts_init(synth: &SyntheticInstrument_API) 
 
 /// # Safety
 ///
-/// - Assumes `formula_ptr` is a valid C string pointer.
+/// Assumes `formula_ptr` is a valid C string pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn synthetic_instrument_is_valid_formula(
     synth: &SyntheticInstrument_API,
@@ -171,7 +172,7 @@ pub unsafe extern "C" fn synthetic_instrument_is_valid_formula(
 
 /// # Safety
 ///
-/// - Assumes `formula_ptr` is a valid C string pointer.
+/// Assumes `formula_ptr` is a valid C string pointer.
 ///
 /// # Panics
 ///

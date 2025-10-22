@@ -16,7 +16,6 @@
 Define the candles / bars endpoint.
 """
 
-# ruff: noqa: N815
 
 import datetime
 
@@ -41,7 +40,7 @@ class DYDXCandlesGetParams(msgspec.Struct, omit_defaults=True):
     toISO: datetime.datetime | None = None
 
 
-class DYDXCandlesResponse(msgspec.Struct, forbid_unknown_fields=True):
+class DYDXCandlesResponse(msgspec.Struct, forbid_unknown_fields=False):
     """
     Represent the dYdX candles response object.
     """

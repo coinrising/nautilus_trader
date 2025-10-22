@@ -19,10 +19,12 @@ use std::{collections::HashMap, hash::Hash, str::FromStr, sync::Arc, time::Durat
 
 use bytes::Bytes;
 use http::{HeaderValue, StatusCode, status::InvalidStatusCode};
+use nautilus_core::collections::into_ustr_vec;
 use reqwest::{
     Method, Response, Url,
     header::{HeaderMap, HeaderName},
 };
+use ustr::Ustr;
 
 use crate::ratelimiter::{RateLimiter, clock::MonotonicClock, quota::Quota};
 
@@ -44,17 +46,6 @@ impl HttpStatus {
     #[must_use]
     pub const fn new(code: StatusCode) -> Self {
         Self { inner: code }
-    }
-
-    /// Attempts to construct a [`HttpStatus`] from a `u16`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the code is not in the valid `100..999` range.
-    pub fn from(code: u16) -> Result<Self, InvalidStatusCode> {
-        Ok(Self {
-            inner: StatusCode::from_u16(code)?,
-        })
     }
 
     /// Returns the status code as a `u16` (e.g., `200` for OK).
@@ -107,6 +98,21 @@ impl HttpStatus {
     }
 }
 
+impl TryFrom<u16> for HttpStatus {
+    type Error = InvalidStatusCode;
+
+    /// Attempts to construct a [`HttpStatus`] from a `u16`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the code is not in the valid `100..999` range.
+    fn try_from(code: u16) -> Result<Self, Self::Error> {
+        Ok(Self {
+            inner: StatusCode::from_u16(code)?,
+        })
+    }
+}
+
 /// Represents the HTTP methods supported by the `HttpClient`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(
@@ -121,15 +127,14 @@ pub enum HttpMethod {
     PATCH,
 }
 
-#[allow(clippy::from_over_into)]
-impl Into<Method> for HttpMethod {
-    fn into(self) -> Method {
-        match self {
-            Self::GET => Method::GET,
-            Self::POST => Method::POST,
-            Self::PUT => Method::PUT,
-            Self::DELETE => Method::DELETE,
-            Self::PATCH => Method::PATCH,
+impl From<HttpMethod> for Method {
+    fn from(value: HttpMethod) -> Self {
+        match value {
+            HttpMethod::GET => Self::GET,
+            HttpMethod::POST => Self::POST,
+            HttpMethod::PUT => Self::PUT,
+            HttpMethod::DELETE => Self::DELETE,
+            HttpMethod::PATCH => Self::PATCH,
         }
     }
 }
@@ -189,7 +194,7 @@ impl From<String> for HttpClientError {
 /// support for rate limiting, timeouts, and custom headers. The client is
 /// built on top of `reqwest` and can be used for both synchronous and
 /// asynchronous HTTP requests.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.network")
@@ -198,11 +203,15 @@ pub struct HttpClient {
     /// The underlying HTTP client used to make requests.
     pub(crate) client: InnerHttpClient,
     /// The rate limiter to control the request rate.
-    pub(crate) rate_limiter: Arc<RateLimiter<String, MonotonicClock>>,
+    pub(crate) rate_limiter: Arc<RateLimiter<Ustr, MonotonicClock>>,
 }
 
 impl HttpClient {
     /// Creates a new [`HttpClient`] instance.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any header key or value is invalid, or if building the underlying `reqwest::Client` fails.
     #[must_use]
     pub fn new(
         headers: HashMap<String, String>,
@@ -232,6 +241,11 @@ impl HttpClient {
             client,
             header_keys: Arc::new(header_keys),
         };
+
+        let keyed_quotas = keyed_quotas
+            .into_iter()
+            .map(|(key, quota)| (Ustr::from(&key), quota))
+            .collect();
 
         let rate_limiter = Arc::new(RateLimiter::new_with_quota(default_quota, keyed_quotas));
 
@@ -266,6 +280,27 @@ impl HttpClient {
         body: Option<Vec<u8>>,
         timeout_secs: Option<u64>,
         keys: Option<Vec<String>>,
+    ) -> Result<HttpResponse, HttpClientError> {
+        let keys = keys.map(into_ustr_vec);
+
+        self.request_with_ustr_keys(method, url, headers, body, timeout_secs, keys)
+            .await
+    }
+
+    /// Sends an HTTP request using pre-interned rate limiter keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if unable to send the request or the request times out.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn request_with_ustr_keys(
+        &self,
+        method: Method,
+        url: String,
+        headers: Option<HashMap<String, String>>,
+        body: Option<Vec<u8>>,
+        timeout_secs: Option<u64>,
+        keys: Option<Vec<Ustr>>,
     ) -> Result<HttpResponse, HttpClientError> {
         let rate_limiter = self.rate_limiter.clone();
         rate_limiter.await_keys_ready(keys).await;
@@ -318,12 +353,14 @@ impl InnerHttpClient {
         for (header_key, header_value) in &headers {
             let key = HeaderName::from_bytes(header_key.as_bytes())
                 .map_err(|e| HttpClientError::from(format!("Invalid header name: {e}")))?;
-            let _ = header_map.insert(
-                key,
+            if let Some(old_value) = header_map.insert(
+                key.clone(),
                 header_value
                     .parse()
                     .map_err(|e| HttpClientError::from(format!("Invalid header value: {e}")))?,
-            );
+            ) {
+                tracing::trace!("Replaced header '{key}': old={old_value:?}, new={header_value}");
+            }
         }
 
         let mut request_builder = self.client.request(method, reqwest_url).headers(header_map);
@@ -588,8 +625,8 @@ mod tests {
             Err(HttpClientError::TimeoutError(msg)) => {
                 println!("Got expected timeout error: {msg}");
             }
-            Err(other) => panic!("Expected a timeout error, got: {other:?}"),
-            Ok(resp) => panic!("Expected a timeout error, but got a successful response: {resp:?}"),
+            Err(other) => panic!("Expected a timeout error, was: {other:?}"),
+            Ok(resp) => panic!("Expected a timeout error, but was a successful response: {resp:?}"),
         }
     }
 }

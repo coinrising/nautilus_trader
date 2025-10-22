@@ -15,6 +15,7 @@
 
 import inspect
 
+from nautilus_trader.core.datetime import dt_to_unix_nanos
 from nautilus_trader.execution.client import ExecutionClient
 from nautilus_trader.execution.messages import GenerateFillReports
 from nautilus_trader.execution.messages import GenerateOrderStatusReport
@@ -268,6 +269,12 @@ class MockLiveExecutionClient(LiveExecutionClient):
             self.calls.append(current_frame.f_code.co_name)
         self.commands.append(command)
 
+    def query_account(self, command) -> None:
+        current_frame = inspect.currentframe()
+        if current_frame:
+            self.calls.append(current_frame.f_code.co_name)
+        self.commands.append(command)
+
     def query_order(self, command) -> None:
         current_frame = inspect.currentframe()
         if current_frame:
@@ -302,10 +309,12 @@ class MockLiveExecutionClient(LiveExecutionClient):
             reports = [r for r in reports if r.instrument_id == command.instrument_id]
 
         if command.start is not None:
-            reports = [r for r in reports if r.ts_accepted >= command.start]
+            start_ns = dt_to_unix_nanos(command.start)
+            reports = [r for r in reports if r.ts_accepted >= start_ns]
 
         if command.end is not None:
-            reports = [r for r in reports if r.ts_accepted <= command.end]
+            end_ns = dt_to_unix_nanos(command.end)
+            reports = [r for r in reports if r.ts_accepted <= end_ns]
 
         return reports
 
@@ -328,10 +337,12 @@ class MockLiveExecutionClient(LiveExecutionClient):
             trades = [t for t in trades if t.instrument_id == command.instrument_id]
 
         if command.start is not None:
-            trades = [t for t in trades if t.ts_event >= command.start]
+            start_ns = dt_to_unix_nanos(command.start)
+            trades = [t for t in trades if t.ts_event >= start_ns]
 
         if command.end is not None:
-            trades = [t for t in trades if t.ts_event <= command.end]
+            end_ns = dt_to_unix_nanos(command.end)
+            trades = [t for t in trades if t.ts_event <= end_ns]
 
         return trades
 
@@ -351,9 +362,11 @@ class MockLiveExecutionClient(LiveExecutionClient):
                 reports = [*reports, *p_list]
 
         if command.start is not None:
-            reports = [r for r in reports if r.ts_event >= command.start]
+            start_ns = dt_to_unix_nanos(command.start)
+            reports = [r for r in reports if r.ts_event >= start_ns]
 
         if command.end is not None:
-            reports = [r for r in reports if r.ts_event <= command.end]
+            end_ns = dt_to_unix_nanos(command.end)
+            reports = [r for r in reports if r.ts_event <= end_ns]
 
         return reports

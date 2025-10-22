@@ -127,6 +127,7 @@ impl CryptoOption {
         price_increment: Price,
         size_increment: Quantity,
         multiplier: Option<Quantity>,
+        lot_size: Option<Quantity>,
         max_quantity: Option<Quantity>,
         min_quantity: Option<Quantity>,
         max_notional: Option<Money>,
@@ -173,7 +174,7 @@ impl CryptoOption {
             price_increment,
             size_increment,
             multiplier: multiplier.unwrap_or(Quantity::from(1)),
-            lot_size: Quantity::from(1),
+            lot_size: lot_size.unwrap_or(Quantity::from(1)),
             margin_init: margin_init.unwrap_or_default(),
             margin_maint: margin_maint.unwrap_or_default(),
             maker_fee: maker_fee.unwrap_or_default(),
@@ -190,6 +191,7 @@ impl CryptoOption {
     }
 
     /// Creates a new [`CryptoOption`] instance.
+    ///
     /// # Panics
     ///
     /// Panics if any parameter is invalid (see `new_checked`).
@@ -210,6 +212,7 @@ impl CryptoOption {
         price_increment: Price,
         size_increment: Quantity,
         multiplier: Option<Quantity>,
+        lot_size: Option<Quantity>,
         max_quantity: Option<Quantity>,
         min_quantity: Option<Quantity>,
         max_notional: Option<Money>,
@@ -239,6 +242,7 @@ impl CryptoOption {
             price_increment,
             size_increment,
             multiplier,
+            lot_size,
             max_quantity,
             min_quantity,
             max_notional,

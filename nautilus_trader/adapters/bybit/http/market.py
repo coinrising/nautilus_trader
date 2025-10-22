@@ -126,7 +126,7 @@ class BybitMarketHttpAPI:
         Fetch all instruments with pagination from Bybit.
         """
         all_instruments: list[BybitInstrument] = []
-        current_cursor = None
+        cursor = None
 
         while True:
             response = await self._endpoint_instruments.get(
@@ -136,13 +136,13 @@ class BybitMarketHttpAPI:
                     status=status,
                     baseCoin=base_coin,
                     limit=1000,
-                    cursor=current_cursor,
+                    cursor=cursor,
                 ),
             )
             all_instruments.extend(response.result.list)
-            current_cursor = response.result.nextPageCursor
+            cursor = response.result.nextPageCursor
 
-            if not current_cursor or current_cursor == "":
+            if not cursor or cursor == "":
                 break
 
         if product_type == BybitProductType.SPOT:
@@ -208,7 +208,6 @@ class BybitMarketHttpAPI:
     async def request_bybit_trades(
         self,
         instrument_id: InstrumentId,
-        ts_init: int,
         limit: int = 1000,
     ) -> list[Bar]:
         bybit_symbol = BybitSymbol(instrument_id.symbol.value)
@@ -217,14 +216,13 @@ class BybitMarketHttpAPI:
             product_type=bybit_symbol.product_type,
             limit=limit,
         )
-        trade_ticks: list[TradeTick] = [t.parse_to_trade(instrument_id, ts_init) for t in trades]
+        trade_ticks: list[TradeTick] = [t.parse_to_trade(instrument_id) for t in trades]
         return trade_ticks
 
     async def request_bybit_bars(
         self,
         bar_type: BarType,
         interval: BybitKlineInterval,
-        ts_init: int,
         timestamp_on_close: bool,
         limit: int | None = None,
         start: int | None = None,
@@ -233,13 +231,14 @@ class BybitMarketHttpAPI:
         bybit_symbol = BybitSymbol(bar_type.instrument_id.symbol.value)
 
         all_bars: list[Bar] = []
-        prev_start: int | None = None
         seen_timestamps: set[int] = set()
 
+        # Work backwards from end time to get all historical data
+        current_end = end
+        page_count = 0
+
         while True:
-            if prev_start is not None and prev_start == start:
-                break
-            prev_start = start
+            page_count += 1
 
             klines = await self.fetch_klines(
                 symbol=bybit_symbol.raw_symbol,
@@ -247,7 +246,7 @@ class BybitMarketHttpAPI:
                 interval=interval,
                 limit=1000,  # Limit for data size per page (maximum for the Bybit API)
                 start=start,
-                end=end,
+                end=current_end,
             )
 
             if not klines:
@@ -255,17 +254,32 @@ class BybitMarketHttpAPI:
 
             klines.sort(key=lambda k: int(k.startTime))
             new_bars = [
-                kline.parse_to_bar(bar_type, ts_init, timestamp_on_close)
+                kline.parse_to_bar(bar_type, timestamp_on_close)
                 for kline in klines
                 if int(kline.startTime) not in seen_timestamps
             ]
 
+            # If no new bars were added (all were duplicates), we've reached the end
+            if not new_bars:
+                break
+
             all_bars.extend(new_bars)
             seen_timestamps.update(int(kline.startTime) for kline in klines)
 
-            start = int(klines[-1].startTime) + 1
+            # Check if we've reached the requested limit
+            if limit is not None and len(all_bars) >= limit:
+                break
 
-            if end is not None and start > end:
+            # Move end time backwards to get earlier data
+            # Set new end to be 1ms before the first bar of this page
+            earliest_bar_time = int(klines[0].startTime)
+            if start is not None and earliest_bar_time <= start:
+                break
+
+            current_end = earliest_bar_time - 1
+
+            # Safety check to prevent infinite loops
+            if page_count > 100:
                 break
 
         if limit is not None and len(all_bars) > limit:

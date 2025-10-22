@@ -13,21 +13,31 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
+use std::fmt::{self, Display};
+
+use nautilus_model::position::Position;
+
 use crate::{Returns, statistic::PortfolioStatistic};
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.analysis")
 )]
 pub struct RiskReturnRatio {}
 
+impl Display for RiskReturnRatio {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Risk Return Ratio")
+    }
+}
+
 impl PortfolioStatistic for RiskReturnRatio {
     type Item = f64;
 
     fn name(&self) -> String {
-        stringify!(RiskReturnRatio).to_string()
+        self.to_string()
     }
 
     fn calculate_from_returns(&self, returns: &Returns) -> Option<Self::Item> {
@@ -44,13 +54,24 @@ impl PortfolioStatistic for RiskReturnRatio {
             Some(mean / std)
         }
     }
+    fn calculate_from_realized_pnls(&self, _realized_pnls: &[f64]) -> Option<Self::Item> {
+        None
+    }
+
+    fn calculate_from_positions(&self, _positions: &[Position]) -> Option<Self::Item> {
+        None
+    }
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Tests
+////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use nautilus_core::UnixNanos;
+    use nautilus_core::{UnixNanos, approx_eq};
     use rstest::rstest;
 
     use super::*;
@@ -87,12 +108,17 @@ mod tests {
         let returns = create_returns(vec![0.1, -0.05, 0.2, -0.1, 0.15]);
         let result = ratio.calculate_from_returns(&returns);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), 0.46360044557175345);
+        assert!(approx_eq!(
+            f64,
+            result.unwrap(),
+            0.46360044557175345,
+            epsilon = 1e-9
+        ));
     }
 
     #[rstest]
     fn test_name() {
         let ratio = RiskReturnRatio {};
-        assert_eq!(ratio.name(), "RiskReturnRatio");
+        assert_eq!(ratio.name(), "Risk Return Ratio");
     }
 }

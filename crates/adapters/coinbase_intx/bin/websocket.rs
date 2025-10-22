@@ -18,7 +18,6 @@ use nautilus_coinbase_intx::{
     http::client::CoinbaseIntxHttpClient, websocket::client::CoinbaseIntxWebSocketClient,
 };
 use nautilus_model::identifiers::InstrumentId;
-use tokio::{pin, signal};
 use tracing::level_filters::LevelFilter;
 
 #[tokio::main]
@@ -32,23 +31,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Cache instruments first (required for correct websocket message parsing)
     let instruments = client.request_instruments().await?;
     let mut client = CoinbaseIntxWebSocketClient::default();
-    client.connect(instruments).await?;
+    client.initialize_instruments_cache(instruments);
+
+    client.connect().await?;
 
     let instrument_id = InstrumentId::from("BTC-PERP.COINBASE_INTX");
 
     // client.subscribe_instruments(vec![instrument_id]).await?;
     // client.subscribe_risk(vec![instrument_id]).await?;
-    // client.subscribe_funding(vec![instrument_id]).await?;
+    // client.subscribe_funding_rates(vec![instrument_id]).await?;
     // client.subscribe_trades(vec![instrument_id]).await?;
     // client.subscribe_quotes(vec![instrument_id]).await?;
-    client.subscribe_order_book(vec![instrument_id]).await?;
+    client.subscribe_book(vec![instrument_id]).await?;
 
     // let bar_type = BarType::from("ETH-PERP.COINBASE_INTX-1-MINUTE-LAST-EXTERNAL");
     // client.subscribe_bars(bar_type).await?;
 
     // Create a future that completes on CTRL+C
-    let sigint = signal::ctrl_c();
-    pin!(sigint);
+    let sigint = tokio::signal::ctrl_c();
+    tokio::pin!(sigint);
 
     let stream = client.stream();
     tokio::pin!(stream); // Pin the stream to allow polling in the loop

@@ -16,11 +16,13 @@
 import asyncio
 import signal
 import time
+from collections.abc import Callable
 from datetime import timedelta
 
 from nautilus_trader.cache.base import CacheFacade
 from nautilus_trader.common.component import Logger
 from nautilus_trader.common.enums import LogColor
+from nautilus_trader.common.functions import get_event_loop
 from nautilus_trader.config import TradingNodeConfig
 from nautilus_trader.core import nautilus_pyo3
 from nautilus_trader.core.correctness import PyCondition
@@ -60,7 +62,11 @@ class TradingNode:
 
         self._config: TradingNodeConfig = config
 
-        loop = loop or asyncio.get_event_loop()
+        if loop is None:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = get_event_loop()
 
         self.kernel = NautilusKernel(
             name=type(self).__name__,
@@ -84,6 +90,8 @@ class TradingNode:
         has_msgbus_backing = bool(config.message_bus and config.message_bus.database)
         self.kernel.logger.info(f"{has_cache_backing=}", LogColor.BLUE)
         self.kernel.logger.info(f"{has_msgbus_backing=}", LogColor.BLUE)
+
+        self._stream_processors: list[Callable] = []
 
         # Async tasks
         self._task_streaming: asyncio.Future | None = None
@@ -207,6 +215,18 @@ class TradingNode:
         """
         return self.kernel.logger
 
+    def add_stream_processor(self, callback: Callable) -> None:
+        """
+        Add the given stream processor callback.
+
+        Parameters
+        ----------
+        callback : Callable
+            The callback to add.
+
+        """
+        self._stream_processors.append(callback)
+
     def add_data_client_factory(self, name: str, factory: type[LiveDataClientFactory]) -> None:
         """
         Add the given data client factory to the node.
@@ -260,13 +280,20 @@ class TradingNode:
         self._builder.build_exec_clients(self._config.exec_clients)
         self._is_built = True
 
-    def run(self, raise_exception=False) -> None:
+    def run(self, raise_exception: bool = False) -> None:
         """
         Start and run the trading node.
+
+        Parameters
+        ----------
+        raise_exception : bool, default False
+            If runtime exceptions should be re-raised as well as being logged.
+
         """
         try:
             if self.kernel.loop.is_running():
-                self.kernel.loop.create_task(self.run_async())
+                task = self.kernel.loop.create_task(self.run_async())
+                task.add_done_callback(self._handle_run_task_result)
             else:
                 self.kernel.loop.run_until_complete(self.run_async())
         except RuntimeError as e:
@@ -287,12 +314,26 @@ class TradingNode:
             The bus message to publish.
 
         """
-        msg = self.kernel.msgbus_serializer.deserialize(bus_msg.payload)
+        try:
+            msg = self.kernel.msgbus_serializer.deserialize(bus_msg.payload)
+        except Exception as e:
+            self.kernel.logger.error(f"Failed to deserialize bus message: {e}")
+            return
 
-        if not self.kernel.msgbus.is_streaming_type(type(msg)):
-            return  # Type has not been registered for message streaming
+        try:
+            for processor in self._stream_processors:
+                processor(msg)
 
-        self.kernel.msgbus.publish(bus_msg.topic, msg, external_pub=False)
+            if not self.kernel.msgbus.is_streaming_type(type(msg)):
+                return  # Type has not been registered for message streaming
+        except Exception as e:
+            self.kernel.logger.error(f"Failed to process bus message: {e}")
+            return
+
+        try:
+            self.kernel.msgbus.publish(bus_msg.topic, msg, external_pub=False)
+        except Exception as e:
+            self.kernel.logger.error(f"Failed to publish bus message: {e}")
 
     async def run_async(self) -> None:
         """
@@ -362,11 +403,6 @@ class TradingNode:
         If save strategy is configured, then strategy states will be saved.
 
         """
-        if self._task_streaming:
-            self.kernel.logger.info("Canceling task 'streaming'")
-            self._task_streaming.cancel()
-            self._task_streaming = None
-
         await self.kernel.stop_async()
 
     def dispose(self) -> None:
@@ -395,6 +431,11 @@ class TradingNode:
                     break
 
             self.kernel.logger.debug("DISPOSING")
+
+            if self._task_streaming:
+                self.kernel.logger.info("Canceling task 'streaming'")
+                self._task_streaming.cancel()
+                self._task_streaming = None
 
             self.kernel.logger.debug(str(self.kernel.data_engine.get_cmd_queue_task()))
             self.kernel.logger.debug(str(self.kernel.data_engine.get_req_queue_task()))
@@ -429,6 +470,14 @@ class TradingNode:
             self.kernel.logger.info(f"loop.is_running={self.kernel.loop.is_running()}")
             self.kernel.logger.info(f"loop.is_closed={self.kernel.loop.is_closed()}")
             self.kernel.logger.info("DISPOSED")
+
+    def _handle_run_task_result(self, task: asyncio.Task) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return  # Normal control flow
+        except BaseException as e:
+            self.kernel.logger.exception("Error in run_async task", e)
 
     def _loop_sig_handler(self, sig: signal.Signals) -> None:
         self.kernel.logger.warning(f"Received {sig.name}, shutting down")

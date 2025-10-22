@@ -13,24 +13,23 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
+//! Execution client implementations for trading venue connectivity.
+
+use std::fmt::Debug;
+
+use async_trait::async_trait;
+use nautilus_common::messages::execution::{
+    BatchCancelOrders, CancelAllOrders, CancelOrder, GenerateFillReports,
+    GenerateOrderStatusReport, GeneratePositionReports, ModifyOrder, QueryAccount, QueryOrder,
+    SubmitOrder, SubmitOrderList,
+};
 use nautilus_core::UnixNanos;
 use nautilus_model::{
     accounts::AccountAny,
     enums::OmsType,
     identifiers::{AccountId, ClientId, Venue},
+    reports::{ExecutionMassStatus, FillReport, OrderStatusReport, PositionStatusReport},
     types::{AccountBalance, MarginBalance},
-};
-
-use crate::{
-    messages::{
-        BatchCancelOrders, CancelAllOrders, CancelOrder, ModifyOrder, QueryOrder, SubmitOrder,
-        SubmitOrderList,
-        reports::{GenerateFillReports, GenerateOrderStatusReport, GeneratePositionReports},
-    },
-    reports::{
-        fill::FillReport, mass_status::ExecutionMassStatus, order::OrderStatusReport,
-        position::PositionStatusReport,
-    },
 };
 
 pub mod base;
@@ -42,6 +41,12 @@ pub trait ExecutionClient {
     fn venue(&self) -> Venue;
     fn oms_type(&self) -> OmsType;
     fn get_account(&self) -> Option<AccountAny>;
+
+    /// Generates and publishes the account state event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if generating the account state fails.
     fn generate_account_state(
         &self,
         balances: Vec<AccountBalance>,
@@ -49,36 +54,185 @@ pub trait ExecutionClient {
         reported: bool,
         ts_event: UnixNanos,
     ) -> anyhow::Result<()>;
+
+    /// Starts the execution client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the client fails to start.
     fn start(&mut self) -> anyhow::Result<()>;
+
+    /// Stops the execution client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the client fails to stop.
     fn stop(&mut self) -> anyhow::Result<()>;
-    fn submit_order(&self, cmd: &SubmitOrder) -> anyhow::Result<()>;
-    fn submit_order_list(&self, cmd: &SubmitOrderList) -> anyhow::Result<()>;
-    fn modify_order(&self, cmd: &ModifyOrder) -> anyhow::Result<()>;
-    fn cancel_order(&self, cmd: &CancelOrder) -> anyhow::Result<()>;
-    fn cancel_all_orders(&self, cmd: &CancelAllOrders) -> anyhow::Result<()>;
-    fn batch_cancel_orders(&self, cmd: &BatchCancelOrders) -> anyhow::Result<()>;
-    fn query_order(&self, cmd: &QueryOrder) -> anyhow::Result<()>;
+
+    /// Submits a single order command to the execution venue.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if submission fails.
+    fn submit_order(&self, cmd: &SubmitOrder) -> anyhow::Result<()> {
+        log_not_implemented(cmd);
+        Ok(())
+    }
+
+    /// Submits a list of orders to the execution venue.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if submission fails.
+    fn submit_order_list(&self, cmd: &SubmitOrderList) -> anyhow::Result<()> {
+        log_not_implemented(cmd);
+        Ok(())
+    }
+
+    /// Modifies an existing order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if modification fails.
+    fn modify_order(&self, cmd: &ModifyOrder) -> anyhow::Result<()> {
+        log_not_implemented(cmd);
+        Ok(())
+    }
+
+    /// Cancels a specific order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if cancellation fails.
+    fn cancel_order(&self, cmd: &CancelOrder) -> anyhow::Result<()> {
+        log_not_implemented(cmd);
+        Ok(())
+    }
+
+    /// Cancels all orders.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if cancellation fails.
+    fn cancel_all_orders(&self, cmd: &CancelAllOrders) -> anyhow::Result<()> {
+        log_not_implemented(cmd);
+        Ok(())
+    }
+
+    /// Cancels a batch of orders.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if batch cancellation fails.
+    fn batch_cancel_orders(&self, cmd: &BatchCancelOrders) -> anyhow::Result<()> {
+        log_not_implemented(cmd);
+        Ok(())
+    }
+
+    /// Queries the status of an account.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    fn query_account(&self, cmd: &QueryAccount) -> anyhow::Result<()> {
+        log_not_implemented(cmd);
+        Ok(())
+    }
+
+    /// Queries the status of an order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    fn query_order(&self, cmd: &QueryOrder) -> anyhow::Result<()> {
+        log_not_implemented(cmd);
+        Ok(())
+    }
 }
 
+#[async_trait(?Send)]
 pub trait LiveExecutionClient: ExecutionClient {
-    fn connect(&self) -> anyhow::Result<()>;
-    fn disconnect(&self) -> anyhow::Result<()>;
-    fn generate_order_status_report(
+    /// Establishes a connection for live execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if connection fails.
+    async fn connect(&mut self) -> anyhow::Result<()>;
+
+    /// Disconnects the live execution client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if disconnection fails.
+    async fn disconnect(&mut self) -> anyhow::Result<()>;
+
+    /// Generates a single order status report.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if report generation fails.
+    async fn generate_order_status_report(
         &self,
         cmd: &GenerateOrderStatusReport,
-    ) -> anyhow::Result<Option<OrderStatusReport>>;
-    fn generate_order_status_reports(
+    ) -> anyhow::Result<Option<OrderStatusReport>> {
+        log_not_implemented(cmd);
+        Ok(None)
+    }
+
+    /// Generates multiple order status reports.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if report generation fails.
+    async fn generate_order_status_reports(
         &self,
         cmd: &GenerateOrderStatusReport,
-    ) -> anyhow::Result<Vec<OrderStatusReport>>;
-    fn generate_fill_reports(&self, report: GenerateFillReports)
-    -> anyhow::Result<Vec<FillReport>>;
-    fn generate_position_status_reports(
+    ) -> anyhow::Result<Vec<OrderStatusReport>> {
+        log_not_implemented(cmd);
+        Ok(Vec::new())
+    }
+
+    /// Generates fill reports based on execution results.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if fill report generation fails.
+    async fn generate_fill_reports(
+        &self,
+        cmd: GenerateFillReports,
+    ) -> anyhow::Result<Vec<FillReport>> {
+        log_not_implemented(&cmd);
+        Ok(Vec::new())
+    }
+
+    /// Generates position status reports.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if generation fails.
+    async fn generate_position_status_reports(
         &self,
         cmd: &GeneratePositionReports,
-    ) -> anyhow::Result<Vec<PositionStatusReport>>;
-    fn generate_mass_status(
+    ) -> anyhow::Result<Vec<PositionStatusReport>> {
+        log_not_implemented(cmd);
+        Ok(Vec::new())
+    }
+
+    /// Generates mass status for executions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if status generation fails.
+    async fn generate_mass_status(
         &self,
         lookback_mins: Option<u64>,
-    ) -> anyhow::Result<Option<ExecutionMassStatus>>;
+    ) -> anyhow::Result<Option<ExecutionMassStatus>> {
+        log_not_implemented(&lookback_mins);
+        Ok(None)
+    }
+}
+
+#[inline(always)]
+fn log_not_implemented<T: Debug>(cmd: &T) {
+    log::warn!("{cmd:?} – handler not implemented");
 }

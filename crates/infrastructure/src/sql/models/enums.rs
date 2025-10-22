@@ -24,12 +24,25 @@ use sqlx::{
     types::Type,
 };
 
+#[derive(Debug)]
 pub struct CurrencyTypeModel(pub CurrencyType);
+
+#[derive(Debug)]
 pub struct PriceTypeModel(pub PriceType);
+
+#[derive(Debug)]
 pub struct BarAggregationModel(pub BarAggregation);
+
+#[derive(Debug)]
 pub struct AssetClassModel(pub AssetClass);
+
+#[derive(Debug)]
 pub struct TrailingOffsetTypeModel(pub TrailingOffsetType);
+
+#[derive(Debug)]
 pub struct AggressorSideModel(pub AggressorSide);
+
+#[derive(Debug)]
 pub struct AggregationSourceModel(pub AggregationSource);
 
 impl sqlx::Encode<'_, sqlx::Postgres> for CurrencyTypeModel {
@@ -235,6 +248,8 @@ impl sqlx::Encode<'_, sqlx::Postgres> for BarAggregationModel {
             BarAggregation::Day => "DAY",
             BarAggregation::Week => "WEEK",
             BarAggregation::Month => "MONTH",
+            BarAggregation::Year => "YEAR",
+            BarAggregation::Renko => "RENKO",
         };
         <&str as sqlx::Encode<sqlx::Postgres>>::encode(bar_aggregation_str, buf)
     }

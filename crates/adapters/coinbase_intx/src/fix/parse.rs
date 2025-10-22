@@ -15,11 +15,11 @@
 
 use chrono::{DateTime, Utc};
 use nautilus_core::{UnixNanos, time::get_atomic_clock_realtime};
-use nautilus_execution::reports::{fill::FillReport, order::OrderStatusReport};
 use nautilus_model::{
     enums::{LiquiditySide, OrderSide, OrderStatus, OrderType, TimeInForce, TriggerType},
     identifiers::{AccountId, ClientOrderId, InstrumentId, Symbol, TradeId, VenueOrderId},
-    types::{Money, Price, Quantity},
+    reports::{FillReport, OrderStatusReport},
+    types::{Currency, Money, Price, Quantity},
 };
 use ustr::Ustr;
 
@@ -30,6 +30,10 @@ use crate::common::{consts::COINBASE_INTX_VENUE, parse::parse_instrument_id};
 const DEFAULT_PRECISION: u8 = 8;
 
 /// Parse a FIX execution report message to create a Nautilus `OrderStatusReport`.
+///
+/// # Errors
+///
+/// Returns an error if a required FIX tag is missing or cannot be parsed.
 pub fn convert_to_order_status_report(
     message: &FixMessage,
     account_id: AccountId,
@@ -47,7 +51,7 @@ pub fn convert_to_order_status_report(
     let order_side = match side {
         "1" => OrderSide::Buy,
         "2" => OrderSide::Sell,
-        _ => return Err(anyhow::anyhow!("Unknown order side: {side}")),
+        _ => anyhow::bail!("Unknown order side: {side}"),
     };
 
     let ord_type = message.get_field_checked(fix_tag::ORD_TYPE)?;
@@ -56,7 +60,7 @@ pub fn convert_to_order_status_report(
         "2" => OrderType::Limit,
         "3" => OrderType::StopLimit,
         "4" => OrderType::StopMarket,
-        _ => return Err(anyhow::anyhow!("Unknown order type: {ord_type}")),
+        _ => anyhow::bail!("Unknown order type: {ord_type}"),
     };
 
     let tif = message.get_field_checked(fix_tag::TIME_IN_FORCE)?;
@@ -65,7 +69,7 @@ pub fn convert_to_order_status_report(
         "3" => TimeInForce::Ioc, // Immediate or Cancel
         "4" => TimeInForce::Fok, // Fill or Kill
         "6" => TimeInForce::Gtd, // Good Till Date
-        _ => return Err(anyhow::anyhow!("Unknown time in force: {tif}")),
+        _ => anyhow::bail!("Unknown time in force: {tif}"),
     };
 
     let status = message.get_field_checked(fix_tag::ORD_STATUS)?;
@@ -80,7 +84,7 @@ pub fn convert_to_order_status_report(
         "A" => OrderStatus::Submitted,     // Pending New
         "E" => OrderStatus::PendingUpdate, // Pending Replace
         "C" => OrderStatus::Expired,
-        _ => return Err(anyhow::anyhow!("Unknown order status: {status}")),
+        _ => anyhow::bail!("Unknown order status: {status}"),
     };
 
     let order_qty = message.get_field_checked(fix_tag::ORDER_QTY)?;
@@ -91,8 +95,9 @@ pub fn convert_to_order_status_report(
     let filled_qty = Quantity::new(cum_qty.parse::<f64>()?, DEFAULT_PRECISION);
 
     // Use TransactTime as the event time if provided
+    // Use TransactTime as the event time if provided, error on invalid format
     let ts_last = if let Some(transact_time) = message.get_field(fix_tag::TRANSACT_TIME) {
-        parse_fix_timestamp(transact_time).unwrap_or(ts_init)
+        parse_fix_timestamp(transact_time)?
     } else {
         ts_init
     };
@@ -119,25 +124,24 @@ pub fn convert_to_order_status_report(
         None, // Report ID will be generated
     );
 
-    if let Some(price_str) = message.get_field(fix_tag::PRICE) {
-        if let Ok(price_val) = price_str.parse::<f64>() {
-            report = report.with_price(Price::new(price_val, DEFAULT_PRECISION));
-        }
+    if let Some(price_str) = message.get_field(fix_tag::PRICE)
+        && let Ok(price_val) = price_str.parse::<f64>()
+    {
+        report = report.with_price(Price::new(price_val, DEFAULT_PRECISION));
     }
 
-    if let Some(stop_px) = message.get_field(fix_tag::STOP_PX) {
-        if let Ok(stop_val) = stop_px.parse::<f64>() {
-            report = report.with_trigger_price(Price::new(stop_val, DEFAULT_PRECISION));
-            report = report.with_trigger_type(TriggerType::LastPrice);
-        }
+    if let Some(stop_px) = message.get_field(fix_tag::STOP_PX)
+        && let Ok(stop_val) = stop_px.parse::<f64>()
+    {
+        report = report.with_trigger_price(Price::new(stop_val, DEFAULT_PRECISION));
+        report = report.with_trigger_type(TriggerType::LastPrice);
     }
 
-    if let Some(avg_px) = message.get_field(fix_tag::AVG_PX) {
-        if let Ok(avg_val) = avg_px.parse::<f64>() {
-            if avg_val > 0.0 {
-                report = report.with_avg_px(avg_val);
-            }
-        }
+    if let Some(avg_px) = message.get_field(fix_tag::AVG_PX)
+        && let Ok(avg_val) = avg_px.parse::<f64>()
+        && avg_val > 0.0
+    {
+        report = report.with_avg_px(avg_val);
     }
 
     // Execution instructions
@@ -153,22 +157,26 @@ pub fn convert_to_order_status_report(
         }
     }
 
-    if let Some(expire_time) = message.get_field(fix_tag::EXPIRE_TIME) {
-        if let Ok(dt) = parse_fix_timestamp(expire_time) {
-            report = report.with_expire_time(dt);
-        }
+    if let Some(expire_time) = message.get_field(fix_tag::EXPIRE_TIME)
+        && let Ok(dt) = parse_fix_timestamp(expire_time)
+    {
+        report = report.with_expire_time(dt);
     }
 
-    if let Some(text) = message.get_field(fix_tag::TEXT) {
-        if !text.is_empty() {
-            report = report.with_cancel_reason(text.to_string());
-        }
+    if let Some(text) = message.get_field(fix_tag::TEXT)
+        && !text.is_empty()
+    {
+        report = report.with_cancel_reason(text.to_string());
     }
 
     Ok(report)
 }
 
-/// Parse a FIX execution report to a Nautilus `FillReport`
+/// Parse a FIX execution report to a Nautilus `FillReport`.
+///
+/// # Errors
+///
+/// Returns an error if a required FIX tag is missing or cannot be parsed.
 pub fn convert_to_fill_report(
     message: &FixMessage,
     account_id: AccountId,
@@ -186,19 +194,22 @@ pub fn convert_to_fill_report(
 
     let mut commission = Money::new(0.0, currency);
 
-    if let Some(num_fees) = message.get_field(fix_tag::NO_MISC_FEES) {
-        if let Ok(n) = num_fees.parse::<usize>() {
-            // For simplicity, we'll just use the first fee
-            if n > 0 {
-                if let (Some(fee_amt), Some(fee_curr)) = (
-                    message.get_field(fix_tag::MISC_FEE_AMT),
-                    message.get_field(fix_tag::MISC_FEE_CURR),
-                ) {
-                    if let Ok(amt) = fee_amt.parse::<f64>() {
-                        commission = Money::new(amt, fee_curr.parse().unwrap_or(currency));
-                    }
-                }
-            }
+    if let Some(num_fees) = message.get_field(fix_tag::NO_MISC_FEES)
+        && let Ok(n) = num_fees.parse::<usize>()
+    {
+        // For simplicity, we'll just use the first fee
+        if n > 0
+            && let (Some(fee_amt), Some(fee_curr)) = (
+                message.get_field(fix_tag::MISC_FEE_AMT),
+                message.get_field(fix_tag::MISC_FEE_CURR),
+            )
+            && let Ok(amt) = fee_amt.parse::<f64>()
+        {
+            // Parse fee currency, error on invalid code
+            let fee_currency = fee_curr
+                .parse::<Currency>()
+                .map_err(|e| anyhow::anyhow!("Invalid fee currency '{fee_curr}': {e}"))?;
+            commission = Money::new(amt, fee_currency);
         }
     }
 

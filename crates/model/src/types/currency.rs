@@ -23,22 +23,22 @@ use std::{
     str::FromStr,
 };
 
-use nautilus_core::correctness::{FAILED, check_nonempty_string, check_valid_string};
+use nautilus_core::correctness::{FAILED, check_nonempty_string, check_valid_string_utf8};
 use serde::{Deserialize, Serialize, Serializer};
 use ustr::Ustr;
 
-#[allow(unused_imports)] // FIXED_PRECISION used in docs
+#[allow(unused_imports, reason = "FIXED_PRECISION used in docs")]
 use super::fixed::{FIXED_PRECISION, check_fixed_precision};
 use crate::{currencies::CURRENCY_MAP, enums::CurrencyType};
 
 /// Represents a medium of exchange in a specified denomination with a fixed decimal precision.
 ///
-/// Handles up to {FIXED_PRECISION} decimals of precision.
+/// Handles up to [`FIXED_PRECISION`] decimals of precision.
 #[repr(C)]
 #[derive(Clone, Copy, Eq)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.model")
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.model", frozen, eq, hash)
 )]
 pub struct Currency {
     /// The currency code as an alpha-3 string (e.g., "USD", "EUR").
@@ -58,10 +58,10 @@ impl Currency {
     ///
     /// # Errors
     ///
-    /// This function returns an error:
-    /// - If `code` is not a valid string.
-    /// - If `name` is the empty string.
-    /// - If `precision` is invalid outside the valid representable range [0, {FIXED_PRECISION}].
+    /// Returns an error if:
+    /// - `code` is not a valid string.
+    /// - `name` is the empty string.
+    /// - `precision` is invalid outside the valid representable range [0, FIXED_PRECISION].
     ///
     /// # Notes
     ///
@@ -75,7 +75,7 @@ impl Currency {
     ) -> anyhow::Result<Self> {
         let code = code.as_ref();
         let name = name.as_ref();
-        check_valid_string(code, "code")?;
+        check_valid_string_utf8(code, "code")?;
         check_nonempty_string(name, "name")?;
         check_fixed_precision(precision)?;
         Ok(Self {
@@ -91,8 +91,7 @@ impl Currency {
     ///
     /// # Panics
     ///
-    /// This function panics:
-    /// - If a correctness check fails. See [`Currency::new_checked`] for more details.
+    /// Panics if a correctness check fails. See [`Currency::new_checked`] for more details.
     pub fn new<T: AsRef<str>>(
         code: T,
         precision: u8,
@@ -110,8 +109,7 @@ impl Currency {
     ///
     /// # Errors
     ///
-    /// This function returns an error:
-    /// - If there is a failure acquiring the lock on the currency map.
+    /// Returns an error if there is a failure acquiring the lock on the currency map.
     pub fn register(currency: Self, overwrite: bool) -> anyhow::Result<()> {
         let mut map = CURRENCY_MAP
             .lock()
@@ -137,9 +135,9 @@ impl Currency {
     ///
     /// # Errors
     ///
-    /// This function returns an error:
-    /// - If a currency with the given `code` does not exist.
-    /// - If there is a failure acquiring the lock on the currency map.
+    /// Returns an error if:
+    /// - A currency with the given `code` does not exist.
+    /// - There is a failure acquiring the lock on the currency map.
     pub fn is_fiat(code: &str) -> anyhow::Result<bool> {
         let currency = Self::from_str(code)?;
         Ok(currency.currency_type == CurrencyType::Fiat)
@@ -149,7 +147,7 @@ impl Currency {
     ///
     /// # Errors
     ///
-    /// This function returns an error:
+    /// Returns an error if:
     /// - If a currency with the given `code` does not exist.
     /// - If there is a failure acquiring the lock on the currency map.
     pub fn is_crypto(code: &str) -> anyhow::Result<bool> {
@@ -162,9 +160,9 @@ impl Currency {
     ///
     /// # Errors
     ///
-    /// This function returns an error:
-    /// - If a currency with the given `code` does not exist.
-    /// - If there is a failure acquiring the lock on the currency map.
+    /// Returns an error if:
+    /// - A currency with the given `code` does not exist.
+    /// - There is a failure acquiring the lock on the currency map.
     pub fn is_commodity_backed(code: &str) -> anyhow::Result<bool> {
         let currency = Self::from_str(code)?;
         Ok(currency.currency_type == CurrencyType::CommodityBacked)
@@ -275,11 +273,20 @@ mod tests {
         let _ = Currency::new("", 2, 840, "United States dollar", CurrencyType::Fiat);
     }
 
+    #[cfg(not(feature = "defi"))]
     #[rstest]
     #[should_panic(expected = "Condition failed: `precision` exceeded maximum `FIXED_PRECISION`")]
     fn test_invalid_precision() {
-        // Precision greater than maximum
-        let _ = Currency::new("USD", 17, 840, "United States dollar", CurrencyType::Fiat);
+        // Precision greater than maximum (use 19 which exceeds even defi precision of 18)
+        let _ = Currency::new("USD", 19, 840, "United States dollar", CurrencyType::Fiat);
+    }
+
+    #[cfg(feature = "defi")]
+    #[rstest]
+    #[should_panic(expected = "Condition failed: `precision` exceeded maximum `WEI_PRECISION`")]
+    fn test_invalid_precision() {
+        // Precision greater than maximum (use 19 which exceeds even defi precision of 18)
+        let _ = Currency::new("ETH", 19, 0, "Ethereum", CurrencyType::Crypto);
     }
 
     #[rstest]

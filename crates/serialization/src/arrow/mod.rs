@@ -81,23 +81,34 @@ pub enum EncodingError {
 
 #[inline]
 fn get_raw_price(bytes: &[u8]) -> PriceRaw {
-    PriceRaw::from_le_bytes(bytes.try_into().unwrap())
+    PriceRaw::from_le_bytes(
+        bytes
+            .try_into()
+            .expect("Price raw bytes must be exactly the size of PriceRaw"),
+    )
 }
 
 #[inline]
 fn get_raw_quantity(bytes: &[u8]) -> QuantityRaw {
-    QuantityRaw::from_le_bytes(bytes.try_into().unwrap())
+    QuantityRaw::from_le_bytes(
+        bytes
+            .try_into()
+            .expect("Quantity raw bytes must be exactly the size of QuantityRaw"),
+    )
 }
 
+/// Provides Apache Arrow schema definitions for data types.
 pub trait ArrowSchemaProvider {
+    /// Returns the Arrow schema for this type with optional metadata.
     fn get_schema(metadata: Option<HashMap<String, String>>) -> Schema;
 
+    /// Returns a map of field names to their Arrow data types.
     #[must_use]
     fn get_schema_map() -> HashMap<String, String> {
         let schema = Self::get_schema(None);
         let mut map = HashMap::new();
         for field in schema.fields() {
-            let name = field.name().to_string();
+            let name = field.name().clone();
             let data_type = format!("{:?}", field.data_type());
             map.insert(name, data_type);
         }
@@ -105,49 +116,80 @@ pub trait ArrowSchemaProvider {
     }
 }
 
+/// Encodes data types to Apache Arrow RecordBatch format.
 pub trait EncodeToRecordBatch
 where
     Self: Sized + ArrowSchemaProvider,
 {
+    /// Encodes a batch of values into an Arrow `RecordBatch` using the provided metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `ArrowError` if the encoding fails.
     fn encode_batch(
         metadata: &HashMap<String, String>,
         data: &[Self],
     ) -> Result<RecordBatch, ArrowError>;
 
+    /// Returns the metadata for this data element.
     fn metadata(&self) -> HashMap<String, String>;
+
+    /// Returns the metadata for the first element in a chunk.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `chunk` is empty.
     fn chunk_metadata(chunk: &[Self]) -> HashMap<String, String> {
         chunk
             .first()
             .map(|elem| elem.metadata())
-            .expect("Chunk must have atleast one element to encode")
+            .expect("Chunk must have at least one element to encode")
     }
 }
 
+/// Decodes data types from Apache Arrow RecordBatch format.
 pub trait DecodeFromRecordBatch
 where
     Self: Sized + Into<Data> + ArrowSchemaProvider,
 {
+    /// Decodes a `RecordBatch` into a vector of values of the implementing type, using the provided metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `EncodingError` if the decoding fails.
     fn decode_batch(
         metadata: &HashMap<String, String>,
         record_batch: RecordBatch,
     ) -> Result<Vec<Self>, EncodingError>;
 }
 
+/// Decodes raw Data objects from Apache Arrow RecordBatch format.
 pub trait DecodeDataFromRecordBatch
 where
     Self: Sized + Into<Data> + ArrowSchemaProvider,
 {
+    /// Decodes a `RecordBatch` into raw `Data` values, using the provided metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `EncodingError` if the decoding fails.
     fn decode_data_batch(
         metadata: &HashMap<String, String>,
         record_batch: RecordBatch,
     ) -> Result<Vec<Data>, EncodingError>;
 }
 
+/// Writes RecordBatch data to output streams.
 pub trait WriteStream {
+    /// Writes a `RecordBatch` to the implementing output stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `DataStreamingError` if writing or finishing the stream fails.
     fn write(&mut self, record_batch: &RecordBatch) -> Result<(), DataStreamingError>;
 }
 
-impl<T: EncodeToRecordBatch + Write> WriteStream for T {
+impl<T: Write> WriteStream for T {
     fn write(&mut self, record_batch: &RecordBatch) -> Result<(), DataStreamingError> {
         let mut writer = StreamWriter::try_new(self, &record_batch.schema())?;
         writer.write(record_batch)?;
@@ -156,6 +198,13 @@ impl<T: EncodeToRecordBatch + Write> WriteStream for T {
     }
 }
 
+/// Extracts and downcasts the specified `column_key` column from an Arrow array slice.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - `column_index` is out of range: `EncodingError::MissingColumn`.
+/// - The column type does not match `expected_type`: `EncodingError::InvalidColumnType`.
 pub fn extract_column<'a, T: Array + 'static>(
     cols: &'a [ArrayRef],
     column_key: &'static str,
@@ -178,6 +227,13 @@ pub fn extract_column<'a, T: Array + 'static>(
     Ok(downcasted_values)
 }
 
+/// Converts a vector of `OrderBookDelta` into an Arrow `RecordBatch`.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - `data` is empty: `EncodingError::EmptyData`.
+/// - Encoding fails: `EncodingError::ArrowError`.
 pub fn book_deltas_to_arrow_record_batch_bytes(
     data: Vec<OrderBookDelta>,
 ) -> Result<RecordBatch, EncodingError> {
@@ -190,6 +246,17 @@ pub fn book_deltas_to_arrow_record_batch_bytes(
     OrderBookDelta::encode_batch(&metadata, &data).map_err(EncodingError::ArrowError)
 }
 
+/// Converts a vector of `OrderBookDepth10` into an Arrow `RecordBatch`.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - `data` is empty: `EncodingError::EmptyData`.
+/// - Encoding fails: `EncodingError::ArrowError`.
+///
+/// # Panics
+///
+/// Panics if `data` is empty (after the explicit empty check, unwrap is safe).
 pub fn book_depth10_to_arrow_record_batch_bytes(
     data: Vec<OrderBookDepth10>,
 ) -> Result<RecordBatch, EncodingError> {
@@ -204,6 +271,17 @@ pub fn book_depth10_to_arrow_record_batch_bytes(
     OrderBookDepth10::encode_batch(&metadata, &data).map_err(EncodingError::ArrowError)
 }
 
+/// Converts a vector of `QuoteTick` into an Arrow `RecordBatch`.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - `data` is empty: `EncodingError::EmptyData`.
+/// - Encoding fails: `EncodingError::ArrowError`.
+///
+/// # Panics
+///
+/// Panics if `data` is empty (after the explicit empty check, unwrap is safe).
 pub fn quotes_to_arrow_record_batch_bytes(
     data: Vec<QuoteTick>,
 ) -> Result<RecordBatch, EncodingError> {
@@ -218,6 +296,17 @@ pub fn quotes_to_arrow_record_batch_bytes(
     QuoteTick::encode_batch(&metadata, &data).map_err(EncodingError::ArrowError)
 }
 
+/// Converts a vector of `TradeTick` into an Arrow `RecordBatch`.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - `data` is empty: `EncodingError::EmptyData`.
+/// - Encoding fails: `EncodingError::ArrowError`.
+///
+/// # Panics
+///
+/// Panics if `data` is empty (after the explicit empty check, unwrap is safe).
 pub fn trades_to_arrow_record_batch_bytes(
     data: Vec<TradeTick>,
 ) -> Result<RecordBatch, EncodingError> {
@@ -232,6 +321,17 @@ pub fn trades_to_arrow_record_batch_bytes(
     TradeTick::encode_batch(&metadata, &data).map_err(EncodingError::ArrowError)
 }
 
+/// Converts a vector of `Bar` into an Arrow `RecordBatch`.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - `data` is empty: `EncodingError::EmptyData`.
+/// - Encoding fails: `EncodingError::ArrowError`.
+///
+/// # Panics
+///
+/// Panics if `data` is empty (after the explicit empty check, unwrap is safe).
 pub fn bars_to_arrow_record_batch_bytes(data: Vec<Bar>) -> Result<RecordBatch, EncodingError> {
     if data.is_empty() {
         return Err(EncodingError::EmptyData);
@@ -244,6 +344,17 @@ pub fn bars_to_arrow_record_batch_bytes(data: Vec<Bar>) -> Result<RecordBatch, E
     Bar::encode_batch(&metadata, &data).map_err(EncodingError::ArrowError)
 }
 
+/// Converts a vector of `MarkPriceUpdate` into an Arrow `RecordBatch`.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - `data` is empty: `EncodingError::EmptyData`.
+/// - Encoding fails: `EncodingError::ArrowError`.
+///
+/// # Panics
+///
+/// Panics if `data` is empty (after the explicit empty check, unwrap is safe).
 pub fn mark_prices_to_arrow_record_batch_bytes(
     data: Vec<MarkPriceUpdate>,
 ) -> Result<RecordBatch, EncodingError> {
@@ -258,6 +369,17 @@ pub fn mark_prices_to_arrow_record_batch_bytes(
     MarkPriceUpdate::encode_batch(&metadata, &data).map_err(EncodingError::ArrowError)
 }
 
+/// Converts a vector of `IndexPriceUpdate` into an Arrow `RecordBatch`.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - `data` is empty: `EncodingError::EmptyData`.
+/// - Encoding fails: `EncodingError::ArrowError`.
+///
+/// # Panics
+///
+/// Panics if `data` is empty (after the explicit empty check, unwrap is safe).
 pub fn index_prices_to_arrow_record_batch_bytes(
     data: Vec<IndexPriceUpdate>,
 ) -> Result<RecordBatch, EncodingError> {
@@ -272,6 +394,17 @@ pub fn index_prices_to_arrow_record_batch_bytes(
     IndexPriceUpdate::encode_batch(&metadata, &data).map_err(EncodingError::ArrowError)
 }
 
+/// Converts a vector of `InstrumentClose` into an Arrow `RecordBatch`.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - `data` is empty: `EncodingError::EmptyData`.
+/// - Encoding fails: `EncodingError::ArrowError`.
+///
+/// # Panics
+///
+/// Panics if `data` is empty (after the explicit empty check, unwrap is safe).
 pub fn instrument_closes_to_arrow_record_batch_bytes(
     data: Vec<InstrumentClose>,
 ) -> Result<RecordBatch, EncodingError> {

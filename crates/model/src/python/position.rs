@@ -37,7 +37,7 @@ use crate::{
 #[pymethods]
 impl Position {
     #[new]
-    fn py_new(py: Python, instrument: PyObject, fill: OrderFilled) -> PyResult<Self> {
+    fn py_new(py: Python, instrument: Py<PyAny>, fill: OrderFilled) -> PyResult<Self> {
         let instrument_any = pyobject_to_instrument_any(py, instrument)?;
         Ok(Self::new(&instrument_any, fill))
     }
@@ -252,7 +252,7 @@ impl Position {
 
     #[getter]
     #[pyo3(name = "last_event")]
-    fn py_last_event(&self) -> OrderFilled {
+    fn py_last_event(&self) -> Option<OrderFilled> {
         self.last_event()
     }
 
@@ -344,7 +344,7 @@ impl Position {
     ///
     /// Returns a `PyErr` if serialization into a Python dict fails.
     #[pyo3(name = "to_dict")]
-    fn py_to_dict(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn py_to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);
         dict.set_item("type", stringify!(Position))?;
         let events_dict: PyResult<Vec<_>> = self.events.iter().map(|e| e.py_to_dict(py)).collect();
@@ -399,19 +399,12 @@ impl Position {
             Some(realized_pnl) => dict.set_item("realized_pnl", realized_pnl.to_string())?,
             None => dict.set_item("realized_pnl", py.None())?,
         }
-        let venue_order_ids_list = PyList::new(
-            py,
-            self.venue_order_ids()
-                .iter()
-                .map(std::string::ToString::to_string),
-        )
-        .expect("Invalid `ExactSizeIterator`");
+        let venue_order_ids_list =
+            PyList::new(py, self.venue_order_ids().iter().map(ToString::to_string))
+                .expect("Invalid `ExactSizeIterator`");
         dict.set_item("venue_order_ids", venue_order_ids_list)?;
-        let trade_ids_list = PyList::new(
-            py,
-            self.trade_ids.iter().map(std::string::ToString::to_string),
-        )
-        .expect("Invalid `ExactSizeIterator`");
+        let trade_ids_list = PyList::new(py, self.trade_ids.iter().map(ToString::to_string))
+            .expect("Invalid `ExactSizeIterator`");
         dict.set_item("trade_ids", trade_ids_list)?;
         dict.set_item("buy_qty", self.buy_qty.to_string())?;
         dict.set_item("sell_qty", self.sell_qty.to_string())?;

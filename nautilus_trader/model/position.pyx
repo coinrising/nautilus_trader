@@ -114,6 +114,10 @@ cdef class Position:
         """
         Purge all order events for the given client order ID.
 
+        After purging, the position is rebuilt from remaining fills. If no fills
+        remain, the position is reset to an empty shell with all history cleared
+        (including timestamps), making it eligible for immediate cache cleanup.
+
         Parameters
         ----------
         client_order_id : ClientOrderId
@@ -122,18 +126,41 @@ cdef class Position:
         """
         Condition.not_none(client_order_id, "client_order_id")
 
-        cdef list[OrderFilled] events = []
-        cdef list[TradeId] trade_ids = []
+        # Collect remaining fills
+        cdef list[OrderFilled] remaining_events = [
+            event for event in self._events
+            if event.client_order_id != client_order_id
+        ]
 
-        cdef:
-            OrderFilled event
-        for event in self._events:
-            if event.client_order_id != client_order_id:
-                events.append(event)
-                trade_ids.append(event.trade_id)
+        # Clear current state
+        self._events.clear()
+        self._trade_ids.clear()
 
-        self._events = events
-        self._trade_ids = trade_ids
+        # If no fills remain, reset to flat state clearing all history
+        if not remaining_events:
+            self._buy_qty = Quantity.zero_c(precision=self.size_precision)
+            self._sell_qty = Quantity.zero_c(precision=self.size_precision)
+            self._commissions = {}
+            self.signed_qty = 0.0
+            self.quantity = Quantity.zero_c(precision=self.size_precision)
+            self.side = PositionSide.FLAT
+            self.avg_px_close = 0.0
+            self.realized_pnl = None
+            self.realized_return = 0.0
+            self.ts_opened = 0
+            self.ts_last = 0
+            self.ts_closed = 0
+            self.duration_ns = 0
+            return
+
+        # Force reset by setting to FLAT and resetting signed_qty
+        self.side = PositionSide.FLAT
+        self.signed_qty = 0.0
+
+        # Replay all remaining fills to rebuild position state
+        cdef OrderFilled event
+        for event in remaining_events:
+            self.apply(event)
 
     cpdef str info(self):
         """
@@ -200,10 +227,10 @@ cdef class Position:
         return self._events.copy()
 
     cdef OrderFilled last_event_c(self):
-        return self._events[-1]
+        return self._events[-1] if self._events else None
 
     cdef TradeId last_trade_id_c(self):
-        return self._events[-1].trade_id
+        return self._events[-1].trade_id if self._events else None
 
     cdef bint has_trade_id_c(self, TradeId trade_id):
         Condition.not_none(trade_id, "trade_id")
@@ -307,11 +334,11 @@ cdef class Position:
     @property
     def last_event(self):
         """
-        Return the last order fill event.
+        Return the last order fill event (if any after purging).
 
         Returns
         -------
-        OrderFilled
+        OrderFilled or ``None``
 
         """
         return self.last_event_c()
@@ -319,11 +346,11 @@ cdef class Position:
     @property
     def last_trade_id(self):
         """
-        Return the last trade match ID for the position.
+        Return the last trade match ID for the position (if any after purging).
 
         Returns
         -------
-        TradeId
+        TradeId or ``None``
 
         """
         return self.last_trade_id_c()
@@ -782,6 +809,12 @@ cdef class Position:
             return 0.0  # FLAT
 
     cdef double _calculate_points_inverse(self, double avg_px_open, double avg_px_close):
+        cdef double EPSILON = 1e-15
+
+        # Defensive check for zero or near-zero prices
+        if fabs(avg_px_open) < EPSILON or fabs(avg_px_close) < EPSILON:
+            return 0.0
+
         if self.side == PositionSide.LONG:
             return (1.0 / avg_px_open) - (1.0 / avg_px_close)
         elif self.side == PositionSide.SHORT:
@@ -790,6 +823,10 @@ cdef class Position:
             return 0.0  # FLAT
 
     cdef double _calculate_return(self, double avg_px_open, double avg_px_close):
+        # Defensive check for zero open price
+        if avg_px_open == 0.0:
+            return 0.0
+
         return self._calculate_points(avg_px_open, avg_px_close) / avg_px_open
 
     cdef double _calculate_pnl(

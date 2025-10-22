@@ -128,16 +128,28 @@ where
     }
 }
 
+/// Extracts the host name from the request URI.
+///
+/// # Errors
+///
+/// Returns an error if the request URI has no host component.
+#[allow(clippy::result_large_err)]
 fn domain(request: &Request) -> Result<String, Error> {
     match request.uri().host() {
         // rustls expects IPv6 addresses without the surrounding [] brackets
         Some(d) if d.starts_with('[') && d.ends_with(']') => Ok(d[1..d.len() - 1].to_string()),
         Some(d) => Ok(d.to_string()),
-        None => panic!("No host name"),
+        None => Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Request URI missing host component",
+        ))),
     }
 }
 
-pub fn create_tls_config_from_certs_dir(certs_dir: &Path) -> anyhow::Result<rustls::ClientConfig> {
+pub fn create_tls_config_from_certs_dir(
+    certs_dir: &Path,
+    require_client_auth: bool,
+) -> anyhow::Result<rustls::ClientConfig> {
     if !certs_dir.is_dir() {
         anyhow::bail!("Certificate path is not a directory: {certs_dir:?}");
     }
@@ -151,35 +163,46 @@ pub fn create_tls_config_from_certs_dir(certs_dir: &Path) -> anyhow::Result<rust
         let entry = entry?;
         let path = entry.path();
 
-        if client_key.is_none() {
-            if let Ok(key) = load_private_key(&path) {
-                client_key = Some(key);
-                continue;
-            }
+        if client_key.is_none()
+            && let Ok(key) = load_private_key(&path)
+        {
+            client_key = Some(key);
+            continue;
         }
 
-        if let Ok(certs) = load_certs(&path) {
-            if !certs.is_empty() {
-                if client_cert.is_none() {
-                    client_cert = Some(certs);
-                } else {
-                    for cert in certs {
-                        if let Err(e) = root_store.add(cert) {
-                            eprintln!("Warning: Invalid certificate in {path:?}: {e}");
-                        }
+        if let Ok(certs) = load_certs(&path)
+            && !certs.is_empty()
+        {
+            if client_cert.is_none() {
+                client_cert = Some(certs);
+            } else {
+                for cert in certs {
+                    if let Err(e) = root_store.add(cert) {
+                        eprintln!("Warning: Invalid certificate in {path:?}: {e}");
                     }
                 }
             }
         }
     }
 
-    let (cert, key) = client_cert
-        .zip(client_key)
-        .ok_or_else(|| anyhow::anyhow!("Could not find both client certificate and private key"))?;
+    let builder = rustls::ClientConfig::builder().with_root_certificates(root_store);
 
-    Ok(rustls::ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_client_auth_cert(cert, key)?)
+    if let (Some(cert), Some(key)) = (client_cert, client_key) {
+        return Ok(builder.with_client_auth_cert(cert, key)?);
+    }
+
+    if require_client_auth {
+        anyhow::bail!(
+            "Client certificate or private key missing in {certs_dir:?} but client auth required",
+        );
+    }
+
+    tracing::warn!(
+        "No TLS client certificate/key found in {:?}; proceeding without client authentication",
+        certs_dir
+    );
+
+    Ok(builder.with_no_client_auth())
 }
 
 fn load_private_key(path: &Path) -> anyhow::Result<PrivateKeyDer<'static>> {

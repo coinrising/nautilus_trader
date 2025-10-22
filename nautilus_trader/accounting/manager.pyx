@@ -17,9 +17,6 @@ from decimal import Decimal
 
 from libc.stdint cimport uint64_t
 
-from nautilus_trader.accounting.error import AccountBalanceNegative
-from nautilus_trader.accounting.error import AccountMarginExceeded
-
 from nautilus_trader.accounting.accounts.base cimport Account
 from nautilus_trader.accounting.accounts.cash cimport CashAccount
 from nautilus_trader.accounting.accounts.margin cimport MarginAccount
@@ -28,13 +25,18 @@ from nautilus_trader.common.component cimport Clock
 from nautilus_trader.common.component cimport Logger
 from nautilus_trader.common.component cimport is_logging_initialized
 from nautilus_trader.core.correctness cimport Condition
+from nautilus_trader.core.rust.model cimport InstrumentClass
 from nautilus_trader.core.rust.model cimport OrderSide
+from nautilus_trader.core.rust.model cimport OrderType
 from nautilus_trader.core.rust.model cimport PriceType
 from nautilus_trader.core.uuid cimport UUID4
+from nautilus_trader.model.events.account cimport AccountState
+from nautilus_trader.model.events.order cimport OrderFilled
 from nautilus_trader.model.identifiers cimport PositionId
 from nautilus_trader.model.instruments.base cimport Instrument
 from nautilus_trader.model.objects cimport AccountBalance
 from nautilus_trader.model.objects cimport Currency
+from nautilus_trader.model.objects cimport Money
 from nautilus_trader.model.orders.base cimport Order
 from nautilus_trader.model.position cimport Position
 
@@ -58,21 +60,48 @@ cdef class AccountsManager:
         CacheFacade cache not None,
         Logger logger not None,
         Clock clock not None,
-    ):
+    ) -> None:
         self._clock = clock
         self._log = logger
         self._cache = cache
 
-    cpdef AccountState update_balances(
+    cpdef AccountState generate_account_state(self, Account account, uint64_t ts_event):
+        """
+        Generate a new account state event for the given `account`.
+
+        Parameters
+        ----------
+        account : Account
+            The account for the state event.
+        ts_event : uint64_t
+            The UNIX timestamp (nanoseconds) when the event occurred.
+
+        Returns
+        -------
+        AccountState
+
+        """
+        return AccountState(
+            account_id=account.id,
+            account_type=account.type,
+            base_currency=account.base_currency,
+            reported=False,
+            balances=list(account.balances().values()),
+            margins=list(account.margins().values()) if account.is_margin_account else [],
+            info={},
+            event_id=UUID4(),
+            ts_event=ts_event,
+            ts_init=self._clock.timestamp_ns(),
+        )
+
+    cpdef void update_balances(
         self,
         Account account,
         Instrument instrument,
         OrderFilled fill,
     ):
         """
-        Update the account balances based on the given fill event.
-
-        Will return ``None`` if operation fails.
+        Update the account balances based on the `fill` event.
 
         Parameters
         ----------
@@ -83,14 +112,10 @@ cdef class AccountsManager:
         fill : OrderFilled
             The order filled event for the update
 
-        Returns
-        -------
-        AccountState or ``None``
-
         Raises
         ------
         AccountBalanceNegative
-            If a new free balance would become negative.
+            If account type is ``CASH`` and a balance becomes negative.
 
         """
         Condition.not_none(account, "account")
@@ -131,12 +156,7 @@ cdef class AccountsManager:
                 pnls=pnls,
             )
 
-        return self._generate_account_state(
-            account=account,
-            ts_event=fill.ts_event,
-        )
-
-    cpdef AccountState update_orders(
+    cpdef bint update_orders(
         self,
         Account account,
         Instrument instrument,
@@ -159,7 +179,8 @@ cdef class AccountsManager:
 
         Returns
         -------
-        AccountState
+        bool
+            The result of the account operation.
 
         """
         Condition.not_none(account, "account")
@@ -183,7 +204,7 @@ cdef class AccountsManager:
         else:
             raise RuntimeError("invalid `AccountType`")  # pragma: no cover (design-time error)
 
-    cdef AccountState _update_balance_locked(
+    cdef bint _update_balance_locked(
         self,
         CashAccount account,
         Instrument instrument,
@@ -192,18 +213,15 @@ cdef class AccountsManager:
     ):
         if not orders_open:
             account.clear_balance_locked(instrument.id)
-            return self._generate_account_state(
-                account=account,
-                ts_event=ts_event,
-            )
 
-        total_locked = Decimal(0)
-        base_xrate  = Decimal(0)
-
-        cdef Currency currency = instrument.get_cost_currency()
+        cdef dict[Currency, Money] total_locked = {}
+        base_xrate = Decimal(0)
 
         cdef:
             Order order
+            Currency currency = None
+            Money balance_locked
+            Money cumulative_locked
         for order in orders_open:
             assert order.instrument_id == instrument.id
 
@@ -211,18 +229,19 @@ cdef class AccountsManager:
                 # Does not contribute to locked balance
                 continue
 
-            # Calculate balance locked
-            locked = account.calculate_balance_locked(
+            balance_locked = account.calculate_balance_locked(
                 instrument,
                 order.side,
                 order.quantity,
                 order.price if order.has_price_c() else order.trigger_price,
-            ).as_decimal()
+            )
+
+            currency = balance_locked.currency
+            locked_amount = balance_locked.as_decimal()
 
             if account.base_currency is not None:
                 if base_xrate == 0:
-                    # Cache base currency and xrate
-                    currency = account.base_currency
+                    # Cache base xrate on first pass only
                     base_xrate = self._calculate_xrate_to_base(
                         instrument=instrument,
                         account=account,
@@ -235,57 +254,37 @@ cdef class AccountsManager:
                             f"insufficient data for "
                             f"{instrument.get_cost_currency()}/{account.base_currency}"
                         )
-                        return None  # Cannot calculate
+                        return False
 
-                # Apply base xrate
-                locked = round(locked * base_xrate, currency.get_precision())
+                # Always use base currency when converting
+                currency = account.base_currency
+                balance_locked = Money(locked_amount * base_xrate, currency)
 
-            # Increment total locked
-            total_locked += locked
+            cumulative_locked = total_locked.get(currency)
 
-        cdef Money locked_money = Money(total_locked, currency)
-        account.update_balance_locked(instrument.id, locked_money)
+            if cumulative_locked is not None:
+                cumulative_locked.add_assign(balance_locked)
+            else:
+                total_locked[currency] = balance_locked
 
-        self._log.info(f"{instrument.id} balance_locked={locked_money.to_formatted_str()}")
+        # No contributing orders (reduce-only/unpriced): clear any existing lock
+        if len(total_locked) == 0:
+            account.clear_balance_locked(instrument.id)
+            return True
 
-        return self._generate_account_state(
-            account=account,
-            ts_event=ts_event,
-        )
+        for currency, balance_locked in total_locked.items():
+            account.update_balance_locked(instrument.id, balance_locked)
+            self._log.debug(f"{instrument.id} balance_locked={balance_locked.to_formatted_str()}")
 
-    cdef AccountState _update_margin_init(
+        return True
+
+    cdef bint _update_margin_init(
         self,
         MarginAccount account,
         Instrument instrument,
         list orders_open,
         uint64_t ts_event,
     ):
-        """
-        Update the initial (order) margin for margin accounts or locked balance
-        for cash accounts.
-
-        Will return ``None`` if operation fails.
-
-        Parameters
-        ----------
-        account : MarginAccount
-            The account to update.
-        instrument : Instrument
-            The instrument for the update.
-        orders_open : list[Order]
-            The open orders for the update.
-        ts_event : uint64_t
-            UNIX timestamp (nanoseconds) when the account event occurred.
-
-        Returns
-        -------
-        AccountState or ``None``
-
-        """
-        Condition.not_none(account, "account")
-        Condition.not_none(instrument, "instrument")
-        Condition.not_none(orders_open, "orders_open")
-
         total_margin_init = Decimal(0)
         base_xrate = Decimal(0)
 
@@ -323,7 +322,7 @@ cdef class AccountsManager:
                             f"insufficient data for "
                             f"{instrument.get_cost_currency()}/{account.base_currency}"
                         )
-                        return None  # Cannot calculate
+                        return False
 
                 # Apply base xrate
                 margin_init = round(margin_init * base_xrate, currency.get_precision())
@@ -339,12 +338,9 @@ cdef class AccountsManager:
 
         self._log.info(f"{instrument.id} margin_init={margin_init_money.to_formatted_str()}")
 
-        return self._generate_account_state(
-            account=account,
-            ts_event=ts_event,
-        )
+        return True
 
-    cpdef AccountState update_positions(
+    cpdef bint update_positions(
         self,
         MarginAccount account,
         Instrument instrument,
@@ -369,7 +365,8 @@ cdef class AccountsManager:
 
         Returns
         -------
-        AccountState or ``None``
+        bool
+            The result of the account operation.
 
         """
         Condition.not_none(account, "account")
@@ -413,7 +410,7 @@ cdef class AccountsManager:
                             f"insufficient data for "
                             f"{instrument.get_cost_currency()}/{account.base_currency}"
                         )
-                        return None  # Cannot calculate
+                        return False
 
                 # Apply base xrate
                 margin_maint = round(margin_maint * base_xrate, currency.get_precision())
@@ -429,12 +426,9 @@ cdef class AccountsManager:
 
         self._log.info(f"{instrument.id} margin_maint={margin_maint_money.to_formatted_str()}")
 
-        return self._generate_account_state(
-            account=account,
-            ts_event=ts_event,
-        )
+        return True
 
-    cdef void _update_balance_single_currency(
+    cdef bint _update_balance_single_currency(
         self,
         Account account,
         OrderFilled fill,
@@ -448,7 +442,7 @@ cdef class AccountsManager:
                 venue=fill.instrument_id.venue,
                 from_currency=fill.commission.currency,
                 to_currency=account.base_currency,
-                price_type=PriceType.BID if fill.order_side is OrderSide.SELL else PriceType.ASK,
+                price_type=PriceType.BID if fill.order_side == OrderSide.SELL else PriceType.ASK,
             )
             if xrate is None:
                 self._log.error(
@@ -456,7 +450,7 @@ cdef class AccountsManager:
                     f"insufficient data for "
                     f"{fill.commission.currency}/{account.base_currency}"
                 )
-                return  # Cannot calculate
+                return False  # Cannot calculate
 
             # Convert to account base currency
             commission = Money(commission.as_f64_c() * xrate, account.base_currency)
@@ -466,7 +460,7 @@ cdef class AccountsManager:
                 venue=fill.instrument_id.venue,
                 from_currency=pnl.currency,
                 to_currency=account.base_currency,
-                price_type=PriceType.BID if fill.order_side is OrderSide.SELL else PriceType.ASK,
+                price_type=PriceType.BID if fill.order_side == OrderSide.SELL else PriceType.ASK,
             )
             if xrate is None:
                 self._log.error(
@@ -474,21 +468,20 @@ cdef class AccountsManager:
                     f"insufficient data for "
                     f"{pnl.currency}/{account.base_currency}"
                 )
-                return  # Cannot calculate
+                return False  # Cannot calculate
 
             # Convert to account base currency
             pnl = Money(pnl.as_f64_c() * xrate, account.base_currency)
 
         pnl = pnl.sub(commission)
         if pnl._mem.raw == 0:
-            return  # Nothing to adjust
+            return False  # Nothing to adjust
 
         cdef AccountBalance balance = account.balance()
         if balance is None:
             self._log.error(f"Cannot complete transaction: no balance for {pnl.currency}")
-            return
+            return False
 
-        # Calculate new balance
         cdef AccountBalance new_balance = AccountBalance(
             total=balance.total.add(pnl),
             locked=balance.locked,
@@ -500,7 +493,9 @@ cdef class AccountsManager:
         account.update_balances(balances)
         account.update_commissions(commission)
 
-    cdef void _update_balance_multi_currency(
+        return True
+
+    cdef bint _update_balance_multi_currency(
         self,
         Account account,
         OrderFilled fill,
@@ -535,34 +530,48 @@ cdef class AccountsManager:
                         "Cannot complete transaction: "
                         f"no {pnl.currency} to deduct a {pnl.to_formatted_str()} realized PnL from"
                     )
-                    return
+                    return False
                 new_balance = AccountBalance(
                     total=pnl,
                     locked=Money(0, pnl.currency),
                     free=pnl,
                 )
             else:
-                new_total = balance.total.as_decimal() + pnl.as_decimal()
-                new_free = balance.free.as_decimal() + pnl.as_decimal()
-                total = Money(new_total, pnl.currency)
-                free = Money(new_free, pnl.currency)
-                if new_total < 0:
-                    raise AccountBalanceNegative(
-                        balance=total.as_decimal(),
-                        currency=pnl.currency,
-                    )
-                if new_free < 0:
-                    raise AccountMarginExceeded(
-                        balance=total.as_decimal(),
-                        margin=balance.locked.as_decimal(),
-                        currency=pnl.currency,
-                    )
+                new_total = balance.total
+                new_free = balance.free
+                new_locked = balance.locked
 
-                # Calculate new balance
+                new_total = new_total.add(pnl)
+                instrument = self._cache.instrument(fill._instrument_id)
+                if (
+                    pnl.is_positive()
+                    or fill.order_type == OrderType.MARKET
+                    or instrument.instrument_class in [InstrumentClass.SPORTS_BETTING]
+                ):
+                    new_free = new_free.add(pnl)
+                else:
+                    new_locked = new_locked.add(pnl)
+
+                if apply_commission and pnl.currency == commission.currency:
+                    new_total = new_total.sub(commission)
+                    new_free = new_free.sub(commission)
+                    # Ensure we only apply commission once
+                    apply_commission = False
+
+                # TODO: Until the platform can accurately track account equity and
+                # cross-margin requirements this condition check is inaccurate and
+                # causes issues in live trading with more complex margin requirements.
+                # if new_free < 0:
+                #     raise AccountMarginExceeded(
+                #         balance=total.as_decimal(),
+                #         margin=balance.locked.as_decimal(),
+                #         currency=pnl.currency,
+                #     )
+
                 new_balance = AccountBalance(
-                    total=total,
-                    locked=balance.locked,
-                    free=free,
+                    total=new_total,
+                    locked=new_locked,
+                    free=new_free,
                 )
 
             balances.append(new_balance)
@@ -577,7 +586,7 @@ cdef class AccountsManager:
                         f"Cannot complete transaction: no {commission.currency} "
                         f"balance to deduct a {commission.to_formatted_str()} commission from"
                     )
-                    return
+                    return False
                 balance = AccountBalance(
                     total=Money(0, commission.currency),
                     locked=Money(0, commission.currency),
@@ -589,26 +598,13 @@ cdef class AccountsManager:
             balances.append(balance)
 
         if not balances:
-            return  # No adjustment
+            return True  # No adjustment
 
         # Finally update balances and commissions
         account.update_balances(balances)
         account.update_commissions(commission)
 
-    cdef AccountState _generate_account_state(self, Account account, uint64_t ts_event):
-        # Generate event
-        return AccountState(
-            account_id=account.id,
-            account_type=account.type,
-            base_currency=account.base_currency,
-            reported=False,
-            balances=list(account.balances().values()),
-            margins=list(account.margins().values()) if account.is_margin_account else [],
-            info={},
-            event_id=UUID4(),
-            ts_event=ts_event,
-            ts_init=self._clock.timestamp_ns(),
-        )
+        return True
 
     cdef object _calculate_xrate_to_base(
         self,

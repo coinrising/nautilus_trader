@@ -15,9 +15,10 @@
 
 use std::{collections::HashMap, str::FromStr};
 
+use ahash::AHashMap;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, future::join_all};
+use futures::future::join_all;
 use nautilus_common::{cache::database::CacheMap, enums::SerializationEncoding};
 use nautilus_model::{
     accounts::AccountAny,
@@ -59,9 +60,15 @@ const INDEX_POSITIONS: &str = "index:positions";
 const INDEX_POSITIONS_OPEN: &str = "index:positions_open";
 const INDEX_POSITIONS_CLOSED: &str = "index:positions_closed";
 
+#[derive(Debug)]
 pub struct DatabaseQueries;
 
 impl DatabaseQueries {
+    /// Serializes the given `payload` using the specified `encoding` to a byte vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if serialization to the chosen encoding fails.
     pub fn serialize_payload<T: Serialize>(
         encoding: SerializationEncoding,
         payload: &T,
@@ -76,6 +83,11 @@ impl DatabaseQueries {
         }
     }
 
+    /// Deserializes the given byte slice `payload` into type `T` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if deserialization from the chosen encoding fails or converting to the target type fails.
     pub fn deserialize_payload<T: DeserializeOwned>(
         encoding: SerializationEncoding,
         payload: &[u8],
@@ -93,41 +105,105 @@ impl DatabaseQueries {
             .map_err(|e| anyhow::anyhow!("Failed to convert value to target type: {e}"))
     }
 
+    /// Scans Redis for keys matching the given `pattern`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the Redis scan operation fails.
     pub async fn scan_keys(
         con: &mut ConnectionManager,
         pattern: String,
     ) -> anyhow::Result<Vec<String>> {
-        Ok(con
-            .scan_match::<String, String>(pattern)
-            .await?
-            .collect()
-            .await)
+        let mut result = Vec::new();
+        let mut cursor = 0u64;
+
+        loop {
+            let scan_result: (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(&pattern)
+                .arg("COUNT")
+                .arg(5000)
+                .query_async(con)
+                .await?;
+
+            let (new_cursor, keys) = scan_result;
+            result.extend(keys);
+
+            // If cursor is 0, we've completed the full scan
+            if new_cursor == 0 {
+                break;
+            }
+
+            cursor = new_cursor;
+        }
+
+        Ok(result)
     }
 
+    /// Bulk reads multiple keys from Redis using MGET for efficiency.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying Redis MGET operation fails.
+    pub async fn read_bulk(
+        con: &ConnectionManager,
+        keys: &[String],
+    ) -> anyhow::Result<Vec<Option<Bytes>>> {
+        if keys.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut con = con.clone();
+
+        // Use MGET to fetch all keys in a single network operation
+        let results: Vec<Option<Vec<u8>>> =
+            redis::cmd("MGET").arg(keys).query_async(&mut con).await?;
+
+        // Convert Vec<u8> to Bytes
+        let bytes_results: Vec<Option<Bytes>> = results
+            .into_iter()
+            .map(|opt| opt.map(Bytes::from))
+            .collect();
+
+        Ok(bytes_results)
+    }
+
+    /// Reads raw byte payloads for `key` under `trader_key` from Redis.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying Redis read operation fails or if the collection is unsupported.
     pub async fn read(
         con: &ConnectionManager,
         trader_key: &str,
         key: &str,
     ) -> anyhow::Result<Vec<Bytes>> {
         let collection = Self::get_collection_key(key)?;
-        let key = format!("{trader_key}{REDIS_DELIMITER}{key}");
+        let full_key = format!("{trader_key}{REDIS_DELIMITER}{key}");
+
         let mut con = con.clone();
 
         match collection {
-            INDEX => Self::read_index(&mut con, &key).await,
-            GENERAL => Self::read_string(&mut con, &key).await,
-            CURRENCIES => Self::read_string(&mut con, &key).await,
-            INSTRUMENTS => Self::read_string(&mut con, &key).await,
-            SYNTHETICS => Self::read_string(&mut con, &key).await,
-            ACCOUNTS => Self::read_list(&mut con, &key).await,
-            ORDERS => Self::read_list(&mut con, &key).await,
-            POSITIONS => Self::read_list(&mut con, &key).await,
-            ACTORS => Self::read_string(&mut con, &key).await,
-            STRATEGIES => Self::read_string(&mut con, &key).await,
+            INDEX => Self::read_index(&mut con, &full_key).await,
+            GENERAL => Self::read_string(&mut con, &full_key).await,
+            CURRENCIES => Self::read_string(&mut con, &full_key).await,
+            INSTRUMENTS => Self::read_string(&mut con, &full_key).await,
+            SYNTHETICS => Self::read_string(&mut con, &full_key).await,
+            ACCOUNTS => Self::read_list(&mut con, &full_key).await,
+            ORDERS => Self::read_list(&mut con, &full_key).await,
+            POSITIONS => Self::read_list(&mut con, &full_key).await,
+            ACTORS => Self::read_string(&mut con, &full_key).await,
+            STRATEGIES => Self::read_string(&mut con, &full_key).await,
             _ => anyhow::bail!("Unsupported operation: `read` for collection '{collection}'"),
         }
     }
 
+    /// Loads all cache data (currencies, instruments, synthetics, accounts, orders, positions) for `trader_key`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if loading any of the individual caches fails or combining data fails.
     pub async fn load_all(
         con: &ConnectionManager,
         encoding: SerializationEncoding,
@@ -145,8 +221,8 @@ impl DatabaseQueries {
 
         // For now, we don't load greeks and yield curves from the database
         // This will be implemented in the future
-        let greeks = HashMap::new();
-        let yield_curves = HashMap::new();
+        let greeks = AHashMap::new();
+        let yield_curves = AHashMap::new();
 
         Ok(CacheMap {
             currencies,
@@ -160,58 +236,74 @@ impl DatabaseQueries {
         })
     }
 
+    /// Loads all currencies for `trader_key` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if scanning keys or reading currency data fails.
     pub async fn load_currencies(
         con: &ConnectionManager,
         trader_key: &str,
         encoding: SerializationEncoding,
-    ) -> anyhow::Result<HashMap<Ustr, Currency>> {
-        let mut currencies = HashMap::new();
+    ) -> anyhow::Result<AHashMap<Ustr, Currency>> {
+        let mut currencies = AHashMap::new();
         let pattern = format!("{trader_key}{REDIS_DELIMITER}{CURRENCIES}*");
         tracing::debug!("Loading {pattern}");
 
         let mut con = con.clone();
         let keys = Self::scan_keys(&mut con, pattern).await?;
 
-        let futures: Vec<_> = keys
-            .iter()
-            .map(|key| {
-                let con = con.clone();
-                async move {
-                    let currency_code = if let Some(code) = key.as_str().rsplit(':').next() {
-                        Ustr::from(code)
-                    } else {
-                        log::error!("Invalid key format: {key}");
-                        return None;
-                    };
+        if keys.is_empty() {
+            return Ok(currencies);
+        }
 
-                    match Self::load_currency(&con, trader_key, &currency_code, encoding).await {
-                        Ok(Some(currency)) => Some((currency_code, currency)),
-                        Ok(None) => {
-                            log::error!("Currency not found: {currency_code}");
-                            None
-                        }
-                        Err(e) => {
-                            log::error!("Failed to load currency {currency_code}: {e}");
-                            None
-                        }
+        // Use bulk loading with MGET for efficiency
+        let bulk_values = Self::read_bulk(&con, &keys).await?;
+
+        // Process the bulk results
+        for (key, value_opt) in keys.iter().zip(bulk_values.iter()) {
+            let currency_code = if let Some(code) = key.as_str().rsplit(':').next() {
+                Ustr::from(code)
+            } else {
+                log::error!("Invalid key format: {key}");
+                continue;
+            };
+
+            if let Some(value_bytes) = value_opt {
+                match Self::deserialize_payload(encoding, value_bytes) {
+                    Ok(currency) => {
+                        currencies.insert(currency_code, currency);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to deserialize currency {currency_code}: {e}");
                     }
                 }
-            })
-            .collect();
+            } else {
+                log::error!("Currency not found in Redis: {currency_code}");
+            }
+        }
 
-        // Insert all Currency_code (key) and Currency (value) into the HashMap, filtering out None values.
-        currencies.extend(join_all(futures).await.into_iter().flatten());
         tracing::debug!("Loaded {} currencies(s)", currencies.len());
 
         Ok(currencies)
     }
 
+    /// Loads all instruments for `trader_key` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if scanning keys or reading instrument data fails.
+    /// Loads all instruments for `trader_key` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if scanning keys or reading instrument data fails.
     pub async fn load_instruments(
         con: &ConnectionManager,
         trader_key: &str,
         encoding: SerializationEncoding,
-    ) -> anyhow::Result<HashMap<InstrumentId, InstrumentAny>> {
-        let mut instruments = HashMap::new();
+    ) -> anyhow::Result<AHashMap<InstrumentId, InstrumentAny>> {
+        let mut instruments = AHashMap::new();
         let pattern = format!("{trader_key}{REDIS_DELIMITER}{INSTRUMENTS}*");
         tracing::debug!("Loading {pattern}");
 
@@ -265,12 +357,22 @@ impl DatabaseQueries {
         Ok(instruments)
     }
 
+    /// Loads all synthetic instruments for `trader_key` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if scanning keys or reading synthetic instrument data fails.
+    /// Loads all synthetic instruments for `trader_key` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if scanning keys or reading synthetic instrument data fails.
     pub async fn load_synthetics(
         con: &ConnectionManager,
         trader_key: &str,
         encoding: SerializationEncoding,
-    ) -> anyhow::Result<HashMap<InstrumentId, SyntheticInstrument>> {
-        let mut synthetics = HashMap::new();
+    ) -> anyhow::Result<AHashMap<InstrumentId, SyntheticInstrument>> {
+        let mut synthetics = AHashMap::new();
         let pattern = format!("{trader_key}{REDIS_DELIMITER}{SYNTHETICS}*");
         tracing::debug!("Loading {pattern}");
 
@@ -324,12 +426,22 @@ impl DatabaseQueries {
         Ok(synthetics)
     }
 
+    /// Loads all accounts for `trader_key` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if scanning keys or reading account data fails.
+    /// Loads all accounts for `trader_key` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if scanning keys or reading account data fails.
     pub async fn load_accounts(
         con: &ConnectionManager,
         trader_key: &str,
         encoding: SerializationEncoding,
-    ) -> anyhow::Result<HashMap<AccountId, AccountAny>> {
-        let mut accounts = HashMap::new();
+    ) -> anyhow::Result<AHashMap<AccountId, AccountAny>> {
+        let mut accounts = AHashMap::new();
         let pattern = format!("{trader_key}{REDIS_DELIMITER}{ACCOUNTS}*");
         tracing::debug!("Loading {pattern}");
 
@@ -370,12 +482,22 @@ impl DatabaseQueries {
         Ok(accounts)
     }
 
+    /// Loads all orders for `trader_key` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if scanning keys or reading order data fails.
+    /// Loads all orders for `trader_key` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if scanning keys or reading order data fails.
     pub async fn load_orders(
         con: &ConnectionManager,
         trader_key: &str,
         encoding: SerializationEncoding,
-    ) -> anyhow::Result<HashMap<ClientOrderId, OrderAny>> {
-        let mut orders = HashMap::new();
+    ) -> anyhow::Result<AHashMap<ClientOrderId, OrderAny>> {
+        let mut orders = AHashMap::new();
         let pattern = format!("{trader_key}{REDIS_DELIMITER}{ORDERS}*");
         tracing::debug!("Loading {pattern}");
 
@@ -416,12 +538,22 @@ impl DatabaseQueries {
         Ok(orders)
     }
 
+    /// Loads all positions for `trader_key` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if scanning keys or reading position data fails.
+    /// Loads all positions for `trader_key` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if scanning keys or reading position data fails.
     pub async fn load_positions(
         con: &ConnectionManager,
         trader_key: &str,
         encoding: SerializationEncoding,
-    ) -> anyhow::Result<HashMap<PositionId, Position>> {
-        let mut positions = HashMap::new();
+    ) -> anyhow::Result<AHashMap<PositionId, Position>> {
+        let mut positions = AHashMap::new();
         let pattern = format!("{trader_key}{REDIS_DELIMITER}{POSITIONS}*");
         tracing::debug!("Loading {pattern}");
 
@@ -462,6 +594,11 @@ impl DatabaseQueries {
         Ok(positions)
     }
 
+    /// Loads a single currency for `trader_key` and `code` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying read or deserialization fails.
     pub async fn load_currency(
         con: &ConnectionManager,
         trader_key: &str,
@@ -479,6 +616,11 @@ impl DatabaseQueries {
         Ok(currency)
     }
 
+    /// Loads a single instrument for `trader_key` and `instrument_id` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying read or deserialization fails.
     pub async fn load_instrument(
         con: &ConnectionManager,
         trader_key: &str,
@@ -495,6 +637,11 @@ impl DatabaseQueries {
         Ok(Some(instrument))
     }
 
+    /// Loads a single synthetic instrument for `trader_key` and `instrument_id` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying read or deserialization fails.
     pub async fn load_synthetic(
         con: &ConnectionManager,
         trader_key: &str,
@@ -511,6 +658,11 @@ impl DatabaseQueries {
         Ok(Some(synthetic))
     }
 
+    /// Loads a single account for `trader_key` and `account_id` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying read or deserialization fails.
     pub async fn load_account(
         con: &ConnectionManager,
         trader_key: &str,
@@ -527,6 +679,11 @@ impl DatabaseQueries {
         Ok(Some(account))
     }
 
+    /// Loads a single order for `trader_key` and `client_order_id` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying read or deserialization fails.
     pub async fn load_order(
         con: &ConnectionManager,
         trader_key: &str,
@@ -543,6 +700,11 @@ impl DatabaseQueries {
         Ok(Some(order))
     }
 
+    /// Loads a single position for `trader_key` and `position_id` using the specified `encoding`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying read or deserialization fails.
     pub async fn load_position(
         con: &ConnectionManager,
         trader_key: &str,
@@ -630,15 +792,12 @@ fn convert_timestamps(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, v) in map {
-                if is_timestamp_field(key) {
-                    if let Value::Number(n) = v {
-                        if let Some(n) = n.as_u64() {
-                            let dt = DateTime::<Utc>::from_timestamp_nanos(n as i64);
-                            *v = Value::String(
-                                dt.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
-                            );
-                        }
-                    }
+                if is_timestamp_field(key)
+                    && let Value::Number(n) = v
+                    && let Some(n) = n.as_u64()
+                {
+                    let dt = DateTime::<Utc>::from_timestamp_nanos(n as i64);
+                    *v = Value::String(dt.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true));
                 }
                 convert_timestamps(v);
             }
@@ -656,18 +815,16 @@ fn convert_timestamp_strings(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, v) in map {
-                if is_timestamp_field(key) {
-                    if let Value::String(s) = v {
-                        if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-                            *v = Value::Number(
-                                (dt.with_timezone(&Utc)
-                                    .timestamp_nanos_opt()
-                                    .expect("Invalid DateTime")
-                                    as u64)
-                                    .into(),
-                            );
-                        }
-                    }
+                if is_timestamp_field(key)
+                    && let Value::String(s) = v
+                    && let Ok(dt) = DateTime::parse_from_rfc3339(s)
+                {
+                    *v = Value::Number(
+                        (dt.with_timezone(&Utc)
+                            .timestamp_nanos_opt()
+                            .expect("Invalid DateTime") as u64)
+                            .into(),
+                    );
                 }
                 convert_timestamp_strings(v);
             }

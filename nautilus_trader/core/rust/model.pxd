@@ -23,6 +23,14 @@ cdef extern from "../includes/model.h":
         const uint8_t FIXED_PRECISION # = 9
 
     IF HIGH_PRECISION:
+        # The width in bytes for fixed-point value types in high-precision mode (128-bit).
+        const int32_t PRECISION_BYTES # = 16
+
+    IF not HIGH_PRECISION:
+        # The width in bytes for fixed-point value types in standard-precision mode (64-bit).
+        const int32_t PRECISION_BYTES # = 8
+
+    IF HIGH_PRECISION:
         # The scalar value corresponding to the maximum precision (10^16).
         const double FIXED_SCALAR # = 10000000000000000.0
 
@@ -30,62 +38,91 @@ cdef extern from "../includes/model.h":
         # The scalar value corresponding to the maximum precision (10^9).
         const double FIXED_SCALAR # = 1000000000.0
 
-    # The scalar representing the difference between high-precision and standard-precision modes.
-    const double PRECISION_DIFF_SCALAR # = 10000000.0
+    IF HIGH_PRECISION:
+        # The scalar representing the difference between high-precision and standard-precision modes.
+        const double PRECISION_DIFF_SCALAR # = 10000000.0
+
+    IF not HIGH_PRECISION:
+        # The scalar representing the difference between high-precision and standard-precision modes.
+        const double PRECISION_DIFF_SCALAR # = 1.0
+
+    # The maximum precision that can be safely used with f64-based constructors.
+    #
+    # This is a hard limit imposed by IEEE 754 double-precision floating-point representation,
+    # which has approximately 15-17 significant decimal digits. Beyond 16 decimal places,
+    # floating-point arithmetic becomes unreliable due to rounding errors.
+    #
+    # For higher precision values (such as 18-decimal wei values in DeFi), specialized
+    # constructors that work with integer representations should be used instead.
+    const uint8_t MAX_FLOAT_PRECISION # = 16
 
     IF HIGH_PRECISION:
-        # The maximum valid money amount which can be represented.
+        # The maximum valid money amount that can be represented.
         const double MONEY_MAX # = 17014118346046.0
 
     IF not HIGH_PRECISION:
+        # The maximum valid money amount that can be represented.
         const double MONEY_MAX # = 9223372036.0
 
     IF HIGH_PRECISION:
-        # The minimum valid money amount which can be represented.
+        # The minimum valid money amount that can be represented.
         const double MONEY_MIN # = -17014118346046.0
 
     IF not HIGH_PRECISION:
+        # The minimum valid money amount that can be represented.
         const double MONEY_MIN # = -9223372036.0
 
     IF HIGH_PRECISION:
-        # The maximum valid price value which can be represented.
+        # The maximum valid price value that can be represented.
         const double PRICE_MAX # = 17014118346046.0
 
     IF not HIGH_PRECISION:
+        # The maximum valid price value that can be represented.
         const double PRICE_MAX # = 9223372036.0
 
     IF HIGH_PRECISION:
-        # The minimum valid price value which can be represented.
+        # The minimum valid price value that can be represented.
         const double PRICE_MIN # = -17014118346046.0
 
     IF not HIGH_PRECISION:
+        # The minimum valid price value that can be represented.
         const double PRICE_MIN # = -9223372036.0
 
     IF HIGH_PRECISION:
-        # The maximum valid quantity value which can be represented.
+        # The maximum valid quantity value that can be represented.
         const double QUANTITY_MAX # = 34028236692093.0
 
     IF not HIGH_PRECISION:
+        # The maximum valid quantity value that can be represented.
         const double QUANTITY_MAX # = 18446744073.0
 
-    # The minimum valid quantity value which can be represented.
+    # The minimum valid quantity value that can be represented.
     const double QUANTITY_MIN # = 0.0
 
-    # An account type provided by a trading venue or broker.
-    cpdef enum AccountType:
-        # An account with unleveraged cash assets only.
-        CASH # = 1,
-        # An account which facilitates trading on margin, using account assets as collateral.
-        MARGIN # = 2,
-        # An account specific to betting markets.
-        BETTING # = 3,
+    # Minimum valid tick value for Uniswap V3 pools.
+    const int32_t PoolTick_MIN_TICK # = -887272
 
-    # An aggregation source for derived data.
-    cpdef enum AggregationSource:
-        # The data is externally aggregated (outside the Nautilus system boundary).
-        EXTERNAL # = 1,
-        # The data is internally aggregated (inside the Nautilus system boundary).
-        INTERNAL # = 2,
+
+
+    # The type of order book action for an order book event.
+    cpdef enum BookAction:
+        # An order is added to the book.
+        ADD # = 1,
+        # An existing order in the book is updated/modified.
+        UPDATE # = 2,
+        # An existing order in the book is deleted/canceled.
+        DELETE # = 3,
+        # The state of the order book is cleared.
+        CLEAR # = 4,
+
+    # The order side for a specific order, or action related to orders.
+    cpdef enum OrderSide:
+        # No order side is specified.
+        NO_ORDER_SIDE # = 0,
+        # The order is a BUY.
+        BUY # = 1,
+        # The order is a SELL.
+        SELL # = 2,
 
     # The side for the aggressing order of a trade in a market.
     cpdef enum AggressorSide:
@@ -95,6 +132,45 @@ cdef extern from "../includes/model.h":
         BUYER # = 1,
         # The SELL order was the aggressor for the trade.
         SELLER # = 2,
+
+    # The type of price for an instrument in a market.
+    cpdef enum PriceType:
+        # The best quoted price at which buyers are willing to buy a quantity of an instrument.
+        # Often considered the best bid in the order book.
+        BID # = 1,
+        # The best quoted price at which sellers are willing to sell a quantity of an instrument.
+        # Often considered the best ask in the order book.
+        ASK # = 2,
+        # The arithmetic midpoint between the best bid and ask quotes.
+        MID # = 3,
+        # The price at which the last trade of an instrument was executed.
+        LAST # = 4,
+        # A reference price reflecting an instrument's fair value, often used for portfolio
+        # calculations and risk management.
+        MARK # = 5,
+
+    # An aggregation source for derived data.
+    cpdef enum AggregationSource:
+        # The data is externally aggregated (outside the Nautilus system boundary).
+        EXTERNAL # = 1,
+        # The data is internally aggregated (inside the Nautilus system boundary).
+        INTERNAL # = 2,
+
+    # The type of event for an instrument close.
+    cpdef enum InstrumentCloseType:
+        # When the market session ended.
+        END_OF_SESSION # = 1,
+        # When the instrument expiration was reached.
+        CONTRACT_EXPIRED # = 2,
+
+    # An account type provided by a trading venue or broker.
+    cpdef enum AccountType:
+        # An account with unleveraged cash assets only.
+        CASH # = 1,
+        # An account which facilitates trading on margin, using account assets as collateral.
+        MARGIN # = 2,
+        # An account specific to betting markets.
+        BETTING # = 3,
 
     # A broad financial market asset class.
     cpdef enum AssetClass:
@@ -112,48 +188,6 @@ cdef extern from "../includes/model.h":
         CRYPTOCURRENCY # = 6,
         # Alternative assets.
         ALTERNATIVE # = 7,
-
-    # The type of order book action for an order book event.
-    cpdef enum BookAction:
-        # An order is added to the book.
-        ADD # = 1,
-        # An existing order in the book is updated/modified.
-        UPDATE # = 2,
-        # An existing order in the book is deleted/canceled.
-        DELETE # = 3,
-        # The state of the order book is cleared.
-        CLEAR # = 4,
-
-    # The order book type, representing the type of levels granularity and delta updating heuristics.
-    cpdef enum BookType:
-        # Top-of-book best bid/ask, one level per side.
-        L1_MBP # = 1,
-        # Market by price, one order per level (aggregated).
-        L2_MBP # = 2,
-        # Market by order, multiple orders per level (full granularity).
-        L3_MBO # = 3,
-
-    # The order contigency type which specifies the behavior of linked orders.
-    #
-    # [FIX 5.0 SP2 : ContingencyType <1385> field](https://www.onixs.biz/fix-dictionary/5.0.sp2/tagnum_1385.html).
-    cpdef enum ContingencyType:
-        # Not a contingent order.
-        NO_CONTINGENCY # = 0,
-        # One-Cancels-the-Other.
-        OCO # = 1,
-        # One-Triggers-the-Other.
-        OTO # = 2,
-        # One-Updates-the-Other (by proportional quantity).
-        OUO # = 3,
-
-    # The broad currency type.
-    cpdef enum CurrencyType:
-        # A type of cryptocurrency or crypto token.
-        CRYPTO # = 1,
-        # A type of currency issued by governments which is not backed by a commodity.
-        FIAT # = 2,
-        # A type of currency that is based on the value of an underlying commodity.
-        COMMODITY_BACKED # = 3,
 
     # The instrument class.
     cpdef enum InstrumentClass:
@@ -183,20 +217,44 @@ cdef extern from "../includes/model.h":
         # A binary option instrument class. A type of derivative where the payoff is either a fixed monetary amount or nothing, based on a yes/no proposition about an underlying event.
         BINARY_OPTION # = 12,
 
-    # The type of event for an instrument close.
-    cpdef enum InstrumentCloseType:
-        # When the market session ended.
-        END_OF_SESSION # = 1,
-        # When the instrument expiration was reached.
-        CONTRACT_EXPIRED # = 2,
+    # The order book type, representing the type of levels granularity and delta updating heuristics.
+    cpdef enum BookType:
+        # Top-of-book best bid/ask, one level per side.
+        L1_MBP # = 1,
+        # Market by price, one order per level (aggregated).
+        L2_MBP # = 2,
+        # Market by order, multiple orders per level (full granularity).
+        L3_MBO # = 3,
 
-    # The liqudity side for a trade.
+    # The order contingency type which specifies the behavior of linked orders.
+    #
+    # [FIX 5.0 SP2 : ContingencyType <1385> field](https://www.onixs.biz/fix-dictionary/5.0.sp2/tagnum_1385.html).
+    cpdef enum ContingencyType:
+        # Not a contingent order.
+        NO_CONTINGENCY # = 0,
+        # One-Cancels-the-Other.
+        OCO # = 1,
+        # One-Triggers-the-Other.
+        OTO # = 2,
+        # One-Updates-the-Other (by proportional quantity).
+        OUO # = 3,
+
+    # The broad currency type.
+    cpdef enum CurrencyType:
+        # A type of cryptocurrency or crypto token.
+        CRYPTO # = 1,
+        # A type of currency issued by governments which is not backed by a commodity.
+        FIAT # = 2,
+        # A type of currency that is based on the value of an underlying commodity.
+        COMMODITY_BACKED # = 3,
+
+    # The liquidity side for a trade.
     cpdef enum LiquiditySide:
         # No liquidity side specified.
         NO_LIQUIDITY_SIDE # = 0,
-        # The order passively provided liqudity to the market to complete the trade (made a market).
+        # The order passively provided liquidity to the market to complete the trade (made a market).
         MAKER # = 1,
-        # The order aggressively took liqudity from the market to complete the trade.
+        # The order aggressively took liquidity from the market to complete the trade.
         TAKER # = 2,
 
     # The status of an individual market on a trading venue.
@@ -265,15 +323,6 @@ cdef extern from "../includes/model.h":
         CALL # = 1,
         # A Put option gives the holder the right, but not the obligation, to sell an underlying asset at a specified strike price within a specified period of time.
         PUT # = 2,
-
-    # The order side for a specific order, or action related to orders.
-    cpdef enum OrderSide:
-        # No order side is specified.
-        NO_ORDER_SIDE # = 0,
-        # The order is a BUY.
-        BUY # = 1,
-        # The order is a SELL.
-        SELL # = 2,
 
     # The status for a specific order.
     #
@@ -356,22 +405,6 @@ cdef extern from "../includes/model.h":
         LONG # = 2,
         # A short position in the market, typically acquired through one or many SELL orders.
         SHORT # = 3,
-
-    # The type of price for an instrument in a market.
-    cpdef enum PriceType:
-        # The best quoted price at which buyers are willing to buy a quantity of an instrument.
-        # Often considered the best bid in the order book.
-        BID # = 1,
-        # The best quoted price at which sellers are willing to sell a quantity of an instrument.
-        # Often considered the best ask in the order book.
-        ASK # = 2,
-        # The arithmetic midpoint between the best bid and ask quotes.
-        MID # = 3,
-        # The price at which the last trade of an instrument was executed.
-        LAST # = 4,
-        # A reference price reflecting an instrument's fair value, often used for portfolio
-        # calculations and risk management.
-        MARK # = 5,
 
     # A record flag bit field, indicating event end and data information.
     cpdef enum RecordFlag:
@@ -472,6 +505,10 @@ cdef extern from "../includes/model.h":
     cdef struct OrderBookDeltas_t:
         pass
 
+    # Represents a tick in a Uniswap V3-style AMM with liquidity tracking and fee accounting.
+    cdef struct PoolTick:
+        pass
+
     # Represents a synthetic instrument with prices derived from component instruments using a
     # formula.
     #
@@ -502,20 +539,20 @@ cdef extern from "../includes/model.h":
     IF not HIGH_PRECISION:
         ctypedef int64_t PriceRaw;
 
-    # Represents a price in a market.
+    # Represents a price in a market with a specified precision.
     #
     # The number of decimal places may vary. For certain asset classes, prices may
     # have negative values. For example, prices for options instruments can be
     # negative under certain conditions.
     #
-    # Handles up to {FIXED_PRECISION} decimals of precision.
+    # Handles up to [`FIXED_PRECISION`] decimals of precision.
     #
-    #  - `PRICE_MAX` = {PRICE_MAX}
-    #  - `PRICE_MIN` = {PRICE_MIN}
+    # - [`PRICE_MAX`] - Maximum representable price value.
+    # - [`PRICE_MIN`] - Minimum representable price value.
     cdef struct Price_t:
         # Represents the raw fixed-point value, with `precision` defining the number of decimal places.
         PriceRaw raw;
-        # The number of decimal places, with a maximum of {FIXED_PRECISION}.
+        # The number of decimal places, with a maximum of [`FIXED_PRECISION`].
         uint8_t precision;
 
     IF HIGH_PRECISION:
@@ -524,20 +561,20 @@ cdef extern from "../includes/model.h":
     IF not HIGH_PRECISION:
         ctypedef uint64_t QuantityRaw;
 
-    # Represents a quantity with a non-negative value.
+    # Represents a quantity with a non-negative value and specified precision.
     #
     # Capable of storing either a whole number (no decimal places) of 'contracts'
     # or 'shares' (instruments denominated in whole units) or a decimal value
     # containing decimal places for instruments denominated in fractional units.
     #
-    # Handles up to {FIXED_PRECISION} decimals of precision.
+    # Handles up to [`FIXED_PRECISION`] decimals of precision.
     #
-    # - `QUANTITY_MAX` = {QUANTITY_MAX}
-    # - `QUANTITY_MIN` = 0
+    # - [`QUANTITY_MAX`] - Maximum representable quantity value.
+    # - [`QUANTITY_MIN`] - 0 (non-negative values only).
     cdef struct Quantity_t:
         # Represents the raw fixed-point value, with `precision` defining the number of decimal places.
         QuantityRaw raw;
-        # The number of decimal places, with a maximum of {FIXED_PRECISION}.
+        # The number of decimal places, with a maximum of [`FIXED_PRECISION`].
         uint8_t precision;
 
     # Represents an order in a book.
@@ -565,7 +602,7 @@ cdef extern from "../includes/model.h":
         uint64_t sequence;
         # UNIX timestamp (nanoseconds) when the book event occurred.
         uint64_t ts_event;
-        # UNIX timestamp (nanoseconds) when the struct was initialized.
+        # UNIX timestamp (nanoseconds) when the instance was created.
         uint64_t ts_init;
 
     # C compatible Foreign Function Interface (FFI) for an underlying [`OrderBookDeltas`].
@@ -579,7 +616,7 @@ cdef extern from "../includes/model.h":
     cdef struct OrderBookDeltas_API:
         OrderBookDeltas_t *_0;
 
-    # Represents a aggregated order book update with a fixed depth of 10 levels per side.
+    # Represents an aggregated order book update with a fixed depth of 10 levels per side.
     #
     # This structure is specifically designed for scenarios where a snapshot of the top 10 bid and
     # ask levels in an order book is needed. It differs from `OrderBookDelta` or `OrderBookDeltas`
@@ -605,7 +642,7 @@ cdef extern from "../includes/model.h":
         uint64_t sequence;
         # UNIX timestamp (nanoseconds) when the book event occurred.
         uint64_t ts_event;
-        # UNIX timestamp (nanoseconds) when the struct was initialized.
+        # UNIX timestamp (nanoseconds) when the instance was created.
         uint64_t ts_init;
 
     # Represents a quote tick in a market.
@@ -622,7 +659,7 @@ cdef extern from "../includes/model.h":
         Quantity_t ask_size;
         # UNIX timestamp (nanoseconds) when the quote event occurred.
         uint64_t ts_event;
-        # UNIX timestamp (nanoseconds) when the struct was initialized.
+        # UNIX timestamp (nanoseconds) when the instance was created.
         uint64_t ts_init;
 
     # Represents a valid trade match ID (assigned by a trading venue).
@@ -651,7 +688,7 @@ cdef extern from "../includes/model.h":
         TradeId_t trade_id;
         # UNIX timestamp (nanoseconds) when the trade event occurred.
         uint64_t ts_event;
-        # UNIX timestamp (nanoseconds) when the struct was initialized.
+        # UNIX timestamp (nanoseconds) when the instance was created.
         uint64_t ts_init;
 
     # Represents a bar aggregation specification including a step, aggregation
@@ -713,7 +750,7 @@ cdef extern from "../includes/model.h":
         Quantity_t volume;
         # UNIX timestamp (nanoseconds) when the data event occurred.
         uint64_t ts_event;
-        # UNIX timestamp (nanoseconds) when the struct was initialized.
+        # UNIX timestamp (nanoseconds) when the instance was created.
         uint64_t ts_init;
 
     # Represents a mark price update.
@@ -724,7 +761,7 @@ cdef extern from "../includes/model.h":
         Price_t value;
         # UNIX timestamp (nanoseconds) when the price event occurred.
         uint64_t ts_event;
-        # UNIX timestamp (nanoseconds) when the struct was initialized.
+        # UNIX timestamp (nanoseconds) when the instance was created.
         uint64_t ts_init;
 
     # Represents an index price update.
@@ -735,7 +772,7 @@ cdef extern from "../includes/model.h":
         Price_t value;
         # UNIX timestamp (nanoseconds) when the price event occurred.
         uint64_t ts_event;
-        # UNIX timestamp (nanoseconds) when the struct was initialized.
+        # UNIX timestamp (nanoseconds) when the instance was created.
         uint64_t ts_init;
 
     # Represents an instrument close at a venue.
@@ -748,7 +785,7 @@ cdef extern from "../includes/model.h":
         InstrumentCloseType close_type;
         # UNIX timestamp (nanoseconds) when the close price event occurred.
         uint64_t ts_event;
-        # UNIX timestamp (nanoseconds) when the struct was initialized.
+        # UNIX timestamp (nanoseconds) when the instance was created.
         uint64_t ts_init;
 
     # A built-in Nautilus data type.
@@ -922,6 +959,8 @@ cdef extern from "../includes/model.h":
         uint64_t ts_init;
         # If the event was generated during reconciliation.
         uint8_t reconciliation;
+        # If the order was rejected because it was post-only and would execute immediately as a taker.
+        uint8_t due_post_only;
 
     # Represents a system client ID.
     cdef struct ClientId_t:
@@ -979,7 +1018,7 @@ cdef extern from "../includes/model.h":
 
     # Represents a medium of exchange in a specified denomination with a fixed decimal precision.
     #
-    # Handles up to {FIXED_PRECISION} decimals of precision.
+    # Handles up to [`FIXED_PRECISION`] decimals of precision.
     cdef struct Currency_t:
         # The currency code as an alpha-3 string (e.g., "USD", "EUR").
         char* code;
@@ -1000,8 +1039,8 @@ cdef extern from "../includes/model.h":
 
     # Represents an amount of money in a specified currency denomination.
     #
-    # - `MONEY_MAX` = {MONEY_MAX}
-    # - `MONEY_MIN` = {MONEY_MIN}
+    # - [`MONEY_MAX`] - Maximum representable money amount
+    # - [`MONEY_MIN`] - Minimum representable money amount
     cdef struct Money_t:
         # Represents the raw fixed-point amount, with `currency.precision` defining the number of decimal places.
         MoneyRaw raw;
@@ -1020,29 +1059,60 @@ cdef extern from "../includes/model.h":
 
 
 
-    # Indicates if high_precision mode is enabled.
+    # Indicates if high-precision mode is enabled.
+    #
+    # # Safety
+    #
+    # This static variable is initialized at compile time and never mutated,
+    # making it safe to read from multiple threads without synchronization.
+    # The value is determined by the "high-precision" feature flag.
     extern const uint8_t HIGH_PRECISION_MODE;
 
-    IF HIGH_PRECISION:
-        # The width in bytes for fixed-point value types in high-precision mode (128-bit).
-        extern const int32_t PRECISION_BYTES;
+    # The maximum raw money integer value.
+    #
+    # # Safety
+    #
+    # This value is computed at compile time from MONEY_MAX * FIXED_SCALAR.
+    # The multiplication is guaranteed not to overflow because MONEY_MAX and FIXED_SCALAR
+    # are chosen such that their product fits within MoneyRaw's range in both
+    # high-precision (i128) and standard-precision (i64) modes.
+    extern const MoneyRaw MONEY_RAW_MAX;
 
-    IF not HIGH_PRECISION:
-        # The width in bytes for fixed-point value types in standard-precision mode (64-bit).
-        extern const int32_t PRECISION_BYTES;
+    # The minimum raw money integer value.
+    #
+    # # Safety
+    #
+    # This value is computed at compile time from MONEY_MIN * FIXED_SCALAR.
+    # The multiplication is guaranteed not to overflow because MONEY_MIN and FIXED_SCALAR
+    # are chosen such that their product fits within MoneyRaw's range in both
+    # high-precision (i128) and standard-precision (i64) modes.
+    extern const MoneyRaw MONEY_RAW_MIN;
 
     # The maximum raw price integer value.
+    #
+    # # Safety
+    #
+    # This value is computed at compile time from PRICE_MAX * FIXED_SCALAR.
+    # The multiplication is guaranteed not to overflow because PRICE_MAX and FIXED_SCALAR
+    # are chosen such that their product fits within PriceRaw's range in both
+    # high-precision (i128) and standard-precision (i64) modes.
     extern const PriceRaw PRICE_RAW_MAX;
 
     # The minimum raw price integer value.
+    #
+    # # Safety
+    #
+    # This value is computed at compile time from PRICE_MIN * FIXED_SCALAR.
+    # The multiplication is guaranteed not to overflow because PRICE_MIN and FIXED_SCALAR
+    # are chosen such that their product fits within PriceRaw's range in both
+    # high-precision (i128) and standard-precision (i64) modes.
     extern const PriceRaw PRICE_RAW_MIN;
 
     # The maximum raw quantity integer value.
     extern const QuantityRaw QUANTITY_RAW_MAX;
 
+    # Clones a data instance.
     Data_t data_clone(const Data_t *data);
-
-    void interned_string_stats();
 
     # # Panics
     #
@@ -1098,14 +1168,14 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     const char *bar_type_check_parsing(const char *ptr);
 
     # Returns a [`BarType`] from a C string pointer.
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     BarType_t bar_type_from_cstr(const char *ptr);
 
     uint8_t bar_type_eq(const BarType_t *lhs, const BarType_t *rhs);
@@ -1151,12 +1221,13 @@ cdef extern from "../includes/model.h":
 
     uint64_t orderbook_delta_hash(const OrderBookDelta_t *delta);
 
-    # Creates a new `OrderBookDeltas` instance from a `CVec` of `OrderBookDelta`.
+    # Creates a new [`OrderBookDeltas_API`] instance from a `CVec` of `OrderBookDelta`.
     #
     # # Safety
-    # - The `deltas` must be a valid pointer to a `CVec` containing `OrderBookDelta` objects
-    # - This function clones the data pointed to by `deltas` into Rust-managed memory, then forgets the original `Vec` to prevent Rust from auto-deallocating it
-    # - The caller is responsible for managing the memory of `deltas` (including its deallocation) to avoid memory leaks
+    #
+    # - The `deltas` must be a valid pointer to a `CVec` containing `OrderBookDelta` objects.
+    # - This function clones the data pointed to by `deltas` into Rust-managed memory, then forgets the original `Vec` to prevent Rust from auto-deallocating it.
+    # - The caller is responsible for managing the memory of `deltas` (including its deallocation) to avoid memory leaks.
     OrderBookDeltas_API orderbook_deltas_new(InstrumentId_t instrument_id,
                                              const CVec *deltas);
 
@@ -1182,8 +1253,10 @@ cdef extern from "../includes/model.h":
 
     # # Safety
     #
-    # - Assumes `bids` and `asks` are valid pointers to arrays of `BookOrder` of length 10.
-    # - Assumes `bid_counts` and `ask_counts` are valid pointers to arrays of `u32` of length 10.
+    # This function assumes:
+    # - `bids` and `asks` are valid pointers to arrays of `BookOrder` of length 10.
+    # - `bid_counts` and `ask_counts` are valid pointers to arrays of `u32` of length 10.
+    #
     # # Panics
     #
     # Panics if any input pointer is null or if slice conversion for bids or asks fails.
@@ -1241,6 +1314,17 @@ cdef extern from "../includes/model.h":
 
     const char *mark_price_update_to_cstr(const MarkPriceUpdate_t *value);
 
+    IndexPriceUpdate_t index_price_update_new(InstrumentId_t instrument_id,
+                                              Price_t value,
+                                              uint64_t ts_event,
+                                              uint64_t ts_init);
+
+    uint8_t index_price_update_eq(const IndexPriceUpdate_t *lhs, const IndexPriceUpdate_t *rhs);
+
+    uint64_t index_price_update_hash(const IndexPriceUpdate_t *value);
+
+    const char *index_price_update_to_cstr(const IndexPriceUpdate_t *value);
+
     QuoteTick_t quote_tick_new(InstrumentId_t instrument_id,
                                Price_t bid_price,
                                Price_t ask_price,
@@ -1280,7 +1364,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     #
     # # Panics
     #
@@ -1293,7 +1377,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     #
     # # Panics
     #
@@ -1306,7 +1390,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     #
     # # Panics
     #
@@ -1319,7 +1403,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     #
     # # Panics
     #
@@ -1332,7 +1416,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     #
     # # Panics
     #
@@ -1345,7 +1429,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     #
     # # Panics
     #
@@ -1358,7 +1442,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     #
     # # Panics
     #
@@ -1371,7 +1455,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     #
     # # Panics
     #
@@ -1384,7 +1468,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     #
     # # Panics
     #
@@ -1397,7 +1481,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     #
     # # Panics
     #
@@ -1408,7 +1492,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     #
     # # Panics
     #
@@ -1423,7 +1507,8 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
     # # Panics
     #
     # Panics if the C string does not correspond to a valid `LiquiditySide` variant.
@@ -1435,7 +1520,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     #
     # # Panics
     #
@@ -1448,7 +1533,8 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
     # # Panics
     #
     # Panics if the C string does not correspond to a valid `MarketStatusAction` variant.
@@ -1460,7 +1546,8 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
     # # Panics
     #
     # Panics if the C string does not correspond to a valid `OmsType` variant.
@@ -1472,7 +1559,8 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
     # # Panics
     #
     # Panics if the C string does not correspond to a valid `OptionKind` variant.
@@ -1484,7 +1572,8 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
     # # Panics
     #
     # Panics if the C string does not correspond to a valid `OrderSide` variant.
@@ -1496,7 +1585,8 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
     # # Panics
     #
     # Panics if the C string does not correspond to a valid `OrderStatus` variant.
@@ -1508,7 +1598,8 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
     # # Panics
     #
     # Panics if the C string does not correspond to a valid `OrderType` variant.
@@ -1520,7 +1611,8 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
     # # Panics
     #
     # Panics if the C string does not correspond to a valid `PositionSide` variant.
@@ -1532,7 +1624,8 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
     # # Panics
     #
     # Panics if the C string does not correspond to a valid `PriceType` variant.
@@ -1544,7 +1637,8 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
     # # Panics
     #
     # Panics if the C string does not correspond to a valid `RecordFlag` variant.
@@ -1556,7 +1650,8 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
     # # Panics
     #
     # Panics if the C string does not correspond to a valid `TimeInForce` variant.
@@ -1568,7 +1663,8 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
     # # Panics
     #
     # Panics if the C string does not correspond to a valid `TradingState` variant.
@@ -1580,7 +1676,8 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
     # # Panics
     #
     # Panics if the C string does not correspond to a valid `TrailingOffsetType` variant.
@@ -1592,7 +1689,8 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
     # # Panics
     #
     # Panics if the C string does not correspond to a valid `TriggerType` variant.
@@ -1600,7 +1698,7 @@ cdef extern from "../includes/model.h":
 
     # # Safety
     #
-    # - Assumes `reason_ptr` is a valid C string pointer.
+    # Assumes `reason_ptr` is a valid C string pointer.
     OrderDenied_t order_denied_new(TraderId_t trader_id,
                                    StrategyId_t strategy_id,
                                    InstrumentId_t instrument_id,
@@ -1649,7 +1747,7 @@ cdef extern from "../includes/model.h":
 
     # # Safety
     #
-    # - Assumes `reason_ptr` is a valid C string pointer.
+    # Assumes `reason_ptr` is a valid C string pointer.
     OrderRejected_t order_rejected_new(TraderId_t trader_id,
                                        StrategyId_t strategy_id,
                                        InstrumentId_t instrument_id,
@@ -1659,13 +1757,17 @@ cdef extern from "../includes/model.h":
                                        UUID4_t event_id,
                                        uint64_t ts_event,
                                        uint64_t ts_init,
-                                       uint8_t reconciliation);
+                                       uint8_t reconciliation,
+                                       uint8_t due_post_only);
+
+    # FFI wrapper for interned string statistics.
+    void interned_string_stats();
 
     # Returns a Nautilus identifier from a C string pointer.
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     AccountId_t account_id_new(const char *ptr);
 
     uint64_t account_id_hash(const AccountId_t *id);
@@ -1674,7 +1776,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     ClientId_t client_id_new(const char *ptr);
 
     uint64_t client_id_hash(const ClientId_t *id);
@@ -1683,7 +1785,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     ClientOrderId_t client_order_id_new(const char *ptr);
 
     uint64_t client_order_id_hash(const ClientOrderId_t *id);
@@ -1692,7 +1794,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     ComponentId_t component_id_new(const char *ptr);
 
     uint64_t component_id_hash(const ComponentId_t *id);
@@ -1701,7 +1803,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     ExecAlgorithmId_t exec_algorithm_id_new(const char *ptr);
 
     uint64_t exec_algorithm_id_hash(const ExecAlgorithmId_t *id);
@@ -1712,14 +1814,14 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     const char *instrument_id_check_parsing(const char *ptr);
 
     # Returns a Nautilus identifier from a C string pointer.
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     InstrumentId_t instrument_id_from_cstr(const char *ptr);
 
     # Returns an [`InstrumentId`] as a C string pointer.
@@ -1733,7 +1835,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     OrderListId_t order_list_id_new(const char *ptr);
 
     uint64_t order_list_id_hash(const OrderListId_t *id);
@@ -1742,7 +1844,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     PositionId_t position_id_new(const char *ptr);
 
     uint64_t position_id_hash(const PositionId_t *id);
@@ -1751,7 +1853,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     StrategyId_t strategy_id_new(const char *ptr);
 
     uint64_t strategy_id_hash(const StrategyId_t *id);
@@ -1760,7 +1862,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     Symbol_t symbol_new(const char *ptr);
 
     uint64_t symbol_hash(const Symbol_t *id);
@@ -1775,7 +1877,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     TradeId_t trade_id_new(const char *ptr);
 
     uint64_t trade_id_hash(const TradeId_t *id);
@@ -1786,7 +1888,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     TraderId_t trader_id_new(const char *ptr);
 
     uint64_t trader_id_hash(const TraderId_t *id);
@@ -1795,7 +1897,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     Venue_t venue_new(const char *ptr);
 
     uint64_t venue_hash(const Venue_t *id);
@@ -1806,7 +1908,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `code_ptr` is a valid NUL-terminated UTF-8 C string pointer.
+    # Assumes `code_ptr` is a valid NUL-terminated UTF-8 C string pointer.
     #
     # # Panics
     #
@@ -1817,7 +1919,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `code_ptr` is a valid NUL-terminated UTF-8 C string pointer.
+    # Assumes `code_ptr` is a valid NUL-terminated UTF-8 C string pointer.
     #
     # # Panics
     #
@@ -1828,7 +1930,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
     VenueOrderId_t venue_order_id_new(const char *ptr);
 
     uint64_t venue_order_id_hash(const VenueOrderId_t *id);
@@ -1841,8 +1943,9 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `components_ptr` is a valid C string pointer of a JSON format list of strings.
-    # - Assumes `formula_ptr` is a valid C string pointer.
+    # This function assumes:
+    # - `components_ptr` is a valid C string pointer of a JSON format list of strings.
+    # - `formula_ptr` is a valid C string pointer.
     SyntheticInstrument_API synthetic_instrument_new(Symbol_t symbol,
                                                      uint8_t price_precision,
                                                      const char *components_ptr,
@@ -1870,13 +1973,13 @@ cdef extern from "../includes/model.h":
 
     # # Safety
     #
-    # - Assumes `formula_ptr` is a valid C string pointer.
+    # Assumes `formula_ptr` is a valid C string pointer.
     uint8_t synthetic_instrument_is_valid_formula(const SyntheticInstrument_API *synth,
                                                   const char *formula_ptr);
 
     # # Safety
     #
-    # - Assumes `formula_ptr` is a valid C string pointer.
+    # Assumes `formula_ptr` is a valid C string pointer.
     #
     # # Panics
     #
@@ -1996,7 +2099,7 @@ cdef extern from "../includes/model.h":
 
     uint8_t orderbook_check_integrity(const OrderBook_API *book);
 
-    void vec_fills_drop(CVec v);
+    void vec_drop_fills(CVec v);
 
     # Returns a pretty printed `OrderBook` number of levels per side, as a C string pointer.
     const char *orderbook_pprint_to_cstr(const OrderBook_API *book, uintptr_t num_levels);
@@ -2017,16 +2120,17 @@ cdef extern from "../includes/model.h":
 
     double level_exposure(const BookLevel_API *level);
 
-    void vec_levels_drop(CVec v);
+    void vec_drop_book_levels(CVec v);
 
-    void vec_orders_drop(CVec v);
+    void vec_drop_book_orders(CVec v);
 
     # Returns a [`Currency`] from pointers and primitives.
     #
     # # Safety
     #
-    # - Assumes `code_ptr` is a valid C string pointer.
-    # - Assumes `name_ptr` is a valid C string pointer.
+    # This function assumes:
+    # - `code_ptr` is a valid C string pointer.
+    # - `name_ptr` is a valid C string pointer.
     Currency_t currency_from_py(const char *code_ptr,
                                 uint8_t precision,
                                 uint16_t iso4217,
@@ -2056,7 +2160,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `code_ptr` is a valid NUL-terminated UTF-8 C string pointer.
+    # Assumes `code_ptr` is a valid NUL-terminated UTF-8 C string pointer.
     uint8_t currency_exists(const char *code_ptr);
 
     # Converts a C string pointer to a `Currency` for FFI.
@@ -2067,7 +2171,7 @@ cdef extern from "../includes/model.h":
     #
     # # Safety
     #
-    # - Assumes `code_ptr` is a valid NUL-terminated UTF-8 C string pointer.
+    # Assumes `code_ptr` is a valid NUL-terminated UTF-8 C string pointer.
     Currency_t currency_from_cstr(const char *code_ptr);
 
     Money_t money_new(double amount, Currency_t currency);
@@ -2103,3 +2207,5 @@ cdef extern from "../includes/model.h":
     void quantity_sub_assign(Quantity_t a, Quantity_t b);
 
     void quantity_sub_assign_u64(Quantity_t a, uint64_t b);
+
+    Quantity_t quantity_saturating_sub(Quantity_t a, Quantity_t b);

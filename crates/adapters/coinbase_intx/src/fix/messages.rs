@@ -167,7 +167,7 @@ impl FixMessage {
 
     /// Gets a field from the message.
     pub fn get_field(&self, tag: u32) -> Option<&str> {
-        self.fields.get(&tag).map(std::string::String::as_str)
+        self.fields.get(&tag).map(String::as_str)
     }
 
     /// Adds a field to the message.
@@ -178,7 +178,7 @@ impl FixMessage {
 
     /// Parses a FIX message from a byte slice.
     pub(crate) fn parse(data: &[u8]) -> Result<Self, String> {
-        const DELIMITER: char = '\x01'; // Standard FIX delimiter (more efficent to define here)
+        const DELIMITER: char = '\x01'; // Standard FIX delimiter (more efficient to define here)
 
         let data_str = std::str::from_utf8(data).map_err(|e| format!("Invalid UTF-8: {e}"))?;
 

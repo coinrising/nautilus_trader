@@ -68,9 +68,10 @@ cdef class OrderEmulator(Actor):
 
 # -------------------------------------------------------------------------------------------------
 
+    cpdef Price _validate_release(self, Order order, MatchingCore matching_core, InstrumentId trigger_instrument_id)
     cpdef void _trigger_stop_order(self, Order order)
     cpdef void _fill_market_order(self, Order order)
     cpdef void _fill_limit_order(self, Order order)
 
     cdef void _iterate_orders(self, MatchingCore matching_core)
-    cdef void _update_trailing_stop_order(self, MatchingCore matching_core, Order order)
+    cdef void _trail_stop_order(self, MatchingCore matching_core, Order order)

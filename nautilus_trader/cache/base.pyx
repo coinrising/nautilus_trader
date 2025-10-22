@@ -13,9 +13,12 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
+from libc.stdint cimport uint64_t
+
 from nautilus_trader.core.rust.model cimport PriceType
 from nautilus_trader.model.data cimport Bar
 from nautilus_trader.model.data cimport BarType
+from nautilus_trader.model.data cimport FundingRateUpdate
 from nautilus_trader.model.data cimport IndexPriceUpdate
 from nautilus_trader.model.data cimport MarkPriceUpdate
 from nautilus_trader.model.data cimport QuoteTick
@@ -89,11 +92,11 @@ cdef class CacheFacade:
         """Abstract method (implement in subclass)."""
         raise NotImplementedError("method `own_order_book` must be implemented in the subclass")  # pragma: no cover
 
-    cpdef dict[Decimal, list[Order]] own_bid_orders(self, InstrumentId instrument_id, set[OrderStatus] status = None):
+    cpdef dict[Decimal, list[Order]] own_bid_orders(self, InstrumentId instrument_id, set[OrderStatus] status = None, uint64_t accepted_buffer_ns = 0, uint64_t ts_now = 0):
         """Abstract method (implement in subclass)."""
         raise NotImplementedError("method `own_bid_book` must be implemented in the subclass")  # pragma: no cover
 
-    cpdef dict[Decimal, list[Order]] own_ask_orders(self, InstrumentId instrument_id, set[OrderStatus] status = None):
+    cpdef dict[Decimal, list[Order]] own_ask_orders(self, InstrumentId instrument_id, set[OrderStatus] status = None, uint64_t accepted_buffer_ns = 0, uint64_t ts_now = 0):
         """Abstract method (implement in subclass)."""
         raise NotImplementedError("method `own_ask_book` must be implemented in the subclass")  # pragma: no cover
 
@@ -112,6 +115,10 @@ cdef class CacheFacade:
     cpdef IndexPriceUpdate index_price(self, InstrumentId instrument_id, int index=0):
         """Abstract method (implement in subclass)."""
         raise NotImplementedError("method `index_price` must be implemented in the subclass")  # pragma: no cover
+
+    cpdef FundingRateUpdate funding_rate(self, InstrumentId instrument_id):
+        """Abstract method (implement in subclass)."""
+        raise NotImplementedError("method `funding_rate` must be implemented in the subclass")  # pragma: no cover
 
     cpdef Bar bar(self, BarType bar_type, int index=0):
         """Abstract method (implement in subclass)."""
@@ -237,6 +244,10 @@ cdef class CacheFacade:
     cpdef Account account(self, AccountId account_id):
         """Abstract method (implement in subclass)."""
         raise NotImplementedError("method `account` must be implemented in the subclass")  # pragma: no cover
+
+    cpdef void set_specific_venue(self, Venue venue):
+        """Abstract method (implement in subclass)."""
+        raise NotImplementedError("method `set_specific_venue` must be implemented in the subclass")  # p
 
     cpdef Account account_for_venue(self, Venue venue):
         """Abstract method (implement in subclass)."""
@@ -436,9 +447,17 @@ cdef class CacheFacade:
         """Abstract method (implement in subclass)."""
         raise NotImplementedError("method `position_id` must be implemented in the subclass")  # pragma: no cover
 
+    cpdef set[PositionId] position_snapshot_ids(self, InstrumentId instrument_id = None):
+        """Abstract method (implement in subclass)."""
+        raise NotImplementedError("method `position_snapshot_ids` must be implemented in the subclass")  # pragma: no cover
+
     cpdef list position_snapshots(self, PositionId position_id = None):
         """Abstract method (implement in subclass)."""
         raise NotImplementedError("method `position_snapshots` must be implemented in the subclass")  # pragma: no cover
+
+    cpdef list position_snapshot_bytes(self, PositionId position_id):
+        """Abstract method (implement in subclass)."""
+        raise NotImplementedError("method `position_snapshot_bytes` must be implemented in the subclass")  # pragma: no cover
 
     cpdef list positions(self, Venue venue = None, InstrumentId instrument_id = None, StrategyId strategy_id = None, PositionSide side = PositionSide.NO_POSITION_SIDE):
         """Abstract method (implement in subclass)."""

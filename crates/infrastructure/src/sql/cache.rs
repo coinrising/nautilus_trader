@@ -13,15 +13,14 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-use std::{
-    collections::{HashMap, VecDeque},
-    time::{Duration, Instant},
-};
+use std::{collections::VecDeque, time::Duration};
 
+use ahash::AHashMap;
 use bytes::Bytes;
 use nautilus_common::{
     cache::database::{CacheDatabaseAdapter, CacheMap},
     custom::CustomData,
+    logging::{log_task_awaiting, log_task_started, log_task_stopped},
     runtime::get_runtime,
     signal::Signal,
 };
@@ -41,13 +40,16 @@ use nautilus_model::{
     types::Currency,
 };
 use sqlx::{PgPool, postgres::PgConnectOptions};
-use tokio::try_join;
+use tokio::{time::Instant, try_join};
 use ustr::Ustr;
 
 use crate::sql::{
     pg::{connect_pg, get_postgres_connect_options},
     queries::DatabaseQueries,
 };
+
+// Task and connection names
+const CACHE_PROCESS: &str = "cache-process";
 
 #[derive(Debug)]
 #[cfg_attr(
@@ -80,6 +82,15 @@ pub enum DatabaseQuery {
 }
 
 impl PostgresCacheDatabase {
+    /// Connects to the Postgres cache database using the provided connection parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if establishing the database connection fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal Postgres pool connection attempt (`connect_pg`) unwraps on error.
     pub async fn connect(
         host: Option<String>,
         port: Option<u16>,
@@ -103,31 +114,47 @@ impl PostgresCacheDatabase {
         mut rx: tokio::sync::mpsc::UnboundedReceiver<DatabaseQuery>,
         pg_connect_options: PgConnectOptions,
     ) {
-        tracing::debug!("Starting cache processing");
+        log_task_started(CACHE_PROCESS);
 
         let pool = connect_pg(pg_connect_options).await.unwrap();
 
         // Buffering
         let mut buffer: VecDeque<DatabaseQuery> = VecDeque::new();
-        let mut last_drain = Instant::now();
 
-        // TODO: Add `buffer_interval_ms` to config, setting this above 0 currently fails tests
+        // TODO: expose this via configuration once tests are fixed
         let buffer_interval = Duration::from_millis(0);
+
+        // Use a timer so the task wakes up even when no new message arrives
+        let flush_timer = tokio::time::sleep(buffer_interval);
+        tokio::pin!(flush_timer);
 
         // Continue to receive and handle messages until channel is hung up
         loop {
-            if last_drain.elapsed() >= buffer_interval && !buffer.is_empty() {
-                drain_buffer(&pool, &mut buffer).await;
-                last_drain = Instant::now();
-            } else if let Some(msg) = rx.recv().await {
-                tracing::debug!("Received {msg:?}");
-                match msg {
-                    DatabaseQuery::Close => break,
-                    _ => buffer.push_back(msg),
+            tokio::select! {
+                maybe_msg = rx.recv() => {
+                    if let Some(msg) = maybe_msg {
+                        tracing::debug!("Received {msg:?}");
+                        if matches!(msg, DatabaseQuery::Close) {
+                            break;
+                        }
+                        buffer.push_back(msg);
+
+                        // If interval is zero flush straight away so tests remain fast
+                        if buffer_interval.is_zero() {
+                            drain_buffer(&pool, &mut buffer).await;
+                        }
+                    } else {
+                        tracing::debug!("Command channel closed");
+                        break;
+                    }
                 }
-            } else {
-                tracing::debug!("Command channel closed");
-                break;
+                () = &mut flush_timer, if !buffer_interval.is_zero() => {
+                    if !buffer.is_empty() {
+                        drain_buffer(&pool, &mut buffer).await;
+                    }
+
+                    flush_timer.as_mut().reset(Instant::now() + buffer_interval);
+                }
             }
         }
 
@@ -136,10 +163,15 @@ impl PostgresCacheDatabase {
             drain_buffer(&pool, &mut buffer).await;
         }
 
-        tracing::debug!("Stopped cache processing");
+        log_task_stopped(CACHE_PROCESS);
     }
 }
 
+/// Retrieves a `PostgresCacheDatabase` using default connection options.
+///
+/// # Errors
+///
+/// Returns an error if connecting to the database or initializing the cache adapter fails.
 pub async fn get_pg_cache_database() -> anyhow::Result<PostgresCacheDatabase> {
     let connect_options = get_postgres_connect_options(None, None, None, None, None);
     Ok(PostgresCacheDatabase::connect(
@@ -161,6 +193,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
         let (tx, rx) = std::sync::mpsc::channel();
 
         log::debug!("Closing connection pool");
+
         tokio::task::block_in_place(|| {
             get_runtime().block_on(async {
                 pool.close().await;
@@ -175,7 +208,8 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
             log::error!("Error sending close: {e:?}");
         }
 
-        log::debug!("Awaiting task 'cache-write'"); // Naming tasks will soon be stablized
+        log_task_awaiting("cache-write");
+
         tokio::task::block_in_place(|| {
             if let Err(e) = get_runtime().block_on(&mut self.handle) {
                 log::error!("Error awaiting task 'cache-write': {e:?}");
@@ -218,8 +252,8 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
 
         // For now, we don't load greeks and yield curves from the database
         // This will be implemented in the future
-        let greeks = HashMap::new();
-        let yield_curves = HashMap::new();
+        let greeks = AHashMap::new();
+        let yield_curves = AHashMap::new();
 
         Ok(CacheMap {
             currencies,
@@ -233,7 +267,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
         })
     }
 
-    fn load(&self) -> anyhow::Result<HashMap<String, Bytes>> {
+    fn load(&self) -> anyhow::Result<AHashMap<String, Bytes>> {
         let pool = self.pool.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         tokio::spawn(async move {
@@ -250,7 +284,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
                 }
                 Err(e) => {
                     log::error!("Failed to load general items: {e:?}");
-                    if let Err(e) = tx.send(HashMap::new()) {
+                    if let Err(e) = tx.send(AHashMap::new()) {
                         log::error!("Failed to send empty general items: {e:?}");
                     }
                 }
@@ -259,7 +293,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
         Ok(rx.recv()?)
     }
 
-    async fn load_currencies(&self) -> anyhow::Result<HashMap<Ustr, Currency>> {
+    async fn load_currencies(&self) -> anyhow::Result<AHashMap<Ustr, Currency>> {
         let pool = self.pool.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         tokio::spawn(async move {
@@ -276,7 +310,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
                 }
                 Err(e) => {
                     log::error!("Failed to load currencies: {e:?}");
-                    if let Err(e) = tx.send(HashMap::new()) {
+                    if let Err(e) = tx.send(AHashMap::new()) {
                         log::error!("Failed to send empty currencies: {e:?}");
                     }
                 }
@@ -285,7 +319,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
         Ok(rx.recv()?)
     }
 
-    async fn load_instruments(&self) -> anyhow::Result<HashMap<InstrumentId, InstrumentAny>> {
+    async fn load_instruments(&self) -> anyhow::Result<AHashMap<InstrumentId, InstrumentAny>> {
         let pool = self.pool.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         tokio::spawn(async move {
@@ -302,7 +336,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
                 }
                 Err(e) => {
                     log::error!("Failed to load instruments: {e:?}");
-                    if let Err(e) = tx.send(HashMap::new()) {
+                    if let Err(e) = tx.send(AHashMap::new()) {
                         log::error!("Failed to send empty instruments: {e:?}");
                     }
                 }
@@ -311,11 +345,11 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
         Ok(rx.recv()?)
     }
 
-    async fn load_synthetics(&self) -> anyhow::Result<HashMap<InstrumentId, SyntheticInstrument>> {
+    async fn load_synthetics(&self) -> anyhow::Result<AHashMap<InstrumentId, SyntheticInstrument>> {
         todo!()
     }
 
-    async fn load_accounts(&self) -> anyhow::Result<HashMap<AccountId, AccountAny>> {
+    async fn load_accounts(&self) -> anyhow::Result<AHashMap<AccountId, AccountAny>> {
         let pool = self.pool.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         tokio::spawn(async move {
@@ -332,7 +366,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
                 }
                 Err(e) => {
                     log::error!("Failed to load accounts: {e:?}");
-                    if let Err(e) = tx.send(HashMap::new()) {
+                    if let Err(e) = tx.send(AHashMap::new()) {
                         log::error!("Failed to send empty accounts: {e:?}");
                     }
                 }
@@ -341,7 +375,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
         Ok(rx.recv()?)
     }
 
-    async fn load_orders(&self) -> anyhow::Result<HashMap<ClientOrderId, OrderAny>> {
+    async fn load_orders(&self) -> anyhow::Result<AHashMap<ClientOrderId, OrderAny>> {
         let pool = self.pool.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         tokio::spawn(async move {
@@ -358,7 +392,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
                 }
                 Err(e) => {
                     log::error!("Failed to load orders: {e:?}");
-                    if let Err(e) = tx.send(HashMap::new()) {
+                    if let Err(e) = tx.send(AHashMap::new()) {
                         log::error!("Failed to send empty orders: {e:?}");
                     }
                 }
@@ -367,15 +401,15 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
         Ok(rx.recv()?)
     }
 
-    async fn load_positions(&self) -> anyhow::Result<HashMap<PositionId, Position>> {
+    async fn load_positions(&self) -> anyhow::Result<AHashMap<PositionId, Position>> {
         todo!()
     }
 
-    fn load_index_order_position(&self) -> anyhow::Result<HashMap<ClientOrderId, Position>> {
+    fn load_index_order_position(&self) -> anyhow::Result<AHashMap<ClientOrderId, Position>> {
         todo!()
     }
 
-    fn load_index_order_client(&self) -> anyhow::Result<HashMap<ClientOrderId, ClientId>> {
+    fn load_index_order_client(&self) -> anyhow::Result<AHashMap<ClientOrderId, ClientId>> {
         let pool = self.pool.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         tokio::spawn(async move {
@@ -388,7 +422,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
                 }
                 Err(e) => {
                     log::error!("Failed to run query load_distinct_order_event_client_ids: {e:?}");
-                    if let Err(e) = tx.send(HashMap::new()) {
+                    if let Err(e) = tx.send(AHashMap::new()) {
                         log::error!("Failed to send empty load_index_order_client result: {e:?}");
                     }
                 }
@@ -504,7 +538,7 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
         todo!()
     }
 
-    fn load_actor(&self, component_id: &ComponentId) -> anyhow::Result<HashMap<String, Bytes>> {
+    fn load_actor(&self, component_id: &ComponentId) -> anyhow::Result<AHashMap<String, Bytes>> {
         todo!()
     }
 
@@ -512,12 +546,28 @@ impl CacheDatabaseAdapter for PostgresCacheDatabase {
         todo!()
     }
 
-    fn load_strategy(&self, strategy_id: &StrategyId) -> anyhow::Result<HashMap<String, Bytes>> {
+    fn load_strategy(&self, strategy_id: &StrategyId) -> anyhow::Result<AHashMap<String, Bytes>> {
         todo!()
     }
 
     fn delete_strategy(&self, component_id: &StrategyId) -> anyhow::Result<()> {
         todo!()
+    }
+
+    fn delete_order(&self, client_order_id: &ClientOrderId) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "delete_order not implemented for PostgreSQL cache adapter: {client_order_id}"
+        )
+    }
+
+    fn delete_position(&self, position_id: &PositionId) -> anyhow::Result<()> {
+        anyhow::bail!("delete_position not implemented for PostgreSQL cache adapter: {position_id}")
+    }
+
+    fn delete_account_event(&self, account_id: &AccountId, event_id: &str) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "delete_account_event not implemented for PostgreSQL cache adapter: {account_id}, {event_id}"
+        )
     }
 
     fn add(&self, key: String, value: Bytes) -> anyhow::Result<()> {

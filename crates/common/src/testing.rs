@@ -48,7 +48,7 @@ pub fn init_logger_for_testing(stdout_level: Option<log::LevelFilter>) -> anyhow
 ///
 /// # Panics
 ///
-/// This function will panic if the timeout duration is exceeded without the condition being met.
+/// This function panics if the timeout duration is exceeded without the condition being met.
 ///
 /// # Examples
 ///
@@ -91,6 +91,9 @@ where
     }
 }
 
+/// # Panics
+///
+/// Panics if the timeout duration is exceeded without the condition being met.
 pub async fn wait_until_async<F, Fut>(mut condition: F, timeout: Duration)
 where
     F: FnMut() -> Fut,

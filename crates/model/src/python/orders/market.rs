@@ -16,10 +16,17 @@
 use indexmap::IndexMap;
 use nautilus_core::{
     UUID4,
-    python::{IntoPyObjectNautilusExt, to_pyruntime_err, to_pyvalue_err},
+    python::{
+        IntoPyObjectNautilusExt,
+        parsing::{
+            get_optional, get_optional_parsed, get_required, get_required_parsed,
+            get_required_string,
+        },
+        to_pyruntime_err, to_pyvalue_err,
+    },
 };
 use pyo3::{
-    Bound, Py, PyAny, PyObject, PyResult, Python,
+    Bound, Py, PyAny, PyResult, Python,
     basic::CompareOp,
     pymethods,
     types::{PyAnyMethods, PyDict, PyList},
@@ -67,7 +74,6 @@ impl MarketOrder {
         exec_spawn_id: Option<ClientOrderId>,
         tags: Option<Vec<String>>,
     ) -> PyResult<Self> {
-        let exec_algorithm_params = exec_algorithm_params.map(str_indexmap_to_ustr);
         Self::new_checked(
             trader_id,
             strategy_id,
@@ -85,7 +91,7 @@ impl MarketOrder {
             linked_order_ids,
             parent_order_id,
             exec_algorithm_id,
-            exec_algorithm_params,
+            exec_algorithm_params.map(str_indexmap_to_ustr),
             exec_spawn_id,
             tags.map(|vec| vec.into_iter().map(|s| Ustr::from(s.as_str())).collect()),
         )
@@ -111,7 +117,7 @@ impl MarketOrder {
     #[staticmethod]
     #[pyo3(name = "create")]
     fn py_create(init: OrderInitialized) -> PyResult<Self> {
-        Ok(MarketOrder::from(init))
+        Ok(Self::from(init))
     }
 
     #[staticmethod]
@@ -280,7 +286,7 @@ impl MarketOrder {
 
     #[getter]
     #[pyo3(name = "events")]
-    fn py_events(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+    fn py_events(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         self.events()
             .into_iter()
             .map(|event| order_event_to_pyobject(py, event.clone()))
@@ -298,7 +304,7 @@ impl MarketOrder {
     }
 
     #[pyo3(name = "apply")]
-    fn py_apply(&mut self, event: PyObject, py: Python<'_>) -> PyResult<()> {
+    fn py_apply(&mut self, event: Py<PyAny>, py: Python<'_>) -> PyResult<()> {
         let event_any = pyobject_to_order_event(py, event).unwrap();
         self.apply(event_any).map(|_| ()).map_err(to_pyruntime_err)
     }
@@ -306,86 +312,51 @@ impl MarketOrder {
     #[staticmethod]
     #[pyo3(name = "from_dict")]
     fn py_from_dict(values: &Bound<'_, PyDict>) -> PyResult<Self> {
-        let dict = values.as_ref();
-        let trader_id = TraderId::from(dict.get_item("trader_id")?.extract::<&str>()?);
-        let strategy_id = StrategyId::from(dict.get_item("strategy_id")?.extract::<&str>()?);
-        let instrument_id = InstrumentId::from(dict.get_item("instrument_id")?.extract::<&str>()?);
+        let trader_id = TraderId::from(get_required_string(values, "trader_id")?.as_str());
+        let strategy_id = StrategyId::from(get_required_string(values, "strategy_id")?.as_str());
+        let instrument_id =
+            InstrumentId::from(get_required_string(values, "instrument_id")?.as_str());
         let client_order_id =
-            ClientOrderId::from(dict.get_item("client_order_id")?.extract::<&str>()?);
-        let order_side = dict
-            .get_item("side")?
-            .extract::<&str>()?
-            .parse::<OrderSide>()
-            .unwrap();
-        let quantity = Quantity::from(dict.get_item("quantity")?.extract::<&str>()?);
-        let time_in_force = dict
-            .get_item("time_in_force")?
-            .extract::<&str>()?
-            .parse::<TimeInForce>()
-            .unwrap();
-        let init_id = dict
-            .get_item("init_id")
-            .map(|x| x.extract::<&str>().unwrap().parse::<UUID4>().ok())?
-            .unwrap();
-        let ts_init = dict.get_item("ts_init")?.extract::<u64>()?;
-        let is_reduce_only = dict.get_item("is_reduce_only")?.extract::<bool>()?;
-        let is_quote_quantity = dict.get_item("is_quote_quantity")?.extract::<bool>()?;
-        let contingency_type = dict
-            .get_item("contingency_type")
-            .map(|x| x.extract::<&str>().unwrap().parse::<ContingencyType>().ok())?;
-        let order_list_id = dict.get_item("order_list_id").map(|x| {
-            let extracted_str = x.extract::<&str>();
-            match extracted_str {
-                Ok(item) => Some(OrderListId::from(item)),
-                Err(_) => None,
-            }
+            ClientOrderId::from(get_required_string(values, "client_order_id")?.as_str());
+        let order_side = get_required_parsed(values, "side", |s| {
+            s.parse::<OrderSide>().map_err(|e| e.to_string())
         })?;
-        let linked_order_ids = dict.get_item("linked_order_ids").map(|x| {
-            let extracted_str = x.extract::<Vec<String>>();
-            match extracted_str {
-                Ok(item) => Some(
-                    item.iter()
-                        .map(|x| ClientOrderId::from(x.as_str()))
-                        .collect(),
-                ),
-                Err(_) => None,
-            }
+        let quantity = Quantity::from(get_required_string(values, "quantity")?.as_str());
+        let time_in_force = get_required_parsed(values, "time_in_force", |s| {
+            s.parse::<TimeInForce>().map_err(|e| e.to_string())
         })?;
-        let parent_order_id = dict.get_item("parent_order_id").map(|x| {
-            let extracted_str = x.extract::<&str>();
-            match extracted_str {
-                Ok(item) => Some(ClientOrderId::from(item)),
-                Err(_) => None,
-            }
+        let init_id = get_required_parsed(values, "init_id", |s| {
+            s.parse::<UUID4>().map_err(|e| e.to_string())
         })?;
-        let exec_algorithm_id = dict.get_item("exec_algorithm_id").map(|x| {
-            let extracted_str = x.extract::<&str>();
-            match extracted_str {
-                Ok(item) => Some(ExecAlgorithmId::from(item)),
-                Err(_) => None,
-            }
+        let ts_init = get_required::<u64>(values, "ts_init")?;
+        let is_reduce_only = get_required::<bool>(values, "is_reduce_only")?;
+        let is_quote_quantity = get_required::<bool>(values, "is_quote_quantity")?;
+        let contingency_type = get_optional_parsed(values, "contingency_type", |s| {
+            s.parse::<ContingencyType>().map_err(|e| e.to_string())
         })?;
-        let exec_algorithm_params = dict.get_item("exec_algorithm_params").map(|x| {
-            let extracted_str = x.extract::<IndexMap<String, String>>();
-            match extracted_str {
-                Ok(item) => Some(str_indexmap_to_ustr(item)),
-                Err(_) => None,
-            }
+        let order_list_id = get_optional_parsed(values, "order_list_id", |s| {
+            Ok(OrderListId::from(s.as_str()))
         })?;
-        let exec_spawn_id = dict.get_item("exec_spawn_id").map(|x| {
-            let extracted_str = x.extract::<&str>();
-            match extracted_str {
-                Ok(item) => Some(ClientOrderId::from(item)),
-                Err(_) => None,
-            }
+        let linked_order_ids =
+            get_optional::<Vec<String>>(values, "linked_order_ids")?.map(|vec| {
+                vec.iter()
+                    .map(|s| ClientOrderId::from(s.as_str()))
+                    .collect()
+            });
+        let parent_order_id = get_optional_parsed(values, "parent_order_id", |s| {
+            Ok(ClientOrderId::from(s.as_str()))
         })?;
-        let tags = dict.get_item("tags").map(|x| {
-            let extracted_str = x.extract::<Vec<String>>();
-            match extracted_str {
-                Ok(item) => Some(item.iter().map(|s| Ustr::from(s)).collect()),
-                Err(_) => None,
-            }
+        let exec_algorithm_id = get_optional_parsed(values, "exec_algorithm_id", |s| {
+            Ok(ExecAlgorithmId::from(s.as_str()))
         })?;
+        let exec_algorithm_params =
+            get_optional::<IndexMap<String, String>>(values, "exec_algorithm_params")?
+                .map(str_indexmap_to_ustr);
+        let exec_spawn_id = get_optional_parsed(values, "exec_spawn_id", |s| {
+            Ok(ClientOrderId::from(s.as_str()))
+        })?;
+        let tags = get_optional::<Vec<String>>(values, "tags")?
+            .map(|vec| vec.iter().map(|s| Ustr::from(s)).collect());
         Self::new_checked(
             trader_id,
             strategy_id,
@@ -411,7 +382,7 @@ impl MarketOrder {
     }
 
     #[pyo3(name = "to_dict")]
-    fn py_to_dict(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn py_to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);
         dict.set_item("trader_id", self.trader_id.to_string())?;
         dict.set_item("strategy_id", self.strategy_id.to_string())?;
@@ -451,13 +422,9 @@ impl MarketOrder {
         self.linked_order_ids.clone().map_or_else(
             || dict.set_item("linked_order_ids", py.None()),
             |linked_order_ids| {
-                let linked_order_ids_list = PyList::new(
-                    py,
-                    linked_order_ids
-                        .iter()
-                        .map(std::string::ToString::to_string),
-                )
-                .expect("Invalid `ExactSizeIterator`");
+                let linked_order_ids_list =
+                    PyList::new(py, linked_order_ids.iter().map(ToString::to_string))
+                        .expect("Invalid `ExactSizeIterator`");
                 dict.set_item("linked_order_ids", linked_order_ids_list)
             },
         )?;

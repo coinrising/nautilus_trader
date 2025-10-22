@@ -13,10 +13,25 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
+//! Live system node for [NautilusTrader](http://nautilustrader.io).
+//!
+//! The `nautilus-live` crate provides high-level abstractions and infrastructure for running live trading
+//! systems, including data streaming, execution management, and system lifecycle handling.
+//! It builds on top of the system kernel to provide simplified interfaces for live deployment:
+//!
+//! - `LiveNode` High-level abstraction for live system nodes.
+//! - `LiveNodeConfig` Configuration for live node deployment.
+//! - `AsyncRunner` for managing system real-time data flow.
+//!
+//! # Platform
+//!
 //! [NautilusTrader](http://nautilustrader.io) is an open-source, high-performance, production-grade
 //! algorithmic trading platform, providing quantitative traders with the ability to backtest
 //! portfolios of automated trading strategies on historical data with an event-driven engine,
 //! and also deploy those same strategies live, with no code changes.
+//!
+//! NautilusTrader's design, architecture, and implementation philosophy prioritizes software correctness and safety at the
+//! highest level, with the aim of supporting mission-critical, trading system backtesting and live deployment workloads.
 //!
 //! # Feature flags
 //!
@@ -27,6 +42,23 @@
 //!
 //! - `ffi`: Enables the C foreign function interface (FFI) from [cbindgen](https://github.com/mozilla/cbindgen).
 //! - `python`: Enables Python bindings from [PyO3](https://pyo3.rs).
-//! - `high-precision`: Enables [high-precision mode](https://nautilustrader.io/docs/nightly/getting_started/installation#precision-mode) to use 128-bit value types.
+//! - `defi`: Enables DeFi (Decentralized Finance) support.
+//! - `extension-module`: Builds the crate as a Python extension module.
 
+#![warn(rustc::all)]
+#![deny(unsafe_code)]
+#![deny(nonstandard_style)]
+#![deny(missing_debug_implementations)]
+#![deny(clippy::missing_errors_doc)]
+#![deny(clippy::missing_panics_doc)]
+#![deny(rustdoc::broken_intra_doc_links)]
+
+pub mod config;
+pub mod data;
+pub mod execution;
+pub mod node;
+pub mod reconciliation;
 pub mod runner;
+
+#[cfg(feature = "python")]
+pub mod python;

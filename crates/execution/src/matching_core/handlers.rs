@@ -13,8 +13,7 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-use std::{cell::RefCell, rc::Rc};
-
+use nautilus_core::WeakCell;
 use nautilus_model::orders::OrderAny;
 
 use crate::{
@@ -25,76 +24,88 @@ pub trait FillMarketOrderHandler {
     fn fill_market_order(&mut self, order: &OrderAny);
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum FillMarketOrderHandlerAny {
-    OrderMatchingEngine(Rc<RefCell<OrderMatchingEngine>>),
-    OrderEmulator(Rc<RefCell<OrderEmulator>>),
+    OrderMatchingEngine(WeakCell<OrderMatchingEngine>),
+    OrderEmulator(WeakCell<OrderEmulator>),
 }
 
 impl FillMarketOrderHandler for FillMarketOrderHandlerAny {
     fn fill_market_order(&mut self, order: &OrderAny) {
         match self {
-            Self::OrderMatchingEngine(engine) => {
-                engine.borrow_mut().fill_market_order(&mut order.clone());
+            Self::OrderMatchingEngine(engine_weak) => {
+                if let Some(engine) = engine_weak.upgrade() {
+                    engine.borrow_mut().fill_market_order(&mut order.clone());
+                }
             }
-            Self::OrderEmulator(emulator) => {
-                emulator.borrow_mut().fill_market_order(&mut order.clone());
+            Self::OrderEmulator(emulator_weak) => {
+                if let Some(emulator) = emulator_weak.upgrade() {
+                    emulator.borrow_mut().fill_market_order(&mut order.clone());
+                }
             }
         }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ShareableFillMarketOrderHandler(pub FillMarketOrderHandlerAny);
 
 pub trait FillLimitOrderHandler {
     fn fill_limit_order(&mut self, order: &mut OrderAny);
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum FillLimitOrderHandlerAny {
-    OrderMatchingEngine(Rc<RefCell<OrderMatchingEngine>>),
-    OrderEmulator(Rc<RefCell<OrderEmulator>>),
+    OrderMatchingEngine(WeakCell<OrderMatchingEngine>),
+    OrderEmulator(WeakCell<OrderEmulator>),
 }
 
 impl FillLimitOrderHandler for FillLimitOrderHandlerAny {
     fn fill_limit_order(&mut self, order: &mut OrderAny) {
         match self {
-            Self::OrderMatchingEngine(engine) => {
-                engine.borrow_mut().fill_limit_order(order);
+            Self::OrderMatchingEngine(engine_weak) => {
+                if let Some(engine) = engine_weak.upgrade() {
+                    engine.borrow_mut().fill_limit_order(order);
+                }
             }
-            Self::OrderEmulator(emulator) => {
-                emulator.borrow_mut().fill_limit_order(order);
+            Self::OrderEmulator(emulator_weak) => {
+                if let Some(emulator) = emulator_weak.upgrade() {
+                    emulator.borrow_mut().fill_limit_order(order);
+                }
             }
         }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ShareableFillLimitOrderHandler(pub FillLimitOrderHandlerAny);
 
 pub trait TriggerStopOrderHandler {
     fn trigger_stop_order(&mut self, order: &mut OrderAny);
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum TriggerStopOrderHandlerAny {
-    OrderMatchingEngine(Rc<RefCell<OrderMatchingEngine>>),
-    OrderEmulator(Rc<RefCell<OrderEmulator>>),
+    OrderMatchingEngine(WeakCell<OrderMatchingEngine>),
+    OrderEmulator(WeakCell<OrderEmulator>),
 }
 
 impl TriggerStopOrderHandler for TriggerStopOrderHandlerAny {
     fn trigger_stop_order(&mut self, order: &mut OrderAny) {
         match self {
-            Self::OrderMatchingEngine(engine) => {
-                engine.borrow_mut().trigger_stop_order(order);
+            Self::OrderMatchingEngine(engine_weak) => {
+                if let Some(engine) = engine_weak.upgrade() {
+                    engine.borrow_mut().trigger_stop_order(order);
+                }
             }
-            Self::OrderEmulator(emulator) => {
-                emulator.borrow_mut().trigger_stop_order(order);
+            Self::OrderEmulator(emulator_weak) => {
+                if let Some(emulator) = emulator_weak.upgrade() {
+                    emulator.borrow_mut().trigger_stop_order(order);
+                }
             }
         }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ShareableTriggerStopOrderHandler(pub TriggerStopOrderHandlerAny);

@@ -79,6 +79,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.mark.xdist_group(name="redis_integration")
 class TestCacheDatabaseAdapter:
     def setup(self) -> None:
         # Fixture Setup
@@ -589,7 +590,7 @@ class TestCacheDatabaseAdapter:
         assert result == {_AUDUSD_SIM.id: _AUDUSD_SIM}
 
     @pytest.mark.asyncio
-    async def test_load_synthetic_when_no_synethic_instrument_in_database_returns_none(self):
+    async def test_load_synthetic_when_no_synthetic_instrument_in_database_returns_none(self):
         # Arrange
         synthetic = TestInstrumentProvider.synthetic_instrument()
 
@@ -1055,6 +1056,7 @@ class TestCacheDatabaseAdapter:
         assert result == {}
 
 
+@pytest.mark.xdist_group(name="redis_integration")
 class TestRedisCacheDatabaseIntegrity:
     def setup(self):
         # Fixture Setup

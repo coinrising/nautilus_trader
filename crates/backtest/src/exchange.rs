@@ -22,10 +22,11 @@
 use std::{
     cell::RefCell,
     collections::{BinaryHeap, HashMap, VecDeque},
+    fmt::Debug,
     rc::Rc,
 };
 
-use nautilus_common::{cache::Cache, clock::Clock};
+use nautilus_common::{cache::Cache, clock::Clock, messages::execution::TradingCommand};
 use nautilus_core::{
     UnixNanos,
     correctness::{FAILED, check_equal},
@@ -33,7 +34,6 @@ use nautilus_core::{
 use nautilus_execution::{
     client::ExecutionClient,
     matching_engine::{config::OrderMatchingEngineConfig, engine::OrderMatchingEngine},
-    messages::TradingCommand,
     models::{fee::FeeModelAny, fill::FillModel, latency::LatencyModel},
 };
 use nautilus_model::{
@@ -49,7 +49,7 @@ use nautilus_model::{
     orders::PassiveOrderAny,
     types::{AccountBalance, Currency, Money, Price},
 };
-use rust_decimal::{Decimal, prelude::ToPrimitive};
+use rust_decimal::Decimal;
 
 use crate::modules::SimulationModule;
 
@@ -89,6 +89,21 @@ impl PartialOrd for InflightCommand {
     }
 }
 
+/// Simulated exchange venue for realistic trading execution during backtesting.
+///
+/// The `SimulatedExchange` provides a comprehensive simulation of a trading venue,
+/// including order matching engines, account management, and realistic execution
+/// models. It maintains order books, processes market data, and executes trades
+/// with configurable latency and fill models to accurately simulate real market
+/// conditions during backtesting.
+///
+/// Key features:
+/// - Multi-instrument order matching with realistic execution
+/// - Configurable fee, fill, and latency models
+/// - Support for various order types and execution options
+/// - Account balance and position management
+/// - Market data processing and order book maintenance
+/// - Simulation modules for custom venue behaviors
 pub struct SimulatedExchange {
     pub id: Venue,
     pub oms_type: OmsType,
@@ -110,7 +125,6 @@ pub struct SimulatedExchange {
     message_queue: VecDeque<TradingCommand>,
     inflight_queue: BinaryHeap<InflightCommand>,
     inflight_counter: HashMap<UnixNanos, u32>,
-    frozen_account: bool,
     bar_execution: bool,
     reject_stop_orders: bool,
     support_gtd_orders: bool,
@@ -119,10 +133,27 @@ pub struct SimulatedExchange {
     use_random_ids: bool,
     use_reduce_only: bool,
     use_message_queue: bool,
+    allow_cash_borrowing: bool,
+    frozen_account: bool,
+}
+
+impl Debug for SimulatedExchange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(stringify!(SimulatedExchange))
+            .field("id", &self.id)
+            .field("account_type", &self.account_type)
+            .finish()
+    }
 }
 
 impl SimulatedExchange {
     /// Creates a new [`SimulatedExchange`] instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `starting_balances` is empty.
+    /// - `base_currency` is `Some` but `starting_balances` contains multiple currencies.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         venue: Venue,
@@ -139,7 +170,6 @@ impl SimulatedExchange {
         fee_model: FeeModelAny,
         book_type: BookType,
         latency_model: Option<LatencyModel>,
-        frozen_account: Option<bool>,
         bar_execution: Option<bool>,
         reject_stop_orders: Option<bool>,
         support_gtd_orders: Option<bool>,
@@ -148,6 +178,8 @@ impl SimulatedExchange {
         use_random_ids: Option<bool>,
         use_reduce_only: Option<bool>,
         use_message_queue: Option<bool>,
+        allow_cash_borrowing: Option<bool>,
+        frozen_account: Option<bool>,
     ) -> anyhow::Result<Self> {
         if starting_balances.is_empty() {
             anyhow::bail!("Starting balances must be provided")
@@ -177,7 +209,6 @@ impl SimulatedExchange {
             message_queue: VecDeque::new(),
             inflight_queue: BinaryHeap::new(),
             inflight_counter: HashMap::new(),
-            frozen_account: frozen_account.unwrap_or(false),
             bar_execution: bar_execution.unwrap_or(true),
             reject_stop_orders: reject_stop_orders.unwrap_or(true),
             support_gtd_orders: support_gtd_orders.unwrap_or(true),
@@ -186,6 +217,8 @@ impl SimulatedExchange {
             use_random_ids: use_random_ids.unwrap_or(false),
             use_reduce_only: use_reduce_only.unwrap_or(true),
             use_message_queue: use_message_queue.unwrap_or(true),
+            allow_cash_borrowing: allow_cash_borrowing.unwrap_or(false),
+            frozen_account: frozen_account.unwrap_or(false),
         })
     }
 
@@ -213,6 +246,15 @@ impl SimulatedExchange {
         self.generate_fresh_account_state();
     }
 
+    /// Adds an instrument to the simulated exchange and initializes its matching engine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the exchange account type is `Cash` and the instrument is a `CryptoPerpetual` or `CryptoFuture`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instrument cannot be added to the exchange.
     pub fn add_instrument(&mut self, instrument: InstrumentAny) -> anyhow::Result<()> {
         check_equal(
             &instrument.id().venue,
@@ -349,6 +391,9 @@ impl SimulatedExchange {
             })
     }
 
+    /// # Panics
+    ///
+    /// Panics if retrieving the account from the execution client fails.
     #[must_use]
     pub fn get_account(&self) -> Option<AccountAny> {
         self.exec_client
@@ -356,6 +401,9 @@ impl SimulatedExchange {
             .map(|client| client.get_account().unwrap())
     }
 
+    /// # Panics
+    ///
+    /// Panics if generating account state fails during adjustment.
     pub fn adjust_account(&mut self, adjustment: Money) {
         if self.frozen_account {
             // Nothing to adjust
@@ -413,6 +461,9 @@ impl SimulatedExchange {
         }
     }
 
+    /// # Panics
+    ///
+    /// Panics if the command is invalid when generating inflight command.
     pub fn generate_inflight_command(&mut self, command: &TradingCommand) -> (UnixNanos, u32) {
         if let Some(latency_model) = &self.latency_model {
             let ts = match command {
@@ -427,7 +478,7 @@ impl SimulatedExchange {
                 | TradingCommand::BatchCancelOrders(_) => {
                     command.ts_init() + latency_model.delete_latency_nanos
                 }
-                _ => panic!("Invalid command was {command}"),
+                _ => panic!("Cannot handle command: {command:?}"),
             };
 
             let counter = self
@@ -442,6 +493,9 @@ impl SimulatedExchange {
         }
     }
 
+    /// # Panics
+    ///
+    /// Panics if adding a missing instrument during delta processing fails.
     pub fn process_order_book_delta(&mut self, delta: OrderBookDelta) {
         for module in &self.modules {
             module.pre_process(Data::Delta(delta));
@@ -464,12 +518,15 @@ impl SimulatedExchange {
         }
 
         if let Some(matching_engine) = self.matching_engines.get_mut(&delta.instrument_id) {
-            matching_engine.process_order_book_delta(&delta);
+            matching_engine.process_order_book_delta(&delta).unwrap();
         } else {
             panic!("Matching engine should be initialized");
         }
     }
 
+    /// # Panics
+    ///
+    /// Panics if adding a missing instrument during deltas processing fails.
     pub fn process_order_book_deltas(&mut self, deltas: OrderBookDeltas) {
         for module in &self.modules {
             module.pre_process(Data::Deltas(OrderBookDeltas_API::new(deltas.clone())));
@@ -492,12 +549,15 @@ impl SimulatedExchange {
         }
 
         if let Some(matching_engine) = self.matching_engines.get_mut(&deltas.instrument_id) {
-            matching_engine.process_order_book_deltas(&deltas);
+            matching_engine.process_order_book_deltas(&deltas).unwrap();
         } else {
             panic!("Matching engine should be initialized");
         }
     }
 
+    /// # Panics
+    ///
+    /// Panics if adding a missing instrument during quote tick processing fails.
     pub fn process_quote_tick(&mut self, quote: &QuoteTick) {
         for module in &self.modules {
             module.pre_process(Data::Quote(quote.to_owned()));
@@ -526,6 +586,9 @@ impl SimulatedExchange {
         }
     }
 
+    /// # Panics
+    ///
+    /// Panics if adding a missing instrument during trade tick processing fails.
     pub fn process_trade_tick(&mut self, trade: &TradeTick) {
         for module in &self.modules {
             module.pre_process(Data::Trade(trade.to_owned()));
@@ -554,6 +617,9 @@ impl SimulatedExchange {
         }
     }
 
+    /// # Panics
+    ///
+    /// Panics if adding a missing instrument during bar processing fails.
     pub fn process_bar(&mut self, bar: Bar) {
         for module in &self.modules {
             module.pre_process(Data::Bar(bar));
@@ -582,6 +648,9 @@ impl SimulatedExchange {
         }
     }
 
+    /// # Panics
+    ///
+    /// Panics if adding a missing instrument during instrument status processing fails.
     pub fn process_instrument_status(&mut self, status: InstrumentStatus) {
         // TODO add module preprocessing
 
@@ -608,6 +677,9 @@ impl SimulatedExchange {
         }
     }
 
+    /// # Panics
+    ///
+    /// Panics if popping an inflight command fails during processing.
     pub fn process(&mut self, ts_now: UnixNanos) {
         // TODO implement correct clock fixed time setting self.clock.set_time(ts_now);
 
@@ -643,6 +715,9 @@ impl SimulatedExchange {
         log::info!("Resetting exchange state");
     }
 
+    /// # Panics
+    ///
+    /// Panics if execution client is uninitialized when processing trading command.
     pub fn process_trading_command(&mut self, command: TradingCommand) {
         if let Some(matching_engine) = self.matching_engines.get_mut(&command.instrument_id()) {
             let account_id = if let Some(exec_client) = &self.exec_client {
@@ -674,10 +749,16 @@ impl SimulatedExchange {
                 _ => {}
             }
         } else {
-            panic!("Matching engine should be initialized");
+            panic!(
+                "Matching engine not found for instrument {}",
+                command.instrument_id()
+            );
         }
     }
 
+    /// # Panics
+    ///
+    /// Panics if generating fresh account state fails.
     pub fn generate_fresh_account_state(&self) {
         let balances: Vec<AccountBalance> = self
             .starting_balances
@@ -693,11 +774,11 @@ impl SimulatedExchange {
 
         // Set leverages
         if let Some(AccountAny::Margin(mut margin_account)) = self.get_account() {
-            margin_account.set_default_leverage(self.default_leverage.to_f64().unwrap());
+            margin_account.set_default_leverage(self.default_leverage);
 
             // Set instrument specific leverages
             for (instrument_id, leverage) in &self.leverages {
-                margin_account.set_leverage(*instrument_id, leverage.to_f64().unwrap());
+                margin_account.set_leverage(*instrument_id, *leverage);
             }
         }
     }
@@ -706,6 +787,7 @@ impl SimulatedExchange {
 ////////////////////////////////////////////////////////////////////////////////
 // Tests
 ////////////////////////////////////////////////////////////////////////////////
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -718,19 +800,17 @@ mod tests {
     use nautilus_common::{
         cache::Cache,
         clock::TestClock,
+        messages::execution::{SubmitOrder, TradingCommand},
         msgbus::{
             self,
             stubs::{get_message_saving_handler, get_saved_messages},
         },
     };
     use nautilus_core::{AtomicTime, UUID4, UnixNanos};
-    use nautilus_execution::{
-        messages::{SubmitOrder, TradingCommand},
-        models::{
-            fee::{FeeModelAny, MakerTakerFeeModel},
-            fill::FillModel,
-            latency::LatencyModel,
-        },
+    use nautilus_execution::models::{
+        fee::{FeeModelAny, MakerTakerFeeModel},
+        fill::FillModel,
+        latency::LatencyModel,
     };
     use nautilus_model::{
         accounts::{AccountAny, MarginAccount},
@@ -752,7 +832,6 @@ mod tests {
         types::{AccountBalance, Currency, Money, Price, Quantity},
     };
     use rstest::rstest;
-    use ustr::Ustr;
 
     use crate::{
         exchange::{InflightCommand, SimulatedExchange},
@@ -795,6 +874,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .unwrap(),
         ));
@@ -804,7 +884,7 @@ mod tests {
             TraderId::default(),
             AccountId::default(),
             exchange.clone(),
-            cache.clone(),
+            cache,
             Rc::new(RefCell::new(clock)),
             None,
             None,
@@ -842,7 +922,7 @@ mod tests {
 
     #[rstest]
     #[should_panic(
-        expected = r#"Condition failed: 'Venue of instrument id' value of BINANCE was not equal to 'Venue of simulated exchange' value of SIM"#
+        expected = "Condition failed: 'Venue of instrument id' value of BINANCE was not equal to 'Venue of simulated exchange' value of SIM"
     )]
     fn test_venue_mismatch_between_exchange_and_instrument(
         crypto_perpetual_ethusdt: CryptoPerpetual,
@@ -1202,7 +1282,7 @@ mod tests {
         let account_type = AccountType::Margin;
         let mut cache = Cache::default();
         let handler = get_message_saving_handler::<AccountState>(None);
-        msgbus::register(Ustr::from("Portfolio.update_account"), handler.clone());
+        msgbus::register("Portfolio.update_account".into(), handler.clone());
         let margin_account = MarginAccount::new(
             AccountState::new(
                 AccountId::from("SIM-001"),
@@ -1354,7 +1434,7 @@ mod tests {
         assert_eq!(exchange.borrow().inflight_queue.len(), 2);
         // First inflight command should have timestamp at 100 and 200 insert latency
         assert_eq!(
-            exchange.borrow().inflight_queue.iter().nth(0).unwrap().ts,
+            exchange.borrow().inflight_queue.iter().next().unwrap().ts,
             UnixNanos::from(300)
         );
         // Second inflight command should have timestamp at 150 and 200 insert latency
@@ -1368,7 +1448,7 @@ mod tests {
         assert_eq!(exchange.borrow().message_queue.len(), 0);
         assert_eq!(exchange.borrow().inflight_queue.len(), 1);
         assert_eq!(
-            exchange.borrow().inflight_queue.iter().nth(0).unwrap().ts,
+            exchange.borrow().inflight_queue.iter().next().unwrap().ts,
             UnixNanos::from(350)
         );
     }

@@ -14,13 +14,19 @@
 # -------------------------------------------------------------------------------------------------
 
 import asyncio
+import os
+from collections.abc import Awaitable
+from collections.abc import Callable
 from decimal import Decimal
 
 from nautilus_trader.adapters.binance.common.constants import BINANCE_MAX_CALLBACK_RATE
 from nautilus_trader.adapters.binance.common.constants import BINANCE_MIN_CALLBACK_RATE
-from nautilus_trader.adapters.binance.common.constants import BINANCE_VENUE
+from nautilus_trader.adapters.binance.common.constants import BINANCE_PRICE_MATCH_ORDER_TYPES
+from nautilus_trader.adapters.binance.common.constants import BINANCE_PRICE_MATCH_VALUES
+from nautilus_trader.adapters.binance.common.constants import BINANCE_RETRY_WARNINGS
 from nautilus_trader.adapters.binance.common.enums import BinanceAccountType
 from nautilus_trader.adapters.binance.common.enums import BinanceEnumParser
+from nautilus_trader.adapters.binance.common.enums import BinanceErrorCode
 from nautilus_trader.adapters.binance.common.enums import BinanceFuturesPositionSide
 from nautilus_trader.adapters.binance.common.enums import BinanceTimeInForce
 from nautilus_trader.adapters.binance.common.schemas.account import BinanceOrder
@@ -32,6 +38,7 @@ from nautilus_trader.adapters.binance.http.account import BinanceAccountHttpAPI
 from nautilus_trader.adapters.binance.http.client import BinanceHttpClient
 from nautilus_trader.adapters.binance.http.error import BinanceClientError
 from nautilus_trader.adapters.binance.http.error import BinanceError
+from nautilus_trader.adapters.binance.http.error import get_binance_error_code
 from nautilus_trader.adapters.binance.http.error import should_retry
 from nautilus_trader.adapters.binance.http.market import BinanceMarketHttpAPI
 from nautilus_trader.adapters.binance.http.user import BinanceUserDataHttpAPI
@@ -53,6 +60,7 @@ from nautilus_trader.execution.messages import GenerateOrderStatusReport
 from nautilus_trader.execution.messages import GenerateOrderStatusReports
 from nautilus_trader.execution.messages import GeneratePositionStatusReports
 from nautilus_trader.execution.messages import ModifyOrder
+from nautilus_trader.execution.messages import QueryAccount
 from nautilus_trader.execution.messages import SubmitOrder
 from nautilus_trader.execution.messages import SubmitOrderList
 from nautilus_trader.execution.reports import FillReport
@@ -62,10 +70,8 @@ from nautilus_trader.live.execution_client import LiveExecutionClient
 from nautilus_trader.live.retry import RetryManagerPool
 from nautilus_trader.model.enums import AccountType
 from nautilus_trader.model.enums import OmsType
-from nautilus_trader.model.enums import OrderSide
 from nautilus_trader.model.enums import OrderType
 from nautilus_trader.model.enums import PositionSide
-from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.enums import TrailingOffsetType
 from nautilus_trader.model.enums import TriggerType
 from nautilus_trader.model.enums import trailing_offset_type_to_str
@@ -148,8 +154,8 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
     ) -> None:
         super().__init__(
             loop=loop,
-            client_id=ClientId(name or BINANCE_VENUE.value),
-            venue=BINANCE_VENUE,
+            client_id=ClientId(name or config.venue.value),
+            venue=config.venue,
             oms_type=OmsType.HEDGING if account_type.is_futures else OmsType.NETTING,
             instrument_provider=instrument_provider,
             account_type=AccountType.CASH if account_type.is_spot else AccountType.MARGIN,
@@ -165,20 +171,27 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
         self._use_reduce_only: bool = config.use_reduce_only
         self._use_position_ids: bool = config.use_position_ids
         self._treat_expired_as_canceled: bool = config.treat_expired_as_canceled
+        self._log_rejected_due_post_only_as_warning: bool = (
+            config.log_rejected_due_post_only_as_warning
+        )
         self._recv_window = config.recv_window_ms
+        self._max_retries = config.max_retries or 3
         self._log.info(f"Key type: {config.key_type.value}", LogColor.BLUE)
         self._log.info(f"Account type: {self._binance_account_type.value}", LogColor.BLUE)
         self._log.info(f"{config.use_gtd=}", LogColor.BLUE)
         self._log.info(f"{config.use_reduce_only=}", LogColor.BLUE)
         self._log.info(f"{config.use_position_ids=}", LogColor.BLUE)
         self._log.info(f"{config.treat_expired_as_canceled=}", LogColor.BLUE)
+        self._log.info(f"{config.recv_window_ms=}", LogColor.BLUE)
         self._log.info(f"{config.max_retries=}", LogColor.BLUE)
         self._log.info(f"{config.retry_delay_initial_ms=}", LogColor.BLUE)
         self._log.info(f"{config.retry_delay_max_ms=}", LogColor.BLUE)
+        self._log.info(f"{config.listen_key_ping_max_failures=}", LogColor.BLUE)
+        self._log.info(f"{config.log_rejected_due_post_only_as_warning=}", LogColor.BLUE)
 
         self._is_dual_side_position: bool | None = None  # Initialized on connection
         self._set_account_id(
-            AccountId(f"{name or BINANCE_VENUE.value}-{self._binance_account_type.value}-master"),
+            AccountId(f"{name or config.venue.value}-{self._binance_account_type.value}-master"),
         )
 
         # Enum parser
@@ -191,9 +204,12 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
         self._http_user = user
 
         # Listen keys
-        self._ping_listen_keys_interval: int = 60 * 5  # Once every 5 mins (hard-coded)
+        self._ping_listen_keys_interval: int = 60 * 5  # Once every 5 mins (hardcoded)
         self._ping_listen_keys_task: asyncio.Task | None = None
         self._listen_key: str | None = None
+        self._ping_consecutive_failures: int = 0
+        self._ping_max_failures: int = config.listen_key_ping_max_failures
+        self._last_successful_ping_ns: int = 0
 
         # WebSocket API
         self._ws_client = BinanceWebSocketClient(
@@ -205,7 +221,10 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
         )
 
         # Order submission method hashmap
-        self._submit_order_method = {
+        self._submit_order_method: dict[
+            OrderType,
+            Callable[[Order, BinanceFuturesPositionSide | None, str | None], Awaitable[None]],
+        ] = {
             OrderType.MARKET: self._submit_market_order,
             OrderType.LIMIT: self._submit_limit_order,
             OrderType.STOP_LIMIT: self._submit_stop_limit_order,
@@ -228,6 +247,7 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
             logger=self._log,
             exc_types=(BinanceError,),
             retry_check=should_retry,
+            error_logger=self._log_retry_error,
         )
 
         self._log.info(f"Base url HTTP {self._http_client.base_url}", LogColor.BLUE)
@@ -261,32 +281,46 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
     def _stop(self) -> None:
         self._retry_manager_pool.shutdown()
 
+    def _log_retry_error(self, message: str, exception: BaseException | None) -> None:
+        error_code = get_binance_error_code(exception) if exception else None
+
+        match error_code:
+            case (
+                BinanceErrorCode.GTX_ORDER_REJECT
+            ) if not self._log_rejected_due_post_only_as_warning:
+                self._log.info(message)
+            case code if code in BINANCE_RETRY_WARNINGS:
+                self._log.warning(message)
+            case _:
+                self._log.error(message)
+
     async def _connect(self) -> None:
         try:
             await self._instrument_provider.initialize()
-
             await self._update_account_state()
+            await self._await_account_registered()
             await self._init_dual_side_position()
 
             response: BinanceListenKey = await self._http_user.create_listen_key()
+
+            # Check Binance-Nautilus clock sync
+            server_time: int = await self._http_market.request_server_time()
+            self._log.info(f"Binance server time {server_time} UNIX (ms)")
+
+            nautilus_time: int = self._clock.timestamp_ms()
+            self._log.info(f"Nautilus clock time {nautilus_time} UNIX (ms)")
+
+            # Set up WebSocket listen key
+            self._listen_key = response.listenKey
+            self._last_successful_ping_ns = self._clock.timestamp_ns()  # Initialize on connection
+            self._log.info(f"Listen key {self._listen_key}")
+            self._ping_listen_keys_task = self.create_task(self._ping_listen_keys())
+
+            # Connect WebSocket client
+            await self._ws_client.subscribe_listen_key(self._listen_key)
         except BinanceError as e:
             self._log.exception(f"Error on connect: {e.message}", e)
             return
-
-        # Check Binance-Nautilus clock sync
-        server_time: int = await self._http_market.request_server_time()
-        self._log.info(f"Binance server time {server_time} UNIX (ms)")
-
-        nautilus_time: int = self._clock.timestamp_ms()
-        self._log.info(f"Nautilus clock time {nautilus_time} UNIX (ms)")
-
-        # Set up WebSocket listen key
-        self._listen_key = response.listenKey
-        self._log.info(f"Listen key {self._listen_key}")
-        self._ping_listen_keys_task = self.create_task(self._ping_listen_keys())
-
-        # Connect WebSocket client
-        await self._ws_client.subscribe_listen_key(self._listen_key)
 
     async def _update_account_state(self) -> None:
         # Replace method in child class
@@ -304,15 +338,85 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
                     f"{self._ping_listen_keys_interval}s",
                 )
                 await asyncio.sleep(self._ping_listen_keys_interval)
-                if self._listen_key:
-                    self._log.debug(f"Pinging WebSocket listen key {self._listen_key}")
-                    try:
-                        await self._http_user.keepalive_listen_key(listen_key=self._listen_key)
-                    except BinanceClientError as e:
-                        # We may see this if an old listen key was used for the ping
-                        self._log.error(f"Error pinging listen key: {e}")
+
+                if not self._listen_key:
+                    self._log.warning("No listen key available for ping")
+                    continue
+
+                self._log.debug(f"Pinging WebSocket listen key {self._listen_key}")
+
+                try:
+                    await self._http_user.keepalive_listen_key(listen_key=self._listen_key)
+
+                    # Reset failure tracking on success
+                    self._ping_consecutive_failures = 0
+                    self._last_successful_ping_ns = self._clock.timestamp_ns()
+                    self._log.debug(f"Listen key ping successful: {self._listen_key}")
+
+                except (BinanceClientError, BinanceError) as e:
+                    self._ping_consecutive_failures += 1
+                    time_since_success_secs = (
+                        (self._clock.timestamp_ns() - self._last_successful_ping_ns) / 1_000_000_000
+                        if self._last_successful_ping_ns > 0
+                        else 0
+                    )
+
+                    self._log.error(
+                        f"Listen key ping failed (attempt {self._ping_consecutive_failures}/"
+                        f"{self._ping_max_failures}): {e}, "
+                        f"time since last success: {time_since_success_secs:.1f}s",
+                    )
+
+                    if self._ping_consecutive_failures >= self._ping_max_failures:
+                        self._log.error(
+                            f"Listen key ping failed {self._ping_max_failures} consecutive times; "
+                            "initiating WebSocket reconnection to prevent data loss",
+                        )
+                        await self._handle_listen_key_failure()
+                        self._ping_consecutive_failures = 0  # Reset after handling
         except asyncio.CancelledError:
             self._log.debug("Canceled task 'ping_listen_keys'")
+
+    async def _handle_listen_key_failure(self) -> None:
+        # Handle listen key authentication failure with full recovery.
+        #
+        # This method attempts to recover from listen key failures by:
+        # 1. Disconnecting the current WebSocket
+        # 2. Creating a new listen key
+        # 3. Reconnecting the WebSocket with the new key
+
+        try:
+            self._log.warning("Starting listen key recovery process")
+
+            # Disconnect current WebSocket
+            await self._ws_client.disconnect()
+            self._log.debug("Disconnected WebSocket for listen key recovery")
+
+            # Create new listen key
+            response: BinanceListenKey = await self._http_user.create_listen_key()
+            self._listen_key = response.listenKey
+            self._last_successful_ping_ns = self._clock.timestamp_ns()
+            self._log.info(f"Created new listen key for recovery: {self._listen_key}")
+
+            # Reconnect WebSocket with new key
+            await self._ws_client.subscribe_listen_key(self._listen_key)
+            self._log.info("WebSocket reconnected successfully with new listen key")
+
+        except Exception as e:
+            self._log.error(f"Failed to recover from listen key failure: {e}")
+
+            # Check if graceful shutdown is configured
+            if hasattr(self, "graceful_shutdown_on_exception"):
+                execution_engine = getattr(self, "_execution_engine", None)
+                if execution_engine and hasattr(execution_engine, "graceful_shutdown_on_exception"):
+                    if execution_engine.graceful_shutdown_on_exception:
+                        execution_engine.shutdown_system(f"Listen key recovery failed: {e}")
+                        return
+
+            self._log.error(
+                "Terminating process to prevent operation with invalid authentication",
+            )
+            os._exit(1)
 
     async def _disconnect(self) -> None:
         # Cancel tasks
@@ -325,7 +429,7 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
 
     # -- EXECUTION REPORTS ------------------------------------------------------------------------
 
-    async def generate_order_status_report(
+    async def generate_order_status_report(  # noqa: C901 (too complex)
         self,
         command: GenerateOrderStatusReport,
     ) -> OrderStatusReport | None:
@@ -335,12 +439,20 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
         )
 
         retries = self._generate_order_status_retries.get(command.client_order_id, 0)
-        if retries > 3:
+        if retries > self._max_retries:
             self._log.error(
-                f"Reached maximum retries 3/3 for generating OrderStatusReport for "
+                f"Reached maximum retries {self._max_retries}/{self._max_retries} for generating OrderStatusReport for "
                 f"{repr(command.client_order_id) if command.client_order_id else ''} "
                 f"{repr(command.venue_order_id) if command.venue_order_id else ''}",
             )
+
+            # Clean up retry counter after max retries exceeded
+            if (
+                command.client_order_id
+                and command.client_order_id in self._generate_order_status_retries
+            ):
+                del self._generate_order_status_retries[command.client_order_id]
+
             return None
 
         self._log.info(
@@ -367,30 +479,39 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
         except BinanceError as e:
             retries += 1
             self._log.error(
-                f"Cannot generate order status report for {command.client_order_id!r}: {e.message}. Retry {retries}/3",
+                f"Cannot generate order status report for {command.client_order_id!r}: {e.message}. Retry {retries}/{self._max_retries}",
             )
-            self._generate_order_status_retries[command.client_order_id] = retries
+
+            # Check for None before dictionary operations
             if not command.client_order_id:
                 self._log.warning("Cannot retry without a client order ID")
-            else:
-                order: Order | None = self._cache.order(command.client_order_id)
-                if order is None:
-                    self._log.warning("Order not found in cache")
-                    return None
-                elif order.is_closed:
-                    return None  # Nothing else to do
+                return None
 
-                if retries >= 3:
-                    # Order will no longer be considered in-flight once this event is applied.
-                    # We could pop the value out of the hashmap here, but better to leave it in
-                    # so that there are no longer subsequent retries (we don't expect many of these).
-                    self.generate_order_rejected(
-                        strategy_id=order.strategy_id,
-                        instrument_id=command.instrument_id,
-                        client_order_id=command.client_order_id,
-                        reason=str(e.message),
-                        ts_event=self._clock.timestamp_ns(),
-                    )
+            self._generate_order_status_retries[command.client_order_id] = retries
+
+            order: Order | None = self._cache.order(command.client_order_id)
+            if order is None:
+                self._log.warning("Order not found in cache")
+                return None
+            elif order.is_closed:
+                return None  # Nothing else to do
+
+            if retries >= self._max_retries:
+                if command.client_order_id in self._generate_order_status_retries:
+                    del self._generate_order_status_retries[command.client_order_id]
+
+                # Determine if the rejection was specifically due to a POST-ONLY order
+                # that would have executed immediately as a taker (GTX_ORDER_REJECT -5022).
+                due_post_only = _is_post_only_rejection(e)
+
+                self.generate_order_rejected(
+                    strategy_id=order.strategy_id,
+                    instrument_id=command.instrument_id,
+                    client_order_id=command.client_order_id,
+                    reason=str(e.message),
+                    ts_event=self._clock.timestamp_ns(),
+                    due_post_only=due_post_only,
+                )
             return None  # Error now handled
 
         if not binance_order or (binance_order.origQty and Decimal(binance_order.origQty) == 0):
@@ -409,6 +530,13 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
             treat_expired_as_canceled=self._treat_expired_as_canceled,
             ts_init=self._clock.timestamp_ns(),
         )
+
+        # Clean up retry counter on successful report generation
+        if (
+            command.client_order_id
+            and command.client_order_id in self._generate_order_status_retries
+        ):
+            del self._generate_order_status_retries[command.client_order_id]
 
         self._log.debug(f"Received {report}")
         return report
@@ -452,10 +580,13 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
             active_symbols = self._get_cache_active_symbols()
             active_symbols.update(await self._get_binance_active_position_symbols(symbol))
             binance_open_orders = await self._http_account.query_open_orders(symbol)
+
             for order in binance_open_orders:
                 active_symbols.add(order.symbol)
+
             # Get all orders for those active symbols
             binance_orders: list[BinanceOrder] = []
+
             if command.open_only:
                 binance_orders = binance_open_orders
             else:
@@ -489,7 +620,7 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
                 treat_expired_as_canceled=self._treat_expired_as_canceled,
                 ts_init=self._clock.timestamp_ns(),
             )
-            self._log.debug(f"Received {reports}")
+            self._log.debug(f"Received {report}")
             reports.append(report)
 
         len_reports = len(reports)
@@ -517,6 +648,7 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
             active_symbols = self._get_cache_active_symbols()
             active_symbols.update(await self._get_binance_active_position_symbols(symbol))
             binance_trades: list[BinanceUserTrade] = []
+
             for symbol in active_symbols:
                 response = await self._http_account.query_user_trades(
                     symbol=symbol,
@@ -595,14 +727,24 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
 
     # -- COMMAND HANDLERS -------------------------------------------------------------------------
 
-    def _check_order_validity(self, order: Order) -> None:
+    def _check_order_validity(self, order: Order) -> str | None:
         # Implement in child class
         raise NotImplementedError
 
     def _determine_time_in_force(self, order: Order) -> BinanceTimeInForce:
-        time_in_force = self._enum_parser.parse_internal_time_in_force(order.time_in_force)
-        if time_in_force == TimeInForce.GTD and not self._use_gtd:
-            time_in_force = TimeInForce.GTC
+        # Convert the internal TimeInForce enum to the Binance equivalent
+        time_in_force: BinanceTimeInForce = self._enum_parser.parse_internal_time_in_force(
+            order.time_in_force,
+        )
+
+        # When the client is configured *not* to make use of the native GTD
+        # (Good-Till-Date) support on Binance we transparently downgrade GTD to
+        # GTC. Comparison must be performed against the *Binance* enum; the
+        # previous implementation compared against the internal Nautilus enum
+        # which would always evaluate to ``False`` and therefore never apply
+        # the downgrade.
+        if time_in_force == BinanceTimeInForce.GTD and not self._use_gtd:
+            time_in_force = BinanceTimeInForce.GTC
             self._log.info(
                 f"Converted GTD `time_in_force` to GTC for {order.client_order_id}",
                 LogColor.BLUE,
@@ -640,6 +782,7 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
         # Position ID must end with either 'LONG', 'SHORT' or 'BOTH' for Binance Futures Hedge position mode
 
         position_side = None
+
         if self._binance_account_type.is_spot_or_margin:  # Spot or Margin mode
             return position_side
         elif not self._is_dual_side_position:  # One-way position mode
@@ -662,24 +805,39 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
         )
         return position_side
 
+    async def _query_account(self, _command: QueryAccount) -> None:
+        # Specific account ID (sub account) not yet supported
+        await self._update_account_state()
+
     async def _submit_order(self, command: SubmitOrder) -> None:
         position_side = self._get_position_side_from_position_id(
             position_id=command.position_id,
             exec_spawn_id=command.order.exec_spawn_id,
         )
-        await self._submit_order_inner(command.order, position_side)
+        await self._submit_order_inner(command.order, position_side, command.params)
 
     async def _submit_order_inner(
         self,
         order: Order,
         position_side: BinanceFuturesPositionSide | None,
+        params: dict[str, object] | None = None,
     ) -> None:
         if order.is_closed:
             self._log.warning(f"Cannot submit already closed order {order}")
             return
 
-        # Check validity
-        self._check_order_validity(order)
+        try:
+            price_match = self._extract_price_match(order, params)
+        except ValueError as ex:
+            self._deny_order_pre_submit(order, str(ex))
+            return
+
+        # Validate order before submission
+        validation_error = self._validate_order_pre_submit(order)
+        if validation_error:
+            self._deny_order_pre_submit(order, validation_error)
+            return
+
         self._log.debug(f"Submitting {order}, position_side={position_side}")
 
         # Generate event here to ensure correct ordering of events
@@ -698,28 +856,159 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
                 self._submit_order_method[order.order_type],
                 order,
                 position_side,
+                price_match,
             )
             if not retry_manager.result:
+                # Determine if the rejection was specifically due to a POST-ONLY order
+                # that would have executed immediately as a taker (GTX_ORDER_REJECT -5022).
+                e = retry_manager.last_exception
+                due_post_only = _is_post_only_rejection(e) if isinstance(e, BinanceError) else False
+
                 self.generate_order_rejected(
                     strategy_id=order.strategy_id,
                     instrument_id=order.instrument_id,
                     client_order_id=order.client_order_id,
                     reason=retry_manager.message,
                     ts_event=self._clock.timestamp_ns(),
+                    due_post_only=due_post_only,
                 )
         finally:
             await self._retry_manager_pool.release(retry_manager)
+
+    def _extract_price_match(
+        self,
+        order: Order,
+        params: dict[str, object] | None,
+    ) -> str | None:
+        if params is None:
+            return None
+
+        raw_value = params.get("price_match")
+        if raw_value is None:
+            return None
+
+        if not self._binance_account_type.is_futures:
+            raise ValueError(
+                "UNSUPPORTED: `price_match` is only supported for Binance futures accounts",
+            )
+
+        if not isinstance(raw_value, str):
+            raise ValueError(
+                "INVALID_ARG: `price_match` must be provided as a string value",
+            )
+
+        value = raw_value.upper()
+        if value not in BINANCE_PRICE_MATCH_VALUES:
+            raise ValueError(
+                "INVALID_ARG: `price_match` value "
+                f"{raw_value!r} is not one of {sorted(BINANCE_PRICE_MATCH_VALUES)}",
+            )
+
+        if order.is_post_only:
+            raise ValueError(
+                "UNSUPPORTED: `price_match` cannot be combined with post-only instructions on Binance",
+            )
+
+        display_qty = getattr(order, "display_qty", None)
+        if display_qty is not None:
+            raise ValueError(
+                "UNSUPPORTED: `price_match` cannot be combined with iceberg/display quantities on Binance",
+            )
+
+        if order.order_type not in BINANCE_PRICE_MATCH_ORDER_TYPES:
+            raise ValueError(
+                f"UNSUPPORTED: `price_match` is not supported for order type {order.type_string()} on Binance",
+            )
+
+        return value
+
+    def _deny_order_pre_submit(self, order: Order, reason: str) -> None:
+        self.generate_order_denied(
+            strategy_id=order.strategy_id,
+            instrument_id=order.instrument_id,
+            client_order_id=order.client_order_id,
+            reason=reason,
+            ts_event=self._clock.timestamp_ns(),
+        )
+
+    def _validate_order_pre_submit(self, order: Order) -> str | None:  # noqa: C901 (too complex)
+        # Check order type and time-in-force validity
+        validity_error = self._check_order_validity(order)
+        if validity_error:
+            return validity_error
+
+        # Market order validations
+        if isinstance(order, MarketOrder):
+            if order.is_quote_quantity and not self._binance_account_type.is_spot_or_margin:
+                return "UNSUPPORTED_QUOTE_QUANTITY"
+
+        # Stop limit order validations
+        elif isinstance(order, StopLimitOrder):
+            if not self._binance_account_type.is_spot_or_margin:
+                if order.trigger_type not in (
+                    TriggerType.DEFAULT,
+                    TriggerType.LAST_PRICE,
+                    TriggerType.MARK_PRICE,
+                ):
+                    return f"INVALID_TRIGGER_TYPE: {trigger_type_to_str(order.trigger_type)}"
+
+        # Stop market order validations
+        elif isinstance(order, StopMarketOrder):
+            if not self._binance_account_type.is_spot_or_margin:
+                if order.trigger_type not in (
+                    TriggerType.DEFAULT,
+                    TriggerType.LAST_PRICE,
+                    TriggerType.MARK_PRICE,
+                ):
+                    return f"INVALID_TRIGGER_TYPE: {trigger_type_to_str(order.trigger_type)}"
+
+        # Trailing stop market order validations
+        elif isinstance(order, TrailingStopMarketOrder):
+            if order.trigger_type not in (
+                TriggerType.DEFAULT,
+                TriggerType.LAST_PRICE,
+                TriggerType.MARK_PRICE,
+            ):
+                return f"INVALID_TRIGGER_TYPE: {trigger_type_to_str(order.trigger_type)}"
+
+            if order.trailing_offset_type != TrailingOffsetType.BASIS_POINTS:
+                return f"INVALID_TRAILING_OFFSET_TYPE: {trailing_offset_type_to_str(order.trailing_offset_type)}"
+
+            callback_rate = Decimal(order.trailing_offset) / Decimal("100")
+            callback_rate = callback_rate.quantize(Decimal("0.1"))
+
+            if (
+                callback_rate < BINANCE_MIN_CALLBACK_RATE
+                or callback_rate > BINANCE_MAX_CALLBACK_RATE
+            ):
+                return f"INVALID_TRAILING_OFFSET: {callback_rate}% not in range [{BINANCE_MIN_CALLBACK_RATE}, {BINANCE_MAX_CALLBACK_RATE}]"
+
+            if order.trigger_price is not None:
+                return "INVALID_TRIGGER_PRICE: use activation_price for trailing stop orders"
+
+        return None  # Valid
 
     async def _submit_market_order(
         self,
         order: MarketOrder,
         position_side: BinanceFuturesPositionSide | None,
+        price_match: str | None,
     ) -> None:
+        assert price_match is None  # type checking
+
+        if order.is_quote_quantity:
+            quantity = None
+            quote_order_qty = str(order.quantity)
+        else:
+            quantity = str(order.quantity)
+            quote_order_qty = None
+
         await self._http_account.new_order(
             symbol=order.instrument_id.symbol.value,
             side=self._enum_parser.parse_internal_order_side(order.side),
             order_type=self._enum_parser.parse_internal_order_type(order),
-            quantity=str(order.quantity),
+            quantity=quantity,
+            quote_order_qty=quote_order_qty,
             reduce_only=self._determine_reduce_only_str(order),
             new_client_order_id=order.client_order_id.value,
             recv_window=str(self._recv_window),
@@ -730,6 +1019,7 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
         self,
         order: LimitOrder,
         position_side: BinanceFuturesPositionSide | None,
+        price_match: str | None,
     ) -> None:
         time_in_force = self._determine_time_in_force(order)
         if order.is_post_only and self._binance_account_type.is_spot_or_margin:
@@ -744,18 +1034,20 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
             time_in_force=time_in_force,
             good_till_date=self._determine_good_till_date(order, time_in_force),
             quantity=str(order.quantity),
-            price=str(order.price),
+            price=None if price_match else str(order.price),
             iceberg_qty=str(order.display_qty) if order.display_qty is not None else None,
             reduce_only=self._determine_reduce_only_str(order),
             new_client_order_id=order.client_order_id.value,
             recv_window=str(self._recv_window),
             position_side=position_side,
+            price_match=price_match,
         )
 
     async def _submit_stop_limit_order(
         self,
         order: StopLimitOrder,
         position_side: BinanceFuturesPositionSide | None,
+        price_match: str | None,
     ) -> None:
         if self._binance_account_type.is_spot_or_margin:
             working_type = None
@@ -764,13 +1056,13 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
         elif order.trigger_type == TriggerType.MARK_PRICE:
             working_type = "MARK_PRICE"
         else:
-            self._log.error(
-                f"Cannot submit order: invalid `order.trigger_type`, was "
-                f"{trigger_type_to_str(order.trigger_price)}. {order}",
+            raise RuntimeError(
+                f"Unexpected trigger_type {trigger_type_to_str(order.trigger_type)} for StopLimitOrder - "
+                "should have been validated in _validate_order_pre_submit",
             )
-            return
 
         time_in_force = self._determine_time_in_force(order)
+
         await self._http_account.new_order(
             symbol=order.instrument_id.symbol.value,
             side=self._enum_parser.parse_internal_order_side(order.side),
@@ -778,7 +1070,7 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
             time_in_force=time_in_force,
             good_till_date=self._determine_good_till_date(order, time_in_force),
             quantity=str(order.quantity),
-            price=str(order.price),
+            price=None if price_match else str(order.price),
             stop_price=str(order.trigger_price),
             working_type=working_type,
             iceberg_qty=str(order.display_qty) if order.display_qty is not None else None,
@@ -786,6 +1078,7 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
             new_client_order_id=order.client_order_id.value,
             recv_window=str(self._recv_window),
             position_side=position_side,
+            price_match=price_match,
         )
 
     async def _submit_order_list(self, command: SubmitOrderList) -> None:
@@ -795,25 +1088,25 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
         )
 
         for order in command.order_list.orders:
-            self.generate_order_submitted(
-                strategy_id=order.strategy_id,
-                instrument_id=order.instrument_id,
-                client_order_id=order.client_order_id,
-                ts_event=self._clock.timestamp_ns(),
-            )
-
-        for order in command.order_list.orders:
-            if order.linked_order_ids:  # TODO: Implement
-                self._log.error(f"Cannot yet handle OCO conditional orders, {order}")
+            if order.linked_order_ids:
+                # Deny all orders in the list if any have linked orders (OCO not supported)
+                for list_order in command.order_list.orders:
+                    self._deny_order_pre_submit(
+                        list_order,
+                        "UNSUPPORTED_OCO_CONDITIONAL_ORDERS",
+                    )
                 return
 
-            await self._submit_order_inner(order, position_side)
+            await self._submit_order_inner(order, position_side, command.params)
 
     async def _submit_stop_market_order(
         self,
         order: StopMarketOrder,
         position_side: BinanceFuturesPositionSide | None,
+        price_match: str | None,
     ) -> None:
+        assert price_match is None  # type checking
+
         if self._binance_account_type.is_spot_or_margin:
             working_type = None
         elif order.trigger_type in (TriggerType.DEFAULT, TriggerType.LAST_PRICE):
@@ -821,13 +1114,13 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
         elif order.trigger_type == TriggerType.MARK_PRICE:
             working_type = "MARK_PRICE"
         else:
-            self._log.error(
-                f"Cannot submit order: invalid `order.trigger_type`, was "
-                f"{trigger_type_to_str(order.trigger_price)}, {order}",
+            raise RuntimeError(
+                f"Unexpected trigger_type {trigger_type_to_str(order.trigger_type)} for StopMarketOrder - "
+                "should have been validated in _validate_order_pre_submit",
             )
-            return
 
         time_in_force = self._determine_time_in_force(order)
+
         await self._http_account.new_order(
             symbol=order.instrument_id.symbol.value,
             side=self._enum_parser.parse_internal_order_side(order.side),
@@ -847,57 +1140,30 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
         self,
         order: TrailingStopMarketOrder,
         position_side: BinanceFuturesPositionSide | None,
+        price_match: str | None,
     ) -> None:
+        assert price_match is None  # type checking
+
         if order.trigger_type in (TriggerType.DEFAULT, TriggerType.LAST_PRICE):
             working_type = "CONTRACT_PRICE"
         elif order.trigger_type == TriggerType.MARK_PRICE:
             working_type = "MARK_PRICE"
         else:
-            self._log.error(
-                f"Cannot submit order: invalid `order.trigger_type`, was "
-                f"{trigger_type_to_str(order.trigger_price)}, {order}",
+            raise RuntimeError(
+                f"Unexpected trigger_type {trigger_type_to_str(order.trigger_type)} for TrailingStopMarketOrder - "
+                "should have been validated in _validate_order_pre_submit",
             )
-            return
-
-        if order.trailing_offset_type != TrailingOffsetType.BASIS_POINTS:
-            self._log.error(
-                f"Cannot submit order: invalid `order.trailing_offset_type`, was "
-                f"{trailing_offset_type_to_str(order.trailing_offset_type)} (use `BASIS_POINTS`), "
-                f"{order}",
-            )
-            return
-
-        # Convert basis points to percentage rounded to 1 decimal place
-        callback_rate = Decimal(f"{order.trailing_offset / 100:.1f}")
-
-        if callback_rate < BINANCE_MIN_CALLBACK_RATE or callback_rate > BINANCE_MAX_CALLBACK_RATE:
-            self._log.error(
-                f"Cannot submit order: invalid `order.trailing_offset`, was "
-                f"{order.trailing_offset} {trailing_offset_type_to_str(order.trailing_offset_type)} "
-                f"rounded to {callback_rate}%, "
-                f"must in range [{BINANCE_MIN_CALLBACK_RATE}, {BINANCE_MAX_CALLBACK_RATE}]",
-            )
-            return
-
-        # Ensure activation price
-        activation_price: Price | None = order.trigger_price
-        if not activation_price:
-            quote = self._cache.quote_tick(order.instrument_id)
-            trade = self._cache.trade_tick(order.instrument_id)
-            if quote:
-                if order.side == OrderSide.BUY:
-                    activation_price = quote.bid_price
-                elif order.side == OrderSide.SELL:
-                    activation_price = quote.ask_price
-            elif trade:
-                activation_price = trade.price
-            else:
-                self._log.error(
-                    "Cannot submit order: no trigger price specified for Binance activation price "
-                    f"and could not find quotes or trades for {order.instrument_id}",
-                )
 
         time_in_force = self._determine_time_in_force(order)
+
+        # Convert basis points to percentage, preserving precision
+        # Binance supports up to 1 decimal place precision for callback rates
+        callback_rate = Decimal(order.trailing_offset) / Decimal("100")
+        # Round to 1 decimal place only if necessary to meet Binance requirements
+        callback_rate = callback_rate.quantize(Decimal("0.1"))
+
+        activation_price: Price | None = order.activation_price
+
         await self._http_account.new_order(
             symbol=order.instrument_id.symbol.value,
             side=self._enum_parser.parse_internal_order_side(order.side),
@@ -905,7 +1171,7 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
             time_in_force=time_in_force,
             good_till_date=self._determine_good_till_date(order, time_in_force),
             quantity=str(order.quantity),
-            activation_price=str(activation_price),
+            activation_price=str(activation_price) if activation_price is not None else None,
             callback_rate=str(callback_rate),
             working_type=working_type,
             reduce_only=self._determine_reduce_only_str(order),
@@ -927,7 +1193,7 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
     async def _modify_order(self, command: ModifyOrder) -> None:
         if self._binance_account_type.is_spot_or_margin:
             self._log.error(
-                "Cannot modify order: only supported for `USDT_FUTURE` and `COIN_FUTURE` account types",
+                "Cannot modify order: only supported for `USDT_FUTURES` and `COIN_FUTURES` account types",
             )
             return
 
@@ -956,7 +1222,7 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
                 price=str(command.price) if command.price else str(order.price),
             )
             if not retry_manager.result:
-                self.generate_order_modify_reject(
+                self.generate_order_modify_rejected(
                     command.strategy_id,
                     command.instrument_id,
                     command.client_order_id,
@@ -1066,6 +1332,7 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
     ) -> None:
         order: Order | None = self._cache.order(client_order_id)
         if order is None:
+            # Cannot generate cancel rejected event without order in cache
             self._log.error(f"{client_order_id!r} not found to cancel")
             return
 
@@ -1087,3 +1354,8 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
     def _handle_user_ws_message(self, raw: bytes) -> None:
         # Implement in child class
         raise NotImplementedError
+
+
+def _is_post_only_rejection(error: BinanceError) -> bool:
+    error_code = get_binance_error_code(error)
+    return error_code == BinanceErrorCode.GTX_ORDER_REJECT

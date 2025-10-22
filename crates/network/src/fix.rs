@@ -15,8 +15,6 @@
 
 //! Simple FIX message buffer processor.
 
-use std::sync::Arc;
-
 use memchr::memchr;
 
 use crate::socket::TcpMessageHandler;
@@ -54,7 +52,7 @@ const DELIMITER: u8 = b'\x01';
 /// This parser is designed for basic FIX message processing and does not support all features
 /// of the FIX protocol. Notably, it lacks handling for repeating groups and other advanced
 /// structures, which may be required for full protocol compliance in complex scenarios.
-pub(crate) fn process_fix_buffer(buf: &mut Vec<u8>, handler: &Arc<TcpMessageHandler>) {
+pub(crate) fn process_fix_buffer(buf: &mut Vec<u8>, handler: &TcpMessageHandler) {
     let mut processed_to = 0;
 
     while processed_to < buf.len() {
@@ -71,11 +69,15 @@ pub(crate) fn process_fix_buffer(buf: &mut Vec<u8>, handler: &Arc<TcpMessageHand
                 // Search for message end
                 if let Some(end_pos) = find_message_end(&buf[idx..]) {
                     let message_end = idx + end_pos;
-                    if message_end - idx > MAX_MESSAGE_SIZE {
+                    let message_len = message_end - idx;
+
+                    // Check if message exceeds max size
+                    if message_len > MAX_MESSAGE_SIZE {
                         // Message exceeds max size, discard up to this point
                         processed_to = idx + 1;
                         continue;
                     }
+
                     let message = &buf[idx..message_end];
                     handler(message); // Pass complete message to handler
                     processed_to = message_end; // Update processed position
@@ -88,8 +90,13 @@ pub(crate) fn process_fix_buffer(buf: &mut Vec<u8>, handler: &Arc<TcpMessageHand
                 processed_to = idx + 1;
             }
         } else {
-            // No message start found in the remaining buffer, clear it to avoid garbage buildup
-            buf.clear();
+            // No message start found in the remaining buffer
+            // Keep last 4 bytes in case they contain a partial "8=FIX" pattern at buffer boundary
+            // This prevents discarding partial message starts that span buffer reads
+            if buf.len() > START_PATTERN.len() - 1 {
+                let keep_from = buf.len() - (START_PATTERN.len() - 1);
+                buf.drain(0..keep_from);
+            }
             return;
         }
     }
@@ -132,7 +139,7 @@ mod process_fix_buffer_tests {
         let received = Arc::new(Mutex::new(Vec::new()));
         let received_clone = received.clone();
 
-        let handler: Arc<TcpMessageHandler> = Arc::new(move |data: &[u8]| {
+        let handler: TcpMessageHandler = Arc::new(move |data: &[u8]| {
             received_clone.lock().unwrap().push(data.to_vec());
         });
 
@@ -150,7 +157,7 @@ mod process_fix_buffer_tests {
         let received = Arc::new(Mutex::new(Vec::new()));
         let received_clone = received.clone();
 
-        let handler: Arc<TcpMessageHandler> = Arc::new(move |data: &[u8]| {
+        let handler: TcpMessageHandler = Arc::new(move |data: &[u8]| {
             received_clone.lock().unwrap().push(data.to_vec());
         });
 
@@ -169,7 +176,7 @@ mod process_fix_buffer_tests {
         let received = Arc::new(Mutex::new(Vec::new()));
         let received_clone = received.clone();
 
-        let handler: Arc<TcpMessageHandler> = Arc::new(move |data: &[u8]| {
+        let handler: TcpMessageHandler = Arc::new(move |data: &[u8]| {
             received_clone.lock().unwrap().push(data.to_vec());
         });
 
@@ -185,7 +192,7 @@ mod process_fix_buffer_tests {
         let received = Arc::new(Mutex::new(Vec::new()));
         let received_clone = received.clone();
 
-        let handler: Arc<TcpMessageHandler> = Arc::new(move |data: &[u8]| {
+        let handler: TcpMessageHandler = Arc::new(move |data: &[u8]| {
             received_clone.lock().unwrap().push(data.to_vec());
         });
 
@@ -201,7 +208,7 @@ mod process_fix_buffer_tests {
         let received = Arc::new(Mutex::new(Vec::new()));
         let received_clone = received.clone();
 
-        let handler: Arc<TcpMessageHandler> = Arc::new(move |data: &[u8]| {
+        let handler: TcpMessageHandler = Arc::new(move |data: &[u8]| {
             received_clone.lock().unwrap().push(data.to_vec());
         });
 
@@ -222,7 +229,7 @@ mod process_fix_buffer_tests {
         let received = Arc::new(Mutex::new(Vec::new()));
         let received_clone = received.clone();
 
-        let handler: Arc<TcpMessageHandler> = Arc::new(move |data: &[u8]| {
+        let handler: TcpMessageHandler = Arc::new(move |data: &[u8]| {
             received_clone.lock().unwrap().push(data.to_vec());
         });
 
@@ -247,7 +254,7 @@ mod process_fix_buffer_tests {
         let received = Arc::new(Mutex::new(Vec::new()));
         let received_clone = received.clone();
 
-        let handler: Arc<TcpMessageHandler> = Arc::new(move |data: &[u8]| {
+        let handler: TcpMessageHandler = Arc::new(move |data: &[u8]| {
             received_clone.lock().unwrap().push(data.to_vec());
         });
 
@@ -268,7 +275,7 @@ mod process_fix_buffer_tests {
         let received = Arc::new(Mutex::new(Vec::new()));
         let received_clone = received.clone();
 
-        let handler: Arc<TcpMessageHandler> = Arc::new(move |data: &[u8]| {
+        let handler: TcpMessageHandler = Arc::new(move |data: &[u8]| {
             received_clone.lock().unwrap().push(data.to_vec());
         });
 
@@ -293,7 +300,7 @@ mod process_fix_buffer_tests {
         let received = Arc::new(Mutex::new(Vec::new()));
         let received_clone = received.clone();
 
-        let handler: Arc<TcpMessageHandler> = Arc::new(move |data: &[u8]| {
+        let handler: TcpMessageHandler = Arc::new(move |data: &[u8]| {
             received_clone.lock().unwrap().push(data.to_vec());
         });
 

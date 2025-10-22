@@ -15,12 +15,13 @@
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use chrono::{DateTime, Utc};
 use nautilus_core::UnixNanos;
 use nautilus_model::{
     data::{
-        Bar, BarType, BookOrder, Data, OrderBookDelta, OrderBookDeltas, OrderBookDeltas_API,
-        QuoteTick, TradeTick,
+        Bar, BarType, BookOrder, Data, FundingRateUpdate, OrderBookDelta, OrderBookDeltas,
+        OrderBookDeltas_API, QuoteTick, TradeTick,
     },
     enums::{AggregationSource, BookAction, OrderSide, RecordFlag},
     identifiers::{InstrumentId, TradeId},
@@ -29,13 +30,18 @@ use nautilus_model::{
 use uuid::Uuid;
 
 use super::{
-    message::{BarMsg, BookChangeMsg, BookLevel, BookSnapshotMsg, TradeMsg, WsMessage},
-    types::InstrumentMiniInfo,
+    message::{
+        BarMsg, BookChangeMsg, BookLevel, BookSnapshotMsg, DerivativeTickerMsg, TradeMsg, WsMessage,
+    },
+    types::TardisInstrumentMiniInfo,
 };
 use crate::parse::{normalize_amount, parse_aggressor_side, parse_bar_spec, parse_book_action};
 
 #[must_use]
-pub fn parse_tardis_ws_message(msg: WsMessage, info: Arc<InstrumentMiniInfo>) -> Option<Data> {
+pub fn parse_tardis_ws_message(
+    msg: WsMessage,
+    info: Arc<TardisInstrumentMiniInfo>,
+) -> Option<Data> {
     match msg {
         WsMessage::BookChange(msg) => {
             if msg.bids.is_empty() && msg.asks.is_empty() {
@@ -46,51 +52,112 @@ pub fn parse_tardis_ws_message(msg: WsMessage, info: Arc<InstrumentMiniInfo>) ->
                 );
                 return None;
             }
-            Some(Data::Deltas(parse_book_change_msg_as_deltas(
+
+            match parse_book_change_msg_as_deltas(
                 msg,
                 info.price_precision,
                 info.size_precision,
                 info.instrument_id,
-            )))
+            ) {
+                Ok(deltas) => Some(Data::Deltas(deltas)),
+                Err(e) => {
+                    tracing::error!("Failed to parse book change message: {e}");
+                    None
+                }
+            }
         }
         WsMessage::BookSnapshot(msg) => match msg.bids.len() {
-            1 => Some(Data::Quote(parse_book_snapshot_msg_as_quote(
-                msg,
-                info.price_precision,
-                info.size_precision,
-                info.instrument_id,
-            ))),
-            _ => Some(Data::Deltas(parse_book_snapshot_msg_as_deltas(
-                msg,
-                info.price_precision,
-                info.size_precision,
-                info.instrument_id,
-            ))),
+            1 => {
+                match parse_book_snapshot_msg_as_quote(
+                    msg,
+                    info.price_precision,
+                    info.size_precision,
+                    info.instrument_id,
+                ) {
+                    Ok(quote) => Some(Data::Quote(quote)),
+                    Err(e) => {
+                        tracing::error!("Failed to parse book snapshot quote message: {e}");
+                        None
+                    }
+                }
+            }
+            _ => {
+                match parse_book_snapshot_msg_as_deltas(
+                    msg,
+                    info.price_precision,
+                    info.size_precision,
+                    info.instrument_id,
+                ) {
+                    Ok(deltas) => Some(Data::Deltas(deltas)),
+                    Err(e) => {
+                        tracing::error!("Failed to parse book snapshot message: {e}");
+                        None
+                    }
+                }
+            }
         },
-        WsMessage::Trade(msg) => Some(Data::Trade(parse_trade_msg(
-            msg,
-            info.price_precision,
-            info.size_precision,
-            info.instrument_id,
-        ))),
+        WsMessage::Trade(msg) => {
+            match parse_trade_msg(
+                msg,
+                info.price_precision,
+                info.size_precision,
+                info.instrument_id,
+            ) {
+                Ok(trade) => Some(Data::Trade(trade)),
+                Err(e) => {
+                    tracing::error!("Failed to parse trade message: {e}");
+                    None
+                }
+            }
+        }
         WsMessage::TradeBar(msg) => Some(Data::Bar(parse_bar_msg(
             msg,
             info.price_precision,
             info.size_precision,
             info.instrument_id,
         ))),
+        // Derivative ticker messages are handled through a separate callback path
+        // for FundingRateUpdate since they're not part of the Data enum.
         WsMessage::DerivativeTicker(_) => None,
         WsMessage::Disconnect(_) => None,
     }
 }
 
+/// Parse a Tardis WebSocket message specifically for funding rate updates.
+/// Returns `Some(FundingRateUpdate)` if the message contains funding rate data, `None` otherwise.
 #[must_use]
+pub fn parse_tardis_ws_message_funding_rate(
+    msg: WsMessage,
+    info: Arc<TardisInstrumentMiniInfo>,
+) -> Option<FundingRateUpdate> {
+    match msg {
+        WsMessage::DerivativeTicker(msg) => {
+            match parse_derivative_ticker_msg(msg, info.instrument_id) {
+                Ok(funding_rate) => funding_rate,
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to parse derivative ticker message for funding rate: {e}"
+                    );
+                    None
+                }
+            }
+        }
+        _ => None, // Only derivative ticker messages can contain funding rates
+    }
+}
+
+/// Parse a book change message into order book deltas, returning an error if timestamps invalid.
+/// Parse a book change message into order book deltas.
+///
+/// # Errors
+///
+/// Returns an error if timestamp fields cannot be converted to nanoseconds.
 pub fn parse_book_change_msg_as_deltas(
     msg: BookChangeMsg,
     price_precision: u8,
     size_precision: u8,
     instrument_id: InstrumentId,
-) -> OrderBookDeltas_API {
+) -> anyhow::Result<OrderBookDeltas_API> {
     parse_book_msg_as_deltas(
         msg.bids,
         msg.asks,
@@ -103,13 +170,18 @@ pub fn parse_book_change_msg_as_deltas(
     )
 }
 
-#[must_use]
+/// Parse a book snapshot message into order book deltas, returning an error if timestamps invalid.
+/// Parse a book snapshot message into order book deltas.
+///
+/// # Errors
+///
+/// Returns an error if timestamp fields cannot be converted to nanoseconds.
 pub fn parse_book_snapshot_msg_as_deltas(
     msg: BookSnapshotMsg,
     price_precision: u8,
     size_precision: u8,
     instrument_id: InstrumentId,
-) -> OrderBookDeltas_API {
+) -> anyhow::Result<OrderBookDeltas_API> {
     parse_book_msg_as_deltas(
         msg.bids,
         msg.asks,
@@ -122,8 +194,13 @@ pub fn parse_book_snapshot_msg_as_deltas(
     )
 }
 
+/// Parse raw book levels into order book deltas, returning error for invalid timestamps.
 #[allow(clippy::too_many_arguments)]
-#[must_use]
+/// Parse raw book levels into order book deltas.
+///
+/// # Errors
+///
+/// Returns an error if timestamp fields cannot be converted to nanoseconds.
 pub fn parse_book_msg_as_deltas(
     bids: Vec<BookLevel>,
     asks: Vec<BookLevel>,
@@ -133,9 +210,15 @@ pub fn parse_book_msg_as_deltas(
     instrument_id: InstrumentId,
     timestamp: DateTime<Utc>,
     local_timestamp: DateTime<Utc>,
-) -> OrderBookDeltas_API {
-    let ts_event = UnixNanos::from(timestamp.timestamp_nanos_opt().unwrap() as u64);
-    let ts_init = UnixNanos::from(local_timestamp.timestamp_nanos_opt().unwrap() as u64);
+) -> anyhow::Result<OrderBookDeltas_API> {
+    let event_nanos = timestamp
+        .timestamp_nanos_opt()
+        .context("invalid timestamp: cannot extract event nanoseconds")?;
+    let ts_event = UnixNanos::from(event_nanos as u64);
+    let init_nanos = local_timestamp
+        .timestamp_nanos_opt()
+        .context("invalid timestamp: cannot extract init nanoseconds")?;
+    let ts_init = UnixNanos::from(init_nanos as u64);
 
     let mut deltas: Vec<OrderBookDelta> = Vec::with_capacity(bids.len() + asks.len());
 
@@ -170,11 +253,19 @@ pub fn parse_book_msg_as_deltas(
     }
 
     // TODO: Opaque pointer wrapper necessary for Cython (remove once Cython gone)
-    OrderBookDeltas_API::new(OrderBookDeltas::new(instrument_id, deltas))
+    Ok(OrderBookDeltas_API::new(OrderBookDeltas::new(
+        instrument_id,
+        deltas,
+    )))
 }
 
-#[allow(clippy::too_many_arguments)]
 #[must_use]
+/// Parse a single book level into an order book delta.
+///
+/// # Panics
+///
+/// Panics if a non-delete action has a zero size after normalization.
+#[allow(clippy::too_many_arguments)]
 pub fn parse_book_level(
     instrument_id: InstrumentId,
     price_precision: u8,
@@ -214,27 +305,38 @@ pub fn parse_book_level(
     )
 }
 
-#[must_use]
+/// Parse a book snapshot message into a quote tick, returning an error on invalid data.
+/// Parse a book snapshot message into a quote tick.
+///
+/// # Errors
+///
+/// Returns an error if missing bid/ask levels or invalid sizes.
 pub fn parse_book_snapshot_msg_as_quote(
     msg: BookSnapshotMsg,
     price_precision: u8,
     size_precision: u8,
     instrument_id: InstrumentId,
-) -> QuoteTick {
+) -> anyhow::Result<QuoteTick> {
     let ts_event = UnixNanos::from(msg.timestamp);
     let ts_init = UnixNanos::from(msg.local_timestamp);
 
-    let best_bid = &msg.bids[0];
+    let best_bid = msg
+        .bids
+        .first()
+        .context("missing best bid level for quote message")?;
     let bid_price = Price::new(best_bid.price, price_precision);
     let bid_size = Quantity::non_zero_checked(best_bid.amount, size_precision)
-        .unwrap_or_else(|e| panic!("Invalid {msg:?}: bid_size {e}"));
+        .with_context(|| format!("Invalid bid size for message: {msg:?}"))?;
 
-    let best_ask = &msg.asks[0];
+    let best_ask = msg
+        .asks
+        .first()
+        .context("missing best ask level for quote message")?;
     let ask_price = Price::new(best_ask.price, price_precision);
     let ask_size = Quantity::non_zero_checked(best_ask.amount, size_precision)
-        .unwrap_or_else(|e| panic!("Invalid {msg:?}: ask_size {e}"));
+        .with_context(|| format!("Invalid ask size for message: {msg:?}"))?;
 
-    QuoteTick::new(
+    Ok(QuoteTick::new(
         instrument_id,
         bid_price,
         ask_price,
@@ -242,25 +344,30 @@ pub fn parse_book_snapshot_msg_as_quote(
         ask_size,
         ts_event,
         ts_init,
-    )
+    ))
 }
 
-#[must_use]
+/// Parse a trade message into a trade tick, returning an error on invalid data.
+/// Parse a trade message into a trade tick.
+///
+/// # Errors
+///
+/// Returns an error if invalid trade size is encountered.
 pub fn parse_trade_msg(
     msg: TradeMsg,
     price_precision: u8,
     size_precision: u8,
     instrument_id: InstrumentId,
-) -> TradeTick {
+) -> anyhow::Result<TradeTick> {
     let price = Price::new(msg.price, price_precision);
     let size = Quantity::non_zero_checked(msg.amount, size_precision)
-        .unwrap_or_else(|e| panic!("Invalid {msg:?}: size {e}"));
+        .with_context(|| format!("Invalid trade size in message: {msg:?}"))?;
     let aggressor_side = parse_aggressor_side(&msg.side);
     let trade_id = TradeId::new(msg.id.unwrap_or_else(|| Uuid::new_v4().to_string()));
     let ts_event = UnixNanos::from(msg.timestamp);
     let ts_init = UnixNanos::from(msg.local_timestamp);
 
-    TradeTick::new(
+    Ok(TradeTick::new(
         instrument_id,
         price,
         size,
@@ -268,7 +375,7 @@ pub fn parse_trade_msg(
         trade_id,
         ts_event,
         ts_init,
-    )
+    ))
 }
 
 #[must_use]
@@ -292,12 +399,56 @@ pub fn parse_bar_msg(
     Bar::new(bar_type, open, high, low, close, volume, ts_event, ts_init)
 }
 
+/// Parse a derivative ticker message into a funding rate update.
+///
+/// # Errors
+///
+/// Returns an error if timestamp fields cannot be converted to nanoseconds or decimal conversion fails.
+pub fn parse_derivative_ticker_msg(
+    msg: DerivativeTickerMsg,
+    instrument_id: InstrumentId,
+) -> anyhow::Result<Option<FundingRateUpdate>> {
+    // Only process if we have funding rate data
+    let funding_rate = match msg.funding_rate {
+        Some(rate) => rate,
+        None => return Ok(None), // No funding rate data
+    };
+
+    let ts_event = msg
+        .timestamp
+        .timestamp_nanos_opt()
+        .context("invalid timestamp: cannot extract event nanoseconds")?;
+    let ts_event = UnixNanos::from(ts_event as u64);
+
+    let ts_init = msg
+        .local_timestamp
+        .timestamp_nanos_opt()
+        .context("invalid timestamp: cannot extract init nanoseconds")?;
+    let ts_init = UnixNanos::from(ts_init as u64);
+
+    let rate = rust_decimal::Decimal::try_from(funding_rate)
+        .with_context(|| format!("Failed to convert funding rate {funding_rate} to Decimal"))?
+        .normalize();
+
+    // For live data, we don't typically have funding timestamp info from derivative ticker
+    let next_funding_ns = None;
+
+    Ok(Some(FundingRateUpdate::new(
+        instrument_id,
+        rate,
+        next_funding_ns,
+        ts_event,
+        ts_init,
+    )))
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Tests
 ////////////////////////////////////////////////////////////////////////////////
+
 #[cfg(test)]
 mod tests {
-    use nautilus_model::enums::{AggressorSide, BookAction};
+    use nautilus_model::enums::AggressorSide;
     use rstest::rstest;
 
     use super::*;
@@ -312,7 +463,8 @@ mod tests {
         let size_precision = 0;
         let instrument_id = InstrumentId::from("XBTUSD.BITMEX");
         let deltas =
-            parse_book_change_msg_as_deltas(msg, price_precision, size_precision, instrument_id);
+            parse_book_change_msg_as_deltas(msg, price_precision, size_precision, instrument_id)
+                .unwrap();
 
         assert_eq!(deltas.deltas.len(), 1);
         assert_eq!(deltas.instrument_id, instrument_id);
@@ -349,7 +501,8 @@ mod tests {
         let size_precision = 0;
         let instrument_id = InstrumentId::from("XBTUSD.BITMEX");
         let deltas =
-            parse_book_snapshot_msg_as_deltas(msg, price_precision, size_precision, instrument_id);
+            parse_book_snapshot_msg_as_deltas(msg, price_precision, size_precision, instrument_id)
+                .unwrap();
         let delta_0 = deltas.deltas[0];
         let delta_2 = deltas.deltas[2];
 
@@ -393,7 +546,8 @@ mod tests {
         let size_precision = 0;
         let instrument_id = InstrumentId::from("XBTUSD.BITMEX");
         let quote =
-            parse_book_snapshot_msg_as_quote(msg, price_precision, size_precision, instrument_id);
+            parse_book_snapshot_msg_as_quote(msg, price_precision, size_precision, instrument_id)
+                .expect("Failed to parse book snapshot quote message");
 
         assert_eq!(quote.instrument_id, instrument_id);
         assert_eq!(quote.bid_price, Price::from("7633.5"));
@@ -412,7 +566,8 @@ mod tests {
         let price_precision = 0;
         let size_precision = 0;
         let instrument_id = InstrumentId::from("XBTUSD.BITMEX");
-        let trade = parse_trade_msg(msg, price_precision, size_precision, instrument_id);
+        let trade = parse_trade_msg(msg, price_precision, size_precision, instrument_id)
+            .expect("Failed to parse trade message");
 
         assert_eq!(trade.instrument_id, instrument_id);
         assert_eq!(trade.price, Price::from("7996"));

@@ -13,20 +13,29 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-use nautilus_model::defi::block::Block;
+use nautilus_model::defi::Block;
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 
-/// Represents normalized blockchain messages
+use crate::events::{
+    burn::BurnEvent, collect::CollectEvent, flash::FlashEvent, mint::MintEvent, swap::SwapEvent,
+};
+
+/// Represents normalized blockchain messages.
 #[derive(Debug, Clone)]
 pub enum BlockchainMessage {
     Block(Block),
+    SwapEvent(SwapEvent),
+    MintEvent(MintEvent),
+    BurnEvent(BurnEvent),
+    CollectEvent(CollectEvent),
+    FlashEvent(FlashEvent),
 }
 
 /// Represents the types of events that can be subscribed to via the blockchain RPC interface.
 ///
 /// This enum defines the various event types that the application can subscribe to using
-/// the WebSocket-based RPC subscription
+/// the WebSocket-based RPC subscription.
 #[derive(
     Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Display, EnumString, Serialize, Deserialize,
 )]

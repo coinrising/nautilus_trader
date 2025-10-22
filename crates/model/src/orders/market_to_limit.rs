@@ -13,19 +13,18 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-use std::ops::{Deref, DerefMut};
-
-use anyhow;
-use indexmap::IndexMap;
-use nautilus_core::{
-    UUID4, UnixNanos,
-    correctness::{FAILED, check_predicate_false},
+use std::{
+    fmt::Display,
+    ops::{Deref, DerefMut},
 };
+
+use indexmap::IndexMap;
+use nautilus_core::{UUID4, UnixNanos, correctness::FAILED};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use ustr::Ustr;
 
-use super::{Order, OrderAny, OrderCore};
+use super::{Order, OrderAny, OrderCore, check_display_qty, check_time_in_force};
 use crate::{
     enums::{
         ContingencyType, LiquiditySide, OrderSide, OrderStatus, OrderType, PositionSide,
@@ -60,7 +59,8 @@ impl MarketToLimitOrder {
     ///
     /// Returns an error if:
     /// - The `quantity` is not positive.
-    /// - The `time_in_force` is GTD and the `expire_time` is `None` or zero.
+    /// - The `display_qty` (when provided) exceeds `quantity`.
+    /// - The `time_in_force` is `GTD` **and** `expire_time` is `None` or zero.
     #[allow(clippy::too_many_arguments)]
     pub fn new_checked(
         trader_id: TraderId,
@@ -87,18 +87,8 @@ impl MarketToLimitOrder {
         ts_init: UnixNanos,
     ) -> anyhow::Result<Self> {
         check_positive_quantity(quantity, stringify!(quantity))?;
-
-        if let Some(disp) = display_qty {
-            check_positive_quantity(disp, stringify!(display_quantity))?;
-            check_predicate_false(disp > quantity, "`display_qty` may not exceed `quantity`")?;
-        }
-
-        if time_in_force == TimeInForce::Gtd {
-            check_predicate_false(
-                expire_time.unwrap_or_default().is_zero(),
-                "`expire_time` is required for `GTD` order",
-            )?;
-        }
+        check_display_qty(display_qty, quantity)?;
+        check_time_in_force(time_in_force, expire_time)?;
 
         let init_order = OrderInitialized::new(
             trader_id,
@@ -457,7 +447,7 @@ impl Order for MarketToLimitOrder {
         }
 
         self.quantity = event.quantity;
-        self.leaves_qty = self.quantity - self.filled_qty;
+        self.leaves_qty = self.quantity.saturating_sub(self.filled_qty);
     }
 
     fn is_triggered(&self) -> Option<bool> {
@@ -497,6 +487,44 @@ impl Order for MarketToLimitOrder {
     }
 }
 
+impl Display for MarketToLimitOrder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "MarketToLimitOrder(\
+            {} {} {} {} {}, \
+            status={}, \
+            client_order_id={}, \
+            venue_order_id={}, \
+            position_id={}, \
+            exec_algorithm_id={}, \
+            exec_spawn_id={}, \
+            tags={:?}\
+            )",
+            self.side,
+            self.quantity.to_formatted_string(),
+            self.instrument_id,
+            self.order_type,
+            self.time_in_force,
+            self.status,
+            self.client_order_id,
+            self.venue_order_id.map_or_else(
+                || "None".to_string(),
+                |venue_order_id| format!("{venue_order_id}")
+            ),
+            self.position_id.map_or_else(
+                || "None".to_string(),
+                |position_id| format!("{position_id}")
+            ),
+            self.exec_algorithm_id
+                .map_or_else(|| "None".to_string(), |id| format!("{id}")),
+            self.exec_spawn_id
+                .map_or_else(|| "None".to_string(), |id| format!("{id}")),
+            self.tags
+        )
+    }
+}
+
 impl From<OrderInitialized> for MarketToLimitOrder {
     fn from(event: OrderInitialized) -> Self {
         Self::new(
@@ -533,20 +561,47 @@ impl From<OrderInitialized> for MarketToLimitOrder {
 mod tests {
     use rstest::rstest;
 
+    use super::*;
     use crate::{
         enums::{OrderSide, OrderType, TimeInForce},
+        events::order::{filled::OrderFilledBuilder, initialized::OrderInitializedBuilder},
+        identifiers::{InstrumentId, TradeId, VenueOrderId},
         instruments::{CurrencyPair, stubs::*},
-        orders::builder::OrderTestBuilder,
-        types::Quantity,
+        orders::{builder::OrderTestBuilder, stubs::TestOrderStubs},
+        types::{Price, Quantity},
     };
 
     #[rstest]
-    fn test_ok(audusd_sim: CurrencyPair) {
-        let _ = OrderTestBuilder::new(OrderType::MarketToLimit)
+    fn test_initialize(_audusd_sim: CurrencyPair) {
+        let order = OrderTestBuilder::new(OrderType::MarketToLimit)
+            .instrument_id(_audusd_sim.id)
+            .side(OrderSide::Buy)
+            .price(Price::from("0.68000"))
+            .quantity(Quantity::from(1))
+            .build();
+
+        assert_eq!(order.price(), None);
+        assert_eq!(order.is_triggered(), None);
+        assert_eq!(order.time_in_force(), TimeInForce::Gtc);
+        assert_eq!(order.is_triggered(), None);
+        assert_eq!(order.filled_qty(), Quantity::from(0));
+        assert_eq!(order.leaves_qty(), Quantity::from(1));
+        assert_eq!(order.trigger_instrument_id(), None);
+        assert_eq!(order.order_list_id(), None);
+    }
+
+    #[rstest]
+    fn test_display(audusd_sim: CurrencyPair) {
+        let order = OrderTestBuilder::new(OrderType::MarketToLimit)
             .instrument_id(audusd_sim.id)
             .side(OrderSide::Buy)
             .quantity(Quantity::from(1))
             .build();
+
+        assert_eq!(
+            order.to_string(),
+            "MarketToLimitOrder(BUY 1 AUD/USD.SIM MARKET_TO_LIMIT GTC, status=INITIALIZED, client_order_id=O-19700101-000000-001-001-1, venue_order_id=None, position_id=None, exec_algorithm_id=None, exec_spawn_id=None, tags=None)"
+        );
     }
 
     #[rstest]
@@ -557,7 +612,7 @@ mod tests {
         let _ = OrderTestBuilder::new(OrderType::MarketToLimit)
             .instrument_id(audusd_sim.id)
             .side(OrderSide::Buy)
-            .quantity(Quantity::from(0)) // Invalid: zero quantity
+            .quantity(Quantity::from(0))
             .build();
     }
 
@@ -581,5 +636,127 @@ mod tests {
             .quantity(Quantity::from(1))
             .display_qty(Quantity::from(2)) // Invalid: display > quantity
             .build();
+    }
+
+    #[rstest]
+    fn test_market_to_limit_order_update() {
+        // Create and accept a basic MarketToLimitOrder
+        let order = OrderTestBuilder::new(OrderType::MarketToLimit)
+            .instrument_id(InstrumentId::from("BTC-USDT.BINANCE"))
+            .quantity(Quantity::from(10))
+            .build();
+
+        let mut accepted_order = TestOrderStubs::make_accepted_order(&order);
+
+        // Update with new values
+        let updated_price = Price::new(95.0, 2);
+        let updated_quantity = Quantity::from(5);
+
+        let event = OrderUpdated {
+            client_order_id: accepted_order.client_order_id(),
+            strategy_id: accepted_order.strategy_id(),
+            price: Some(updated_price),
+            quantity: updated_quantity,
+            ..Default::default()
+        };
+
+        accepted_order.apply(OrderEventAny::Updated(event)).unwrap();
+
+        // Verify updates were applied correctly
+        assert_eq!(accepted_order.quantity(), updated_quantity);
+        assert_eq!(accepted_order.price(), Some(updated_price));
+    }
+
+    #[rstest]
+    fn test_market_to_limit_order_expire_time() {
+        // Create a new MarketToLimitOrder with an expire time
+        let expire_time = UnixNanos::from(1234567890);
+        let order = OrderTestBuilder::new(OrderType::MarketToLimit)
+            .instrument_id(InstrumentId::from("BTC-USDT.BINANCE"))
+            .quantity(Quantity::from(10))
+            .expire_time(expire_time)
+            .build();
+
+        // Assert that the expire time is set correctly
+        assert_eq!(order.expire_time(), Some(expire_time));
+    }
+
+    #[rstest]
+    fn test_market_to_limit_order_from_order_initialized() {
+        // Create an OrderInitialized event with all required fields for a MarketToLimitOrder
+        let order_initialized = OrderInitializedBuilder::default()
+            .order_type(OrderType::MarketToLimit)
+            .build()
+            .unwrap();
+
+        // Convert the OrderInitialized event into a MarketToLimitOrder
+        let order: MarketToLimitOrder = order_initialized.clone().into();
+
+        // Assert essential fields match the OrderInitialized fields
+        assert_eq!(order.trader_id(), order_initialized.trader_id);
+        assert_eq!(order.strategy_id(), order_initialized.strategy_id);
+        assert_eq!(order.instrument_id(), order_initialized.instrument_id);
+        assert_eq!(order.client_order_id(), order_initialized.client_order_id);
+        assert_eq!(order.order_side(), order_initialized.order_side);
+        assert_eq!(order.quantity(), order_initialized.quantity);
+    }
+
+    #[rstest]
+    fn test_market_to_limit_order_sets_slippage_when_filled() {
+        // Create a MarketToLimitOrder
+        let order = OrderTestBuilder::new(OrderType::MarketToLimit)
+            .instrument_id(InstrumentId::from("BTC-USDT.BINANCE"))
+            .quantity(Quantity::from(10))
+            .side(OrderSide::Buy)
+            .build();
+
+        // Accept the order first
+        let mut accepted_order = TestOrderStubs::make_accepted_order(&order);
+
+        // Update the order with a price
+        let price = Price::new(90.0, 2);
+        let update_event = OrderUpdated {
+            client_order_id: accepted_order.client_order_id(),
+            strategy_id: accepted_order.strategy_id(),
+            price: Some(price),
+            quantity: accepted_order.quantity(),
+            ..Default::default()
+        };
+
+        // Apply the update event to set the price
+        accepted_order
+            .apply(OrderEventAny::Updated(update_event))
+            .unwrap();
+
+        // Verify the price was set correctly
+        assert_eq!(accepted_order.price(), Some(price));
+
+        // Create a filled event with the correct quantity
+        let fill_quantity = accepted_order.quantity();
+        let fill_price = Price::new(98.50, 2);
+
+        let order_filled_event = OrderFilledBuilder::default()
+            .client_order_id(accepted_order.client_order_id())
+            .strategy_id(accepted_order.strategy_id())
+            .instrument_id(accepted_order.instrument_id())
+            .order_side(accepted_order.order_side())
+            .last_qty(fill_quantity)
+            .last_px(fill_price)
+            .venue_order_id(VenueOrderId::from("TEST-001"))
+            .trade_id(TradeId::from("TRADE-001"))
+            .build()
+            .unwrap();
+
+        // Apply the fill event
+        accepted_order
+            .apply(OrderEventAny::Filled(order_filled_event))
+            .unwrap();
+
+        // The slippage calculation should be triggered by the filled event
+        assert!(accepted_order.slippage().is_some());
+
+        // Additionally, verify the actual slippage value is correct
+        // The slippage would be 98.50 - 90.0 = 8.50 for a Buy order
+        assert_eq!(accepted_order.slippage().unwrap(), 8.50);
     }
 }

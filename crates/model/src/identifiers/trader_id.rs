@@ -17,7 +17,7 @@
 
 use std::fmt::{Debug, Display, Formatter};
 
-use nautilus_core::correctness::{FAILED, check_string_contains, check_valid_string};
+use nautilus_core::correctness::{FAILED, check_string_contains, check_valid_string_ascii};
 use ustr::Ustr;
 
 /// Represents a valid trader ID.
@@ -43,15 +43,14 @@ impl TraderId {
     ///
     /// # Errors
     ///
-    /// This function returns an error:
-    /// - If `value` is not a valid string, or does not contain a hyphen '-' separator.
+    /// Returns an error if `value` is not a valid string, or does not contain a hyphen '-' separator.
     ///
     /// # Notes
     ///
     /// PyO3 requires a `Result` type for proper error handling and stacktrace printing in Python.
     pub fn new_checked<T: AsRef<str>>(value: T) -> anyhow::Result<Self> {
         let value = value.as_ref();
-        check_valid_string(value, stringify!(value))?;
+        check_valid_string_ascii(value, stringify!(value))?;
         check_string_contains(value, "-", stringify!(value))?;
         Ok(Self(Ustr::from(value)))
     }
@@ -60,14 +59,13 @@ impl TraderId {
     ///
     /// # Panics
     ///
-    /// This function panics:
-    /// - If `value` is not a valid string, or does not contain a hyphen '-' separator.
+    /// Panics if `value` is not a valid string, or does not contain a hyphen '-' separator.
     pub fn new<T: AsRef<str>>(value: T) -> Self {
         Self::new_checked(value).expect(FAILED)
     }
 
     /// Sets the inner identifier value.
-    #[allow(dead_code)]
+    #[cfg_attr(not(feature = "python"), allow(dead_code))]
     pub(crate) fn set_inner(&mut self, value: &str) {
         self.0 = Ustr::from(value);
     }

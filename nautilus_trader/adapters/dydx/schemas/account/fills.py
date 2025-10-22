@@ -16,7 +16,6 @@
 Define the schemas for the GetFills endpoint.
 """
 
-# ruff: noqa: N815
 
 import datetime
 from decimal import Decimal
@@ -43,7 +42,7 @@ from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
 
 
-class DYDXFillResponse(msgspec.Struct, forbid_unknown_fields=True):
+class DYDXFillResponse(msgspec.Struct, forbid_unknown_fields=False):
     """
     Define the schema for a fill.
     """
@@ -99,7 +98,7 @@ class DYDXFillResponse(msgspec.Struct, forbid_unknown_fields=True):
         )
 
 
-class DYDXFillsResponse(msgspec.Struct, forbid_unknown_fields=True):
+class DYDXFillsResponse(msgspec.Struct, forbid_unknown_fields=False):
     """
     Define the schema for the fills response.
     """

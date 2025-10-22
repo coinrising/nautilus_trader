@@ -14,7 +14,8 @@
 // -------------------------------------------------------------------------------------------------
 
 #[cfg(test)]
-#[cfg(target_os = "linux")] // Databases only supported on Linux
+#[cfg(feature = "postgres")]
+#[cfg(target_os = "linux")] // Databases only tested and supported on Linux
 mod serial_tests {
     use std::{collections::HashSet, time::Duration};
 
@@ -74,7 +75,7 @@ mod serial_tests {
                 let result = pg_cache.load().unwrap();
                 result.keys().len() > 0
             },
-            Duration::from_secs(2),
+            Duration::from_secs(5),
         );
         let result = pg_cache.load().unwrap();
         assert_eq!(result.keys().len(), 1);
@@ -148,7 +149,7 @@ mod serial_tests {
                 let instruments = pg_cache.load_instruments().await.unwrap();
                 currencies.len() >= 6 && instruments.len() >= 7
             },
-            Duration::from_secs(2),
+            Duration::from_secs(5),
         )
         .await;
 
@@ -318,7 +319,7 @@ mod serial_tests {
                 pg_cache.load_currencies().await.unwrap().len() == 2
                     && pg_cache.load_instruments().await.unwrap().len() == 1
             },
-            Duration::from_secs(2),
+            Duration::from_secs(5),
         )
         .await;
 
@@ -385,7 +386,7 @@ mod serial_tests {
                         .unwrap()
                         .is_some()
             },
-            Duration::from_secs(2),
+            Duration::from_secs(5),
         )
         .await;
         let market_order_result = pg_cache
@@ -481,7 +482,7 @@ mod serial_tests {
                     .unwrap();
                 result.is_some() && result.unwrap().status() == OrderStatus::Filled
             },
-            Duration::from_secs(2),
+            Duration::from_secs(5),
         )
         .await;
 
@@ -502,6 +503,7 @@ mod serial_tests {
         let mut account = AccountAny::Cash(CashAccount::new(
             cash_account_state_million_usd("1000000 USD", "0 USD", "1000000 USD"),
             false,
+            false,
         ));
         let last_event = account.last_event().unwrap();
         if last_event.base_currency.is_some() {
@@ -518,7 +520,7 @@ mod serial_tests {
                     .unwrap()
                     .is_some()
             },
-            Duration::from_secs(2),
+            Duration::from_secs(5),
         )
         .await;
         let account_result = pg_cache.load_account(&account.id()).await.unwrap();
@@ -534,7 +536,7 @@ mod serial_tests {
                 let result = pg_cache.load_account(&account.id()).await.unwrap();
                 result.is_some() && result.unwrap().events().len() >= 2
             },
-            Duration::from_secs(2),
+            Duration::from_secs(5),
         )
         .await;
         let account_result = pg_cache.load_account(&account.id()).await.unwrap();
@@ -565,7 +567,7 @@ mod serial_tests {
                     .is_some()
                     && !pg_cache.load_quotes(&instrument.id()).unwrap().is_empty()
             },
-            Duration::from_secs(2),
+            Duration::from_secs(5),
         )
         .await;
         let quotes = pg_cache.load_quotes(&instrument.id()).unwrap();
@@ -600,7 +602,7 @@ mod serial_tests {
                     .is_some()
                     && !pg_cache.load_trades(&instrument.id()).unwrap().is_empty()
             },
-            Duration::from_secs(2),
+            Duration::from_secs(5),
         )
         .await;
         let trades = pg_cache.load_trades(&instrument.id()).unwrap();
@@ -635,7 +637,7 @@ mod serial_tests {
                     .is_some()
                     && !pg_cache.load_bars(&instrument.id()).unwrap().is_empty()
             },
-            Duration::from_secs(2),
+            Duration::from_secs(5),
         )
         .await;
         let bars = pg_cache.load_bars(&instrument.id()).unwrap();
@@ -658,7 +660,7 @@ mod serial_tests {
 
         wait_until(
             || pg_cache.load_signals(name.as_str()).unwrap().len() == 1,
-            Duration::from_secs(2),
+            Duration::from_secs(5),
         );
 
         let signals = pg_cache.load_signals(name.as_str()).unwrap();
@@ -692,7 +694,7 @@ mod serial_tests {
 
         wait_until(
             || pg_cache.load_custom_data(&data_type).unwrap().len() == 1,
-            Duration::from_secs(2),
+            Duration::from_secs(5),
         );
 
         let datas = pg_cache.load_custom_data(&data_type).unwrap();

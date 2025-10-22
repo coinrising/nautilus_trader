@@ -13,6 +13,8 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
+from libc.stdint cimport uint64_t
+
 from nautilus_trader.accounting.accounts.base cimport Account
 from nautilus_trader.core.rust.model cimport OrderSide
 from nautilus_trader.core.rust.model cimport PositionSide
@@ -20,6 +22,7 @@ from nautilus_trader.core.rust.model cimport PriceType
 from nautilus_trader.model.book cimport OrderBook
 from nautilus_trader.model.data cimport Bar
 from nautilus_trader.model.data cimport BarType
+from nautilus_trader.model.data cimport FundingRateUpdate
 from nautilus_trader.model.data cimport IndexPriceUpdate
 from nautilus_trader.model.data cimport MarkPriceUpdate
 from nautilus_trader.model.data cimport QuoteTick
@@ -62,12 +65,13 @@ cdef class CacheFacade:
     cpdef dict[InstrumentId, Price] prices(self, PriceType price_type)
     cpdef OrderBook order_book(self, InstrumentId instrument_id)
     cpdef object own_order_book(self, InstrumentId instrument_id)
-    cpdef dict[Decimal, list[Order]] own_bid_orders(self, InstrumentId instrument_id, set[OrderStatus] status=*)
-    cpdef dict[Decimal, list[Order]] own_ask_orders(self, InstrumentId instrument_id, set[OrderStatus] status=*)
+    cpdef dict[Decimal, list[Order]] own_bid_orders(self, InstrumentId instrument_id, set[OrderStatus] status=*, uint64_t accepted_buffer_ns=*, uint64_t ts_now=*)
+    cpdef dict[Decimal, list[Order]] own_ask_orders(self, InstrumentId instrument_id, set[OrderStatus] status=*, uint64_t accepted_buffer_ns=*, uint64_t ts_now=*)
     cpdef QuoteTick quote_tick(self, InstrumentId instrument_id, int index=*)
     cpdef TradeTick trade_tick(self, InstrumentId instrument_id, int index=*)
     cpdef MarkPriceUpdate mark_price(self, InstrumentId instrument_id, int index=*)
     cpdef IndexPriceUpdate index_price(self, InstrumentId instrument_id, int index=*)
+    cpdef FundingRateUpdate funding_rate(self, InstrumentId instrument_id)
     cpdef Bar bar(self, BarType bar_type, int index=*)
     cpdef int book_update_count(self, InstrumentId instrument_id)
     cpdef int quote_tick_count(self, InstrumentId instrument_id)
@@ -122,6 +126,7 @@ cdef class CacheFacade:
 # -- ACCOUNT QUERIES ------------------------------------------------------------------------------
 
     cpdef Account account(self, AccountId account_id)
+    cpdef void set_specific_venue(self, Venue venue)
     cpdef Account account_for_venue(self, Venue venue)
     cpdef AccountId account_id(self, Venue venue)
     cpdef list accounts(self)
@@ -184,7 +189,9 @@ cdef class CacheFacade:
     cpdef Position position(self, PositionId position_id)
     cpdef Position position_for_order(self, ClientOrderId client_order_id)
     cpdef PositionId position_id(self, ClientOrderId client_order_id)
+    cpdef set[PositionId] position_snapshot_ids(self, InstrumentId instrument_id=*)
     cpdef list position_snapshots(self, PositionId position_id=*)
+    cpdef list position_snapshot_bytes(self, PositionId position_id)
     cpdef list positions(self, Venue venue=*, InstrumentId instrument_id=*, StrategyId strategy_id=*, PositionSide side=*)
     cpdef list positions_open(self, Venue venue=*, InstrumentId instrument_id=*, StrategyId strategy_id=*, PositionSide side=*)
     cpdef list positions_closed(self, Venue venue=*, InstrumentId instrument_id=*, StrategyId strategy_id=*)

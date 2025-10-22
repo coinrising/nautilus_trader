@@ -19,7 +19,7 @@ use std::{
     collections::HashMap,
     fmt::{Debug, Display},
     hash::Hash,
-    num::NonZeroUsize,
+    num::{NonZero, NonZeroUsize},
     str::FromStr,
 };
 
@@ -34,11 +34,112 @@ use nautilus_core::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::GetTsInit;
+use super::HasTsInit;
 use crate::{
     enums::{AggregationSource, BarAggregation, PriceType},
     identifiers::InstrumentId,
     types::{Price, Quantity, fixed::FIXED_SIZE_BINARY},
+};
+
+pub const BAR_SPEC_1_SECOND_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(1).unwrap(),
+    aggregation: BarAggregation::Second,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_1_MINUTE_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(1).unwrap(),
+    aggregation: BarAggregation::Minute,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_3_MINUTE_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(3).unwrap(),
+    aggregation: BarAggregation::Minute,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_5_MINUTE_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(5).unwrap(),
+    aggregation: BarAggregation::Minute,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_15_MINUTE_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(15).unwrap(),
+    aggregation: BarAggregation::Minute,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_30_MINUTE_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(30).unwrap(),
+    aggregation: BarAggregation::Minute,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_1_HOUR_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(1).unwrap(),
+    aggregation: BarAggregation::Hour,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_2_HOUR_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(2).unwrap(),
+    aggregation: BarAggregation::Hour,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_4_HOUR_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(4).unwrap(),
+    aggregation: BarAggregation::Hour,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_6_HOUR_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(6).unwrap(),
+    aggregation: BarAggregation::Hour,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_12_HOUR_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(12).unwrap(),
+    aggregation: BarAggregation::Hour,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_1_DAY_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(1).unwrap(),
+    aggregation: BarAggregation::Day,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_2_DAY_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(2).unwrap(),
+    aggregation: BarAggregation::Day,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_3_DAY_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(3).unwrap(),
+    aggregation: BarAggregation::Day,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_5_DAY_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(5).unwrap(),
+    aggregation: BarAggregation::Day,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_1_WEEK_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(1).unwrap(),
+    aggregation: BarAggregation::Week,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_1_MONTH_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(1).unwrap(),
+    aggregation: BarAggregation::Month,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_3_MONTH_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(3).unwrap(),
+    aggregation: BarAggregation::Month,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_6_MONTH_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(6).unwrap(),
+    aggregation: BarAggregation::Month,
+    price_type: PriceType::Last,
+};
+pub const BAR_SPEC_12_MONTH_LAST: BarSpecification = BarSpecification {
+    step: NonZero::new(12).unwrap(),
+    aggregation: BarAggregation::Month,
+    price_type: PriceType::Last,
 };
 
 /// Returns the bar interval as a `TimeDelta`.
@@ -90,83 +191,18 @@ pub fn get_time_bar_start(
 
     match spec.aggregation {
         BarAggregation::Millisecond => {
-            let mut start_time = now.trunc_subsecs(0);
-            start_time += origin_offset;
-
-            if now < start_time {
-                start_time -= Duration::seconds(1);
-            }
-
-            while start_time <= now {
-                start_time += Duration::milliseconds(step);
-            }
-
-            start_time -= Duration::milliseconds(step);
-            start_time
+            find_closest_smaller_time(now, origin_offset, Duration::milliseconds(step))
         }
         BarAggregation::Second => {
-            let mut start_time = now.trunc_subsecs(0) - Duration::seconds(now.second() as i64);
-            start_time += origin_offset;
-
-            if now < start_time {
-                start_time -= Duration::minutes(1);
-            }
-
-            while start_time <= now {
-                start_time += Duration::seconds(step);
-            }
-
-            start_time -= Duration::seconds(step);
-            start_time
+            find_closest_smaller_time(now, origin_offset, Duration::seconds(step))
         }
         BarAggregation::Minute => {
-            let mut start_time = now.trunc_subsecs(0)
-                - Duration::seconds(now.second() as i64)
-                - Duration::minutes(now.minute() as i64);
-            start_time += origin_offset;
-
-            if now < start_time {
-                start_time -= Duration::hours(1);
-            }
-
-            while start_time <= now {
-                start_time += Duration::minutes(step);
-            }
-
-            start_time -= Duration::minutes(step);
-            start_time
+            find_closest_smaller_time(now, origin_offset, Duration::minutes(step))
         }
         BarAggregation::Hour => {
-            let mut start_time = now.trunc_subsecs(0)
-                - Duration::seconds(now.second() as i64)
-                - Duration::minutes(now.minute() as i64)
-                - Duration::hours(now.hour() as i64);
-            start_time += origin_offset;
-
-            if now < start_time {
-                start_time -= Duration::days(1);
-            }
-
-            while start_time <= now {
-                start_time += Duration::hours(step);
-            }
-
-            start_time -= Duration::hours(step);
-            start_time
+            find_closest_smaller_time(now, origin_offset, Duration::hours(step))
         }
-        BarAggregation::Day => {
-            let mut start_time = now.trunc_subsecs(0)
-                - Duration::seconds(now.second() as i64)
-                - Duration::minutes(now.minute() as i64)
-                - Duration::hours(now.hour() as i64);
-            start_time += origin_offset;
-
-            if now < start_time {
-                start_time -= Duration::days(1);
-            }
-
-            start_time
-        }
+        BarAggregation::Day => find_closest_smaller_time(now, origin_offset, Duration::days(step)),
         BarAggregation::Week => {
             let mut start_time = now.trunc_subsecs(0)
                 - Duration::seconds(now.second() as i64)
@@ -193,15 +229,18 @@ pub fn get_time_bar_start(
             start_time += origin_offset;
 
             if now < start_time {
-                start_time = subtract_n_months(start_time, 12);
+                start_time =
+                    subtract_n_months(start_time, 12).expect("Failed to subtract 12 months");
             }
 
             let months_step = step as u32;
             while start_time <= now {
-                start_time = add_n_months(start_time, months_step);
+                start_time =
+                    add_n_months(start_time, months_step).expect("Failed to add months in loop");
             }
 
-            start_time = subtract_n_months(start_time, months_step);
+            start_time =
+                subtract_n_months(start_time, months_step).expect("Failed to subtract months_step");
             start_time
         }
         _ => panic!(
@@ -209,6 +248,29 @@ pub fn get_time_bar_start(
             spec.aggregation
         ),
     }
+}
+
+/// Finds the closest smaller time based on a daily time origin and period.
+///
+/// This function calculates the most recent time that is aligned with the given period
+/// and is less than or equal to the current time.
+fn find_closest_smaller_time(
+    now: DateTime<Utc>,
+    daily_time_origin: TimeDelta,
+    period: TimeDelta,
+) -> DateTime<Utc> {
+    // Floor to start of day
+    let day_start = now.trunc_subsecs(0)
+        - Duration::seconds(now.second() as i64)
+        - Duration::minutes(now.minute() as i64)
+        - Duration::hours(now.hour() as i64);
+    let base_time = day_start + daily_time_origin;
+
+    let time_difference = now - base_time;
+    let num_periods = (time_difference.num_nanoseconds().unwrap_or(0)
+        / period.num_nanoseconds().unwrap_or(1)) as i32;
+
+    base_time + period * num_periods
 }
 
 /// Represents a bar aggregation specification including a step, aggregation
@@ -412,24 +474,24 @@ impl BarType {
     /// Returns whether this instance is a standard bar type.
     pub fn is_standard(&self) -> bool {
         match &self {
-            BarType::Standard { .. } => true,
-            BarType::Composite { .. } => false,
+            Self::Standard { .. } => true,
+            Self::Composite { .. } => false,
         }
     }
 
     /// Returns whether this instance is a composite bar type.
     pub fn is_composite(&self) -> bool {
         match &self {
-            BarType::Standard { .. } => false,
-            BarType::Composite { .. } => true,
+            Self::Standard { .. } => false,
+            Self::Composite { .. } => true,
         }
     }
 
     /// Returns the standard bar type component.
     pub fn standard(&self) -> Self {
         match &self {
-            &&b @ BarType::Standard { .. } => b,
-            BarType::Composite {
+            &&b @ Self::Standard { .. } => b,
+            Self::Composite {
                 instrument_id,
                 spec,
                 aggregation_source,
@@ -441,8 +503,8 @@ impl BarType {
     /// Returns any composite bar type component.
     pub fn composite(&self) -> Self {
         match &self {
-            &&b @ BarType::Standard { .. } => b, // case shouldn't be used if is_composite is called before
-            BarType::Composite {
+            &&b @ Self::Standard { .. } => b, // case shouldn't be used if is_composite is called before
+            Self::Composite {
                 instrument_id,
                 spec,
                 aggregation_source: _,
@@ -461,7 +523,7 @@ impl BarType {
     /// Returns the [`InstrumentId`] for this bar type.
     pub fn instrument_id(&self) -> InstrumentId {
         match &self {
-            BarType::Standard { instrument_id, .. } | BarType::Composite { instrument_id, .. } => {
+            Self::Standard { instrument_id, .. } | Self::Composite { instrument_id, .. } => {
                 *instrument_id
             }
         }
@@ -470,17 +532,17 @@ impl BarType {
     /// Returns the [`BarSpecification`] for this bar type.
     pub fn spec(&self) -> BarSpecification {
         match &self {
-            BarType::Standard { spec, .. } | BarType::Composite { spec, .. } => *spec,
+            Self::Standard { spec, .. } | Self::Composite { spec, .. } => *spec,
         }
     }
 
     /// Returns the [`AggregationSource`] for this bar type.
     pub fn aggregation_source(&self) -> AggregationSource {
         match &self {
-            BarType::Standard {
+            Self::Standard {
                 aggregation_source, ..
             }
-            | BarType::Composite {
+            | Self::Composite {
                 aggregation_source, ..
             } => *aggregation_source,
         }
@@ -604,14 +666,14 @@ impl From<&str> for BarType {
 impl Display for BarType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
-            BarType::Standard {
+            Self::Standard {
                 instrument_id,
                 spec,
                 aggregation_source,
             } => {
-                write!(f, "{}-{}-{}", instrument_id, spec, aggregation_source)
+                write!(f, "{instrument_id}-{spec}-{aggregation_source}")
             }
-            BarType::Composite {
+            Self::Composite {
                 instrument_id,
                 spec,
                 aggregation_source,
@@ -677,7 +739,7 @@ pub struct Bar {
     pub volume: Quantity,
     /// UNIX timestamp (nanoseconds) when the data event occurred.
     pub ts_event: UnixNanos,
-    /// UNIX timestamp (nanoseconds) when the struct was initialized.
+    /// UNIX timestamp (nanoseconds) when the instance was created.
     pub ts_init: UnixNanos,
 }
 
@@ -686,10 +748,10 @@ impl Bar {
     ///
     /// # Errors
     ///
-    /// This function returns an error:
-    /// - If `high` is not >= `low`.
-    /// - If `high` is not >= `close`.
-    /// - If `low` is not <= `close.
+    /// Returns an error if:
+    /// - `high` is not >= `low`.
+    /// - `high` is not >= `close`.
+    /// - `low` is not <= `close.
     ///
     /// # Notes
     ///
@@ -727,10 +789,10 @@ impl Bar {
     ///
     /// # Panics
     ///
-    /// This function panics:
-    /// - If `high` is not >= `low`.
-    /// - If `high` is not >= `close`.
-    /// - If `low` is not <= `close.
+    /// This function panics if:
+    /// - `high` is not >= `low`.
+    /// - `high` is not >= `close`.
+    /// - `low` is not <= `close.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         bar_type: BarType,
@@ -793,7 +855,7 @@ impl Display for Bar {
 
 impl Serializable for Bar {}
 
-impl GetTsInit for Bar {
+impl HasTsInit for Bar {
     fn ts_init(&self) -> UnixNanos {
         self.ts_init
     }
@@ -804,6 +866,8 @@ impl GetTsInit for Bar {
 ////////////////////////////////////////////////////////////////////////////////
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use chrono::TimeZone;
     use rstest::rstest;
 
@@ -993,6 +1057,25 @@ mod tests {
         );
         assert_eq!(bar_type.aggregation_source(), AggregationSource::External);
         assert_eq!(bar_type, BarType::from(input));
+    }
+
+    #[rstest]
+    fn test_bar_type_from_str_with_utf8_symbol() {
+        let non_ascii_instrument = "TËST-PÉRP.BINANCE";
+        let non_ascii_bar_type = "TËST-PÉRP.BINANCE-1-MINUTE-LAST-EXTERNAL";
+
+        let bar_type = BarType::from_str(non_ascii_bar_type).unwrap();
+
+        assert_eq!(
+            bar_type.instrument_id(),
+            InstrumentId::from_str(non_ascii_instrument).unwrap()
+        );
+        assert_eq!(
+            bar_type.spec(),
+            BarSpecification::new(1, BarAggregation::Minute, PriceType::Last)
+        );
+        assert_eq!(bar_type.aggregation_source(), AggregationSource::External);
+        assert_eq!(bar_type.to_string(), non_ascii_bar_type);
     }
 
     #[rstest]
@@ -1314,7 +1397,7 @@ mod tests {
     #[rstest]
     fn test_json_serialization() {
         let bar = Bar::default();
-        let serialized = bar.as_json_bytes().unwrap();
+        let serialized = bar.to_json_bytes().unwrap();
         let deserialized = Bar::from_json_bytes(serialized.as_ref()).unwrap();
         assert_eq!(deserialized, bar);
     }
@@ -1322,7 +1405,7 @@ mod tests {
     #[rstest]
     fn test_msgpack_serialization() {
         let bar = Bar::default();
-        let serialized = bar.as_msgpack_bytes().unwrap();
+        let serialized = bar.to_msgpack_bytes().unwrap();
         let deserialized = Bar::from_msgpack_bytes(serialized.as_ref()).unwrap();
         assert_eq!(deserialized, bar);
     }

@@ -23,14 +23,15 @@ use nautilus_model::{
 };
 use rust_decimal::Decimal;
 
-use super::{models::InstrumentInfo, parse::parse_settlement_currency};
+use super::{models::TardisInstrumentInfo, parse::parse_settlement_currency};
 use crate::parse::parse_option_kind;
 
 /// Returns the currency either from the internal currency map or creates a default crypto.
 pub(crate) fn get_currency(code: &str) -> Currency {
+    // SAFETY: Mutex should not be poisoned in normal operation
     CURRENCY_MAP
         .lock()
-        .unwrap()
+        .expect("Failed to acquire CURRENCY_MAP lock")
         .get(code)
         .copied()
         .unwrap_or(Currency::new(code, 8, 0, code, CurrencyType::Crypto))
@@ -39,11 +40,12 @@ pub(crate) fn get_currency(code: &str) -> Currency {
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn create_currency_pair(
-    info: &InstrumentInfo,
+    info: &TardisInstrumentInfo,
     instrument_id: InstrumentId,
     raw_symbol: Symbol,
     price_increment: Price,
     size_increment: Quantity,
+    multiplier: Option<Quantity>,
     margin_init: Decimal,
     margin_maint: Decimal,
     maker_fee: Decimal,
@@ -60,7 +62,8 @@ pub fn create_currency_pair(
         size_increment.precision,
         price_increment,
         size_increment,
-        None, // lot_size TBD
+        multiplier,
+        Some(size_increment),
         None,
         Some(Quantity::from(info.min_trade_amount.to_string().as_str())),
         None,
@@ -79,7 +82,7 @@ pub fn create_currency_pair(
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn create_crypto_perpetual(
-    info: &InstrumentInfo,
+    info: &TardisInstrumentInfo,
     instrument_id: InstrumentId,
     raw_symbol: Symbol,
     price_increment: Price,
@@ -106,7 +109,7 @@ pub fn create_crypto_perpetual(
         price_increment,
         size_increment,
         multiplier,
-        None, // lot_size TBD
+        Some(size_increment),
         None,
         Some(Quantity::from(info.min_trade_amount.to_string().as_str())),
         None,
@@ -125,7 +128,7 @@ pub fn create_crypto_perpetual(
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn create_crypto_future(
-    info: &InstrumentInfo,
+    info: &TardisInstrumentInfo,
     instrument_id: InstrumentId,
     raw_symbol: Symbol,
     activation: UnixNanos,
@@ -156,7 +159,7 @@ pub fn create_crypto_future(
         price_increment,
         size_increment,
         multiplier,
-        None, // lot_size TBD
+        Some(size_increment),
         None,
         Some(Quantity::from(info.min_trade_amount.to_string().as_str())),
         None,
@@ -173,9 +176,14 @@ pub fn create_crypto_future(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Create a crypto option instrument definition.
+///
+/// # Panics
+///
+/// Panics if the `option_type` field of `InstrumentInfo` is `None`.
 #[must_use]
 pub fn create_crypto_option(
-    info: &InstrumentInfo,
+    info: &TardisInstrumentInfo,
     instrument_id: InstrumentId,
     raw_symbol: Symbol,
     activation: UnixNanos,
@@ -201,7 +209,6 @@ pub fn create_crypto_option(
         is_inverse,
         parse_option_kind(
             info.option_type
-                .clone()
                 .expect("CryptoOption should have `option_type` field"),
         ),
         Price::new(
@@ -216,6 +223,7 @@ pub fn create_crypto_option(
         price_increment,
         size_increment,
         multiplier,
+        Some(size_increment),
         None,
         Some(Quantity::from(info.min_trade_amount.to_string().as_str())),
         None,
@@ -233,7 +241,7 @@ pub fn create_crypto_option(
 
 /// Checks if an instrument is available and valid based on time constraints.
 pub fn is_available(
-    info: &InstrumentInfo,
+    info: &TardisInstrumentInfo,
     start: Option<UnixNanos>,
     end: Option<UnixNanos>,
     available_offset: Option<UnixNanos>,
@@ -271,9 +279,12 @@ mod tests {
     use crate::tests::load_test_json;
 
     // Helper to create a basic instrument info for testing
-    fn create_test_instrument(available_since: u64, available_to: Option<u64>) -> InstrumentInfo {
+    fn create_test_instrument(
+        available_since: u64,
+        available_to: Option<u64>,
+    ) -> TardisInstrumentInfo {
         let json_data = load_test_json("instrument_spot.json");
-        let mut info: InstrumentInfo = serde_json::from_str(&json_data).unwrap();
+        let mut info: TardisInstrumentInfo = serde_json::from_str(&json_data).unwrap();
         info.available_since = UnixNanos::from(available_since).to_datetime_utc();
         info.available_to = available_to.map(|a| UnixNanos::from(a).to_datetime_utc());
         info
@@ -319,7 +330,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn test_infinite_available_to() {
         // Create instrument with infinite availability (no end date)
         let info = create_test_instrument(100, None);
@@ -359,7 +370,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[rstest]
     fn test_available_offset_effects() {
         // Create instrument with fixed availability 100-200
         let info = create_test_instrument(100, Some(200));
@@ -399,7 +410,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[rstest]
     fn test_with_real_dates() {
         // Using realistic Unix timestamps (milliseconds since epoch)
         // April 24, 2023 00:00:00 UTC = 1682294400000
@@ -444,7 +455,7 @@ mod tests {
         assert!(!is_available(&info, None, None, None, Some(end_date)));
     }
 
-    #[test]
+    #[rstest]
     fn test_complex_scenarios() {
         // Create instrument with fixed availability 100-200
         let info = create_test_instrument(100, Some(200));
@@ -502,7 +513,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[rstest]
     fn test_edge_cases() {
         // Test with empty "changes" array
         let mut info = create_test_instrument(100, Some(200));

@@ -13,6 +13,12 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
+//! Message throttling and rate limiting functionality.
+//!
+//! This module provides throttling capabilities to control the rate of message processing
+//! and prevent system overload. The throttler can buffer, drop, or delay messages based
+//! on configured rate limits and time intervals.
+
 use std::{
     any::Any,
     cell::{RefCell, UnsafeCell},
@@ -77,7 +83,7 @@ pub struct Throttler<T, F> {
     /// The interval between messages in nanoseconds.
     interval: u64,
     /// The name of the timer.
-    timer_name: String,
+    timer_name: Ustr,
     /// The callback to send a message.
     output_send: F,
     /// The callback to drop a message.
@@ -86,7 +92,7 @@ pub struct Throttler<T, F> {
 
 impl<T, F> Actor for Throttler<T, F>
 where
-    T: 'static,
+    T: 'static + Debug,
     F: Fn(T) + 'static,
 {
     fn id(&self) -> Ustr {
@@ -118,7 +124,10 @@ where
     }
 }
 
-impl<T, F> Throttler<T, F> {
+impl<T, F> Throttler<T, F>
+where
+    T: Debug,
+{
     #[inline]
     pub fn new(
         limit: usize,
@@ -138,7 +147,7 @@ impl<T, F> Throttler<T, F> {
             timestamps: VecDeque::with_capacity(limit),
             clock,
             interval,
-            timer_name,
+            timer_name: Ustr::from(&timer_name),
             output_send,
             output_drop,
             actor_id,
@@ -150,11 +159,15 @@ impl<T, F> Throttler<T, F> {
     /// Typically used to register callbacks:
     /// - to process buffered messages
     /// - to stop buffering
+    ///
+    /// # Panics
+    ///
+    /// Panics if setting the time alert on the internal clock fails.
     #[inline]
     pub fn set_timer(&mut self, callback: Option<TimeEventCallback>) {
         let delta = self.delta_next();
         let mut clock = self.clock.borrow_mut();
-        if clock.timer_names().contains(&self.timer_name.as_str()) {
+        if clock.timer_exists(&self.timer_name) {
             clock.cancel_timer(&self.timer_name);
         }
         let alert_ts = clock.timestamp_ns() + delta;
@@ -214,22 +227,19 @@ impl<T, F> Throttler<T, F> {
 
 impl<T, F> Throttler<T, F>
 where
-    T: 'static,
+    T: 'static + Debug,
     F: Fn(T) + 'static,
 {
     pub fn to_actor(self) -> Rc<UnsafeCell<Self>> {
         // Register process endpoint
         let process_handler = ThrottlerProcess::<T, F>::new(self.actor_id);
         msgbus::register(
-            process_handler.id().as_str(),
+            process_handler.id().as_str().into(),
             ShareableMessageHandler::from(Rc::new(process_handler) as Rc<dyn MessageHandler>),
         );
 
-        // Register actor state
-        let actor = Rc::new(UnsafeCell::new(self));
-        register_actor(actor.clone());
-
-        actor
+        // Register actor state and return the wrapped reference
+        register_actor(self)
     }
 
     #[inline]
@@ -292,9 +302,12 @@ struct ThrottlerProcess<T, F> {
     phantom_f: PhantomData<F>,
 }
 
-impl<T, F> ThrottlerProcess<T, F> {
+impl<T, F> ThrottlerProcess<T, F>
+where
+    T: Debug,
+{
     pub fn new(actor_id: Ustr) -> Self {
-        let endpoint = Ustr::from(&format!("{}_process", actor_id));
+        let endpoint = Ustr::from(&format!("{actor_id}_process"));
         Self {
             actor_id,
             endpoint,
@@ -304,17 +317,16 @@ impl<T, F> ThrottlerProcess<T, F> {
     }
 
     pub fn get_timer_callback(&self) -> TimeEventCallback {
-        let endpoint_clone = self.endpoint;
-        let process_callback = Rc::new(move |_event: TimeEvent| {
-            msgbus::send(&endpoint_clone, &());
-        });
-        TimeEventCallback::Rust(process_callback)
+        let endpoint = self.endpoint.into(); // TODO: Optimize this
+        TimeEventCallback::from(move |event: TimeEvent| {
+            msgbus::send_any(endpoint, &(event));
+        })
     }
 }
 
 impl<T, F> MessageHandler for ThrottlerProcess<T, F>
 where
-    T: 'static,
+    T: 'static + Debug,
     F: Fn(T) + 'static,
 {
     fn id(&self) -> Ustr {
@@ -332,12 +344,12 @@ where
             if !throttler.buffer.is_empty() && throttler.delta_next() > 0 {
                 throttler.is_limiting = true;
 
-                let endpoint_clone = self.endpoint;
+                let endpoint = self.endpoint.into(); // TODO: Optimize this
+
                 // Send message to throttler process endpoint to resume
-                let process_callback = Rc::new(move |_event: TimeEvent| {
-                    msgbus::send(&endpoint_clone, &());
-                });
-                throttler.set_timer(Some(TimeEventCallback::Rust(process_callback)));
+                throttler.set_timer(Some(TimeEventCallback::from(move |event: TimeEvent| {
+                    msgbus::send_any(endpoint, &(event));
+                })));
                 return;
             }
         }
@@ -353,15 +365,13 @@ where
 /// Sets throttler to resume sending messages
 pub fn throttler_resume<T, F>(actor_id: Ustr) -> TimeEventCallback
 where
-    T: 'static,
+    T: 'static + Debug,
     F: Fn(T) + 'static,
 {
-    let callback = Rc::new(move |_event: TimeEvent| {
+    TimeEventCallback::from(move |_event: TimeEvent| {
         let throttler = get_actor_unchecked::<Throttler<T, F>>(&actor_id);
         throttler.is_limiting = false;
-    });
-
-    TimeEventCallback::Rust(callback)
+    })
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -393,6 +403,7 @@ mod tests {
         interval: u64,
     }
 
+    #[allow(unsafe_code)]
     impl TestThrottler {
         #[allow(clippy::mut_from_ref)]
         pub fn get_throttler(&self) -> &mut Throttler<u64, Box<dyn Fn(u64)>> {
@@ -709,6 +720,10 @@ mod tests {
         assert_eq!(throttler.sent_count, 6);
     }
 
+    ////////////////////////////////////////////////////////////////////////////////
+    // Property-based testing
+    ////////////////////////////////////////////////////////////////////////////////
+
     use proptest::prelude::*;
 
     #[derive(Clone, Debug)]
@@ -756,7 +771,7 @@ mod tests {
             }
 
             // Check the throttler rate limits on the appropriate conditions
-            // * Atleast one message is buffered
+            // * At least one message is buffered
             // * Timestamp queue is filled upto limit
             // * Least recent timestamp in queue exceeds interval
             let buffered_messages = throttler.qsize() > 0;
@@ -807,13 +822,14 @@ mod tests {
     }
 
     #[rstest]
+    #[allow(unsafe_code)]
     fn prop_test() {
         let test_throttler = test_throttler_buffered();
 
         proptest!(move |(inputs in throttler_test_strategy())| {
             test_throttler_with_inputs(inputs, test_throttler.clone());
             // Reset throttler state between runs
-            let throttler = unsafe { &mut *(test_throttler.throttler.get() as *mut _ as *mut Throttler<u64, Box<dyn Fn(u64)>>) };
+            let throttler = unsafe { &mut *test_throttler.throttler.get() };
             throttler.reset();
             throttler.clock.borrow_mut().reset();
         });

@@ -13,6 +13,7 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
+import pandas as pd
 import pytest
 
 from nautilus_trader.common.component import TestClock
@@ -20,11 +21,16 @@ from nautilus_trader.core.data import Data
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.data.messages import DataResponse
 from nautilus_trader.data.messages import RequestData
+from nautilus_trader.data.messages import RequestOrderBookDepth
 from nautilus_trader.data.messages import SubscribeData
+from nautilus_trader.data.messages import SubscribeOrderBook
 from nautilus_trader.data.messages import UnsubscribeData
 from nautilus_trader.model.data import DataType
+from nautilus_trader.model.data import OrderBookDelta
+from nautilus_trader.model.data import OrderBookDepth10
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.data import TradeTick
+from nautilus_trader.model.enums import BookType
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import Symbol
@@ -44,6 +50,7 @@ class TestDataMessage:
         # Arrange, Act , Assert
         with pytest.raises(ValueError) as e:
             SubscribeData(
+                instrument_id=None,
                 client_id=None,
                 venue=None,
                 data_type=DataType(Data, {"type": "newswire"}),
@@ -55,6 +62,7 @@ class TestDataMessage:
 
         with pytest.raises(ValueError) as e:
             UnsubscribeData(
+                instrument_id=None,
                 client_id=None,
                 venue=None,
                 data_type=DataType(Data, {"type": "newswire"}),
@@ -68,6 +76,7 @@ class TestDataMessage:
             handler = []
             RequestData(
                 data_type=DataType(QuoteTick),
+                instrument_id=None,
                 start=None,
                 end=None,
                 limit=0,
@@ -90,6 +99,8 @@ class TestDataMessage:
                 correlation_id=UUID4(),
                 response_id=UUID4(),
                 ts_init=self.clock.timestamp_ns(),
+                start=pd.Timestamp("2023-01-01"),
+                end=pd.Timestamp("2023-01-02"),
             )
         assert issubclass(e.type, ValueError)
         assert e.match("Both `client_id` and `venue` were None")
@@ -99,6 +110,7 @@ class TestDataMessage:
         command_id = UUID4()
 
         command = SubscribeData(
+            instrument_id=None,
             client_id=None,
             venue=BINANCE,
             data_type=DataType(Data, {"type": "newswire"}),
@@ -125,6 +137,7 @@ class TestDataMessage:
         command_id = UUID4()
 
         command = SubscribeData(
+            instrument_id=None,
             client_id=ClientId(BINANCE.value),
             venue=BINANCE,
             data_type=DataType(TradeTick, {"instrument_id": "BTCUSDT"}),
@@ -157,6 +170,7 @@ class TestDataMessage:
                     "instrument_id": InstrumentId(Symbol("SOMETHING"), Venue("RANDOM")),
                 },
             ),
+            instrument_id=InstrumentId(Symbol("SOMETHING"), Venue("RANDOM")),
             start=None,
             end=None,
             limit=1000,
@@ -171,12 +185,12 @@ class TestDataMessage:
         # Assert
         assert (
             str(request)
-            == "RequestData(data_type=Data{'instrument_id': InstrumentId('SOMETHING.RANDOM')}, start=None, end=None, "
-            "limit=1000, client_id=None, venue=BINANCE)"
+            == "RequestData(data_type=Data{'instrument_id': InstrumentId('SOMETHING.RANDOM')}, instrument_id=SOMETHING.RANDOM, "
+            "start=None, end=None, limit=1000, client_id=None, venue=BINANCE)"
         )
         assert repr(request) == (
             f"RequestData(data_type=Data{{'instrument_id': InstrumentId('SOMETHING.RANDOM')}}, "
-            f"start=None, end=None, limit=1000, client_id=None, venue=BINANCE, callback={handler!r}, id={request_id})"
+            f"instrument_id=SOMETHING.RANDOM, start=None, end=None, limit=1000, client_id=None, venue=BINANCE, callback={handler!r}, id={request_id})"
         )
 
     def test_venue_data_request_message_str_and_repr(self):
@@ -191,6 +205,7 @@ class TestDataMessage:
                     "instrument_id": InstrumentId(Symbol("SOMETHING"), Venue("RANDOM")),
                 },
             ),
+            instrument_id=InstrumentId(Symbol("SOMETHING"), Venue("RANDOM")),
             start=None,
             end=None,
             limit=1000,
@@ -205,12 +220,12 @@ class TestDataMessage:
         # Assert
         assert (
             str(request)
-            == "RequestData(data_type=TradeTick{'instrument_id': InstrumentId('SOMETHING.RANDOM')}, start=None, end=None, "
-            "limit=1000, client_id=None, venue=BINANCE)"
+            == "RequestData(data_type=TradeTick{'instrument_id': InstrumentId('SOMETHING.RANDOM')}, instrument_id=SOMETHING.RANDOM, "
+            "start=None, end=None, limit=1000, client_id=None, venue=BINANCE)"
         )
         assert (
             f"RequestData(data_type=TradeTick{{'instrument_id': InstrumentId('SOMETHING.RANDOM'), 'limit': 1000}}, "
-            f"start=None, end=None, client_id=None, venue=BINANCE, callback={handler!r}, id={request_id})"
+            f"instrument_id=SOMETHING.RANDOM, start=None, end=None, client_id=None, venue=BINANCE, callback={handler!r}, id={request_id})"
         )
 
     def test_data_response_message_str_and_repr(self):
@@ -227,6 +242,8 @@ class TestDataMessage:
             correlation_id=correlation_id,
             response_id=response_id,
             ts_init=self.clock.timestamp_ns(),
+            start=pd.Timestamp("2023-01-01"),
+            end=pd.Timestamp("2023-01-02"),
         )
 
         # Assert
@@ -257,6 +274,8 @@ class TestDataMessage:
             correlation_id=correlation_id,
             response_id=response_id,
             ts_init=self.clock.timestamp_ns(),
+            start=pd.Timestamp("2023-01-01"),
+            end=pd.Timestamp("2023-01-02"),
         )
 
         # Assert
@@ -272,3 +291,67 @@ class TestDataMessage:
             f"correlation_id={correlation_id}, "
             f"id={response_id})"
         )
+
+    def test_subscribe_order_book_to_request_conversion(self):
+        # Arrange
+        instrument_id = InstrumentId(Symbol("AUD/USD"), Venue("SIM"))
+        command_id = UUID4()
+
+        subscribe = SubscribeOrderBook(
+            instrument_id=instrument_id,
+            book_data_type=OrderBookDepth10,
+            book_type=BookType.L2_MBP,
+            client_id=ClientId("TEST"),
+            venue=instrument_id.venue,
+            command_id=command_id,
+            ts_init=self.clock.timestamp_ns(),
+            depth=10,
+        )
+
+        callback = [].append
+        start = pd.Timestamp("2023-01-01", tz="UTC")
+        end = pd.Timestamp("2023-01-02", tz="UTC")
+
+        # Act
+        request = subscribe.to_request(start=start, end=end, callback=callback)
+
+        # Assert
+        assert isinstance(request, RequestOrderBookDepth)
+        assert request.instrument_id == instrument_id
+        assert request.start == start
+        assert request.end == end
+        assert request.depth == 10
+        assert request.limit == 0
+        assert request.client_id == ClientId("TEST")
+        assert request.venue == instrument_id.venue
+        assert request.callback == callback
+        assert request.id == command_id
+        assert "subscription_name" in request.params
+        assert request.params["subscription_name"] == "OrderBookDepth10.AUD/USD.SIM"
+
+    def test_subscribe_order_book_to_request_conversion_with_invalid_data_type_raises_error(self):
+        # Arrange
+        instrument_id = InstrumentId(Symbol("AUD/USD"), Venue("SIM"))
+        command_id = UUID4()
+
+        subscribe = SubscribeOrderBook(
+            instrument_id=instrument_id,
+            book_data_type=OrderBookDelta,  # Invalid data type for order book depth conversion
+            book_type=BookType.L2_MBP,
+            client_id=ClientId("TEST"),
+            venue=instrument_id.venue,
+            command_id=command_id,
+            ts_init=self.clock.timestamp_ns(),
+            depth=10,
+        )
+
+        callback = [].append
+        start = pd.Timestamp("2023-01-01", tz="UTC")
+        end = pd.Timestamp("2023-01-02", tz="UTC")
+
+        # Act & Assert
+        with pytest.raises(ValueError) as e:
+            subscribe.to_request(start=start, end=end, callback=callback)
+
+        assert "Cannot convert SubscribeOrderBook with data_type" in str(e.value)
+        assert "Only OrderBookDepth10 subscriptions can be converted" in str(e.value)

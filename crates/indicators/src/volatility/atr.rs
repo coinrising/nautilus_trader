@@ -22,7 +22,7 @@ use crate::{
     indicator::{Indicator, MovingAverage},
 };
 
-/// An indicator which calculates a Average True Range (ATR) across a rolling window.
+/// An indicator which calculates an Average True Range (ATR) across a rolling window.
 #[repr(C)]
 #[derive(Debug)]
 #[cfg_attr(
@@ -195,7 +195,7 @@ mod tests {
     #[rstest]
     fn test_value_with_epsilon_input() {
         let mut atr = AverageTrueRange::new(10, Some(MovingAverageType::Simple), None, None);
-        let epsilon = std::f64::EPSILON;
+        let epsilon = f64::EPSILON;
         atr.update_raw(epsilon, epsilon, epsilon);
         assert_eq!(atr.value, 0.0);
     }

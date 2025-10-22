@@ -20,7 +20,7 @@ use nautilus_core::{
     python::{to_pyruntime_err, to_pyvalue_err},
 };
 use nautilus_model::{
-    identifiers::TraderId,
+    identifiers::{AccountId, ClientOrderId, PositionId, TraderId},
     python::{
         account::account_any_to_pyobject, instruments::instrument_any_to_pyobject,
         orders::order_any_to_pyobject,
@@ -61,12 +61,12 @@ impl RedisCacheDatabase {
     }
 
     #[pyo3(name = "load_all")]
-    fn py_load_all(&mut self) -> PyResult<PyObject> {
+    fn py_load_all(&mut self) -> PyResult<Py<PyAny>> {
         let result = get_runtime().block_on(async {
             DatabaseQueries::load_all(&self.con, self.get_encoding(), self.get_trader_key()).await
         });
         match result {
-            Ok(cache_map) => Python::with_gil(|py| {
+            Ok(cache_map) => Python::attach(|py| {
                 let dict = PyDict::new(py);
 
                 // Load currencies
@@ -139,14 +139,29 @@ impl RedisCacheDatabase {
     }
 
     #[pyo3(name = "read")]
-    fn py_read(&mut self, py: Python, key: &str) -> PyResult<Vec<PyObject>> {
+    fn py_read(&mut self, py: Python, key: &str) -> PyResult<Vec<Py<PyAny>>> {
         let result = get_runtime().block_on(async { self.read(key).await });
         match result {
             Ok(result) => {
                 let vec_py_bytes = result
                     .into_iter()
                     .map(|r| PyBytes::new(py, r.as_ref()).into())
-                    .collect::<Vec<PyObject>>();
+                    .collect::<Vec<Py<PyAny>>>();
+                Ok(vec_py_bytes)
+            }
+            Err(e) => Err(to_pyruntime_err(e)),
+        }
+    }
+
+    #[pyo3(name = "read_bulk")]
+    fn py_read_bulk(&mut self, py: Python, keys: Vec<String>) -> PyResult<Vec<Option<Py<PyAny>>>> {
+        let result = get_runtime().block_on(async { self.read_bulk(&keys).await });
+        match result {
+            Ok(results) => {
+                let vec_py_bytes = results
+                    .into_iter()
+                    .map(|opt| opt.map(|bytes| PyBytes::new(py, bytes.as_ref()).into()))
+                    .collect::<Vec<Option<Py<PyAny>>>>();
                 Ok(vec_py_bytes)
             }
             Err(e) => Err(to_pyruntime_err(e)),
@@ -171,5 +186,24 @@ impl RedisCacheDatabase {
         let payload: Option<Vec<Bytes>> =
             payload.map(|vec| vec.into_iter().map(Bytes::from).collect());
         self.delete(key, payload).map_err(to_pyvalue_err)
+    }
+
+    #[pyo3(name = "delete_order")]
+    fn py_delete_order(&mut self, client_order_id: &str) -> PyResult<()> {
+        let client_order_id = ClientOrderId::new(client_order_id);
+        self.delete_order(&client_order_id).map_err(to_pyvalue_err)
+    }
+
+    #[pyo3(name = "delete_position")]
+    fn py_delete_position(&mut self, position_id: &str) -> PyResult<()> {
+        let position_id = PositionId::new(position_id);
+        self.delete_position(&position_id).map_err(to_pyvalue_err)
+    }
+
+    #[pyo3(name = "delete_account_event")]
+    fn py_delete_account_event(&mut self, account_id: &str, event_id: &str) -> PyResult<()> {
+        let account_id = AccountId::new(account_id);
+        self.delete_account_event(&account_id, event_id)
+            .map_err(to_pyvalue_err)
     }
 }

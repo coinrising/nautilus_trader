@@ -179,6 +179,41 @@ class TestExecutionEngine:
             self.exec_client.id,
         ]
 
+    def test_execute_skips_commands_for_external_clients(self):
+        # Arrange
+        ext_client_id = ClientId("EXT_EXEC")
+
+        msgbus = MessageBus(trader_id=self.trader_id, clock=self.clock)
+        cache = Cache(database=MockCacheDatabase())
+
+        engine = ExecutionEngine(
+            msgbus=msgbus,
+            cache=cache,
+            clock=self.clock,
+            config=ExecEngineConfig(external_clients=[ext_client_id], debug=True),
+        )
+
+        order = self.order_factory.market(
+            instrument_id=AUDUSD_SIM.id,
+            order_side=OrderSide.BUY,
+            quantity=Quantity.from_int(1),
+        )
+
+        cmd = SubmitOrder(
+            trader_id=self.trader_id,
+            strategy_id=self.strategy_id,
+            order=order,
+            position_id=None,
+            client_id=ext_client_id,
+            command_id=UUID4(),
+            ts_init=self.clock.timestamp_ns(),
+        )
+
+        # Act / Assert: no error even though no client registered for EXT_EXEC
+        engine.execute(cmd)
+
+        assert engine.get_external_client_ids() == {ext_client_id}
+
     def test_register_venue_routing(self) -> None:
         # Arrange
         exec_client = MockExecutionClient(
@@ -654,6 +689,50 @@ class TestExecutionEngine:
 
         # Assert
         assert order.status == OrderStatus.INITIALIZED
+
+    def test_duplicate_order_accepted_event_logs_debug_not_warning(self) -> None:
+        # Arrange
+        self.exec_engine.start()
+
+        strategy = Strategy()
+        strategy.register(
+            trader_id=self.trader_id,
+            portfolio=self.portfolio,
+            msgbus=self.msgbus,
+            cache=self.cache,
+            clock=self.clock,
+        )
+
+        order = strategy.order_factory.market(
+            AUDUSD_SIM.id,
+            OrderSide.BUY,
+            Quantity.from_int(100_000),
+        )
+
+        submit_order = SubmitOrder(
+            trader_id=self.trader_id,
+            strategy_id=strategy.id,
+            position_id=None,
+            order=order,
+            command_id=UUID4(),
+            ts_init=self.clock.timestamp_ns(),
+        )
+
+        # Act
+        self.risk_engine.execute(submit_order)
+        self.exec_engine.process(TestEventStubs.order_submitted(order))
+        self.exec_engine.process(TestEventStubs.order_accepted(order))
+
+        # Order is now in ACCEPTED state
+        assert order.status == OrderStatus.ACCEPTED
+        initial_event_count = order.event_count
+
+        # Process duplicate OrderAccepted event
+        self.exec_engine.process(TestEventStubs.order_accepted(order))
+
+        # Assert
+        assert order.status == OrderStatus.ACCEPTED  # Status unchanged
+        assert order.event_count == initial_event_count  # Event not applied
 
     def test_order_filled_event_when_order_not_found_in_cache_logs(self) -> None:
         # Arrange
@@ -2240,6 +2319,77 @@ class TestExecutionEngine:
         assert order.quantity == expected_quantity
         assert not order.is_quote_quantity
 
+    def test_submit_order_with_quote_quantity_and_conversion_disabled_keeps_quote_quantity(
+        self,
+    ) -> None:
+        # Arrange
+        local_clock = TestClock()
+        msgbus = MessageBus(trader_id=self.trader_id, clock=local_clock)
+        cache = Cache(database=MockCacheDatabase())
+        portfolio = Portfolio(msgbus=msgbus, cache=cache, clock=local_clock)
+        portfolio.update_account(TestEventStubs.margin_account_state())
+
+        config = ExecEngineConfig(convert_quote_qty_to_base=False, debug=True)
+        exec_engine = ExecutionEngine(
+            msgbus=msgbus,
+            cache=cache,
+            clock=local_clock,
+            config=config,
+        )
+
+        exec_client = MockExecutionClient(
+            client_id=ClientId(self.venue.value),
+            venue=self.venue,
+            account_type=AccountType.MARGIN,
+            base_currency=USD,
+            msgbus=msgbus,
+            cache=cache,
+            clock=local_clock,
+        )
+        exec_engine.register_client(exec_client)
+        exec_engine.start()
+
+        cache.add_instrument(AUDUSD_SIM)
+
+        tick = QuoteTick(
+            instrument_id=AUDUSD_SIM.id,
+            bid_price=Price.from_str("0.80000"),
+            ask_price=Price.from_str("0.80010"),
+            bid_size=Quantity.from_int(10_000_000),
+            ask_size=Quantity.from_int(10_000_000),
+            ts_event=0,
+            ts_init=0,
+        )
+        cache.add_quote_tick(tick)
+
+        strategy = Strategy()
+        strategy.register(
+            trader_id=self.trader_id,
+            portfolio=portfolio,
+            msgbus=msgbus,
+            cache=cache,
+            clock=local_clock,
+        )
+
+        order = strategy.order_factory.limit(
+            instrument_id=AUDUSD_SIM.id,
+            order_side=OrderSide.BUY,
+            price=Price.from_str("10.0"),
+            quantity=Quantity.from_int(100_000),
+            quote_quantity=True,
+        )
+        original_qty = order.quantity
+
+        strategy.submit_order(order)
+
+        # Act
+        exec_engine.process(TestEventStubs.order_submitted(order))
+        exec_engine.process(TestEventStubs.order_accepted(order))
+
+        # Assert
+        assert order.is_quote_quantity
+        assert order.quantity == original_qty
+
     @pytest.mark.parametrize(
         ("order_side", "expected_quantity"),
         [
@@ -2495,6 +2645,99 @@ class TestExecutionEngine:
         assert len(own_book.bids_to_dict()) == 0
         assert self.cache.own_bid_orders(instrument.id) == {}
         assert self.cache.own_ask_orders(instrument.id) == {}
+
+    def test_rejected_order_removed_from_own_book(self) -> None:
+        # Arrange
+        self.exec_engine.set_manage_own_order_books(True)
+        self.exec_engine.start()
+
+        strategy = Strategy()
+        strategy.register(
+            trader_id=self.trader_id,
+            portfolio=self.portfolio,
+            msgbus=self.msgbus,
+            cache=self.cache,
+            clock=self.clock,
+        )
+
+        order = strategy.order_factory.limit(
+            instrument_id=AUDUSD_SIM.id,
+            order_side=OrderSide.BUY,
+            quantity=Quantity.from_int(100_000),
+            price=Price.from_str("10.0"),
+        )
+
+        strategy.submit_order(order)
+
+        # Assert order was added to own book
+        own_book = self.cache.own_order_book(order.instrument_id)
+        assert len(own_book.bids_to_dict()) == 1
+
+        # Act - reject the order
+        self.exec_engine.process(TestEventStubs.order_submitted(order))
+        self.exec_engine.process(TestEventStubs.order_rejected(order))
+
+        # Assert - order should be removed from own book
+        assert len(own_book.bids_to_dict()) == 0
+        assert self.cache.own_bid_orders(order.instrument_id) == {}
+
+    @pytest.mark.parametrize(
+        ("time_in_force"),
+        [
+            TimeInForce.FOK,
+            TimeInForce.IOC,
+        ],
+    )
+    def test_ioc_fok_not_added_to_existing_own_book(self, time_in_force: TimeInForce) -> None:
+        # Arrange
+        self.exec_engine.set_manage_own_order_books(True)
+        self.exec_engine.start()
+
+        strategy = Strategy()
+        strategy.register(
+            trader_id=self.trader_id,
+            portfolio=self.portfolio,
+            msgbus=self.msgbus,
+            cache=self.cache,
+            clock=self.clock,
+        )
+
+        # First, create a normal limit order to establish an own book for this instrument
+        limit_order = strategy.order_factory.limit(
+            instrument_id=AUDUSD_SIM.id,
+            order_side=OrderSide.BUY,
+            quantity=Quantity.from_int(100_000),
+            price=Price.from_str("10.0"),
+        )
+        strategy.submit_order(limit_order)
+
+        # Assert own book exists
+        own_book = self.cache.own_order_book(limit_order.instrument_id)
+        assert own_book is not None
+        assert len(own_book.bids_to_dict()) == 1
+
+        # Act - submit IOC/FOK order for same instrument
+        ioc_fok_order = strategy.order_factory.limit(
+            instrument_id=AUDUSD_SIM.id,
+            order_side=OrderSide.BUY,
+            quantity=Quantity.from_int(50_000),
+            price=Price.from_str("10.5"),
+            time_in_force=time_in_force,
+        )
+        strategy.submit_order(ioc_fok_order)
+
+        # Assert - IOC/FOK order should NOT be in own book
+        assert len(own_book.bids_to_dict()) == 1  # Still just the limit order
+        assert Decimal("10.0") in own_book.bids_to_dict()
+        assert Decimal("10.5") not in own_book.bids_to_dict()
+
+        # Simulate rejection and ensure it doesn't cause issues
+        self.exec_engine.process(TestEventStubs.order_submitted(ioc_fok_order))
+        self.exec_engine.process(TestEventStubs.order_rejected(ioc_fok_order))
+
+        # Assert - still only the limit order in book
+        assert len(own_book.bids_to_dict()) == 1
+        assert Decimal("10.0") in own_book.bids_to_dict()
 
     def test_own_book_status_filtering(self) -> None:
         # Arrange
@@ -3530,3 +3773,145 @@ class TestExecutionEngine:
         assert order2.status == OrderStatus.SUBMITTED
         assert len(own_book.bids_to_dict()) == 1
         assert order2.client_order_id.value == own_book.bid_client_order_ids()[0].value
+
+    def test_own_book_accepted_buffer_filtering(self) -> None:
+        # Arrange
+        self.exec_engine.set_manage_own_order_books(True)
+        self.exec_engine.start()
+
+        strategy = Strategy()
+        strategy.register(
+            trader_id=self.trader_id,
+            portfolio=self.portfolio,
+            msgbus=self.msgbus,
+            cache=self.cache,
+            clock=self.clock,
+        )
+
+        instrument = AUDUSD_SIM
+
+        # Create and submit orders at different times
+        bid_order = strategy.order_factory.limit(
+            instrument_id=instrument.id,
+            order_side=OrderSide.BUY,
+            quantity=Quantity.from_int(100_000),
+            price=Price.from_str("1.00000"),
+        )
+
+        ask_order = strategy.order_factory.limit(
+            instrument_id=instrument.id,
+            order_side=OrderSide.SELL,
+            quantity=Quantity.from_int(100_000),
+            price=Price.from_str("1.10000"),
+        )
+
+        # Submit and accept first order (older)
+        strategy.submit_order(bid_order)
+        self.exec_engine.process(TestEventStubs.order_submitted(bid_order))
+
+        # Set accepted time for first order
+        bid_accepted_time = self.clock.timestamp_ns()
+        self.exec_engine.process(
+            TestEventStubs.order_accepted(bid_order, ts_event=bid_accepted_time),
+        )
+
+        # Advance time by 5 seconds
+        self.clock.advance_time(5_000_000_000)  # 5 seconds in nanoseconds
+
+        # Submit and accept second order (newer)
+        strategy.submit_order(ask_order)
+        self.exec_engine.process(TestEventStubs.order_submitted(ask_order))
+
+        # Set accepted time for second order
+        ask_accepted_time = self.clock.timestamp_ns()
+        self.exec_engine.process(
+            TestEventStubs.order_accepted(ask_order, ts_event=ask_accepted_time),
+        )
+
+        # Test without buffer - should return both orders
+        bid_orders_no_buffer = self.cache.own_bid_orders(instrument.id, accepted_buffer_ns=0)
+        ask_orders_no_buffer = self.cache.own_ask_orders(instrument.id, accepted_buffer_ns=0)
+
+        assert len(bid_orders_no_buffer) == 1
+        assert len(ask_orders_no_buffer) == 1
+        assert Decimal("1.00000") in bid_orders_no_buffer
+        assert Decimal("1.10000") in ask_orders_no_buffer
+
+        # Test validation: accepted_buffer_ns > 0 but ts_now == 0 should raise ValueError
+        with pytest.raises(ValueError, match="ts_now must be provided when accepted_buffer_ns > 0"):
+            self.cache.own_bid_orders(instrument.id, accepted_buffer_ns=2_000_000_000)
+
+        with pytest.raises(ValueError, match="ts_now must be provided when accepted_buffer_ns > 0"):
+            self.cache.own_ask_orders(instrument.id, accepted_buffer_ns=2_000_000_000)
+
+        # Test with buffer and current time (should work properly now)
+        current_time = self.clock.timestamp_ns()
+        bid_orders_2s_buffer = self.cache.own_bid_orders(
+            instrument.id,
+            accepted_buffer_ns=2_000_000_000,
+            ts_now=current_time,
+        )
+        ask_orders_2s_buffer = self.cache.own_ask_orders(
+            instrument.id,
+            accepted_buffer_ns=2_000_000_000,
+            ts_now=current_time,
+        )
+
+        # With proper filtering, newer ask order should be excluded
+        assert len(bid_orders_2s_buffer) == 1  # Bid order is older than 2s
+        assert len(ask_orders_2s_buffer) == 0  # Ask order is newer than 2s
+        assert Decimal("1.00000") in bid_orders_2s_buffer
+
+        # Test with larger buffer - should include both orders
+        bid_orders_10s_buffer = self.cache.own_bid_orders(
+            instrument.id,
+            accepted_buffer_ns=10_000_000_000,
+            ts_now=current_time,
+        )
+        ask_orders_10s_buffer = self.cache.own_ask_orders(
+            instrument.id,
+            accepted_buffer_ns=10_000_000_000,
+            ts_now=current_time,
+        )
+
+        assert len(bid_orders_10s_buffer) == 0  # Both orders are newer than 10s
+        assert len(ask_orders_10s_buffer) == 0
+
+        # Advance time and test again
+        self.clock.advance_time(15_000_000_000)  # 15 seconds
+        current_time = self.clock.timestamp_ns()
+
+        bid_orders_final = self.cache.own_bid_orders(
+            instrument.id,
+            accepted_buffer_ns=8_000_000_000,
+            ts_now=current_time,
+        )
+        ask_orders_final = self.cache.own_ask_orders(
+            instrument.id,
+            accepted_buffer_ns=8_000_000_000,
+            ts_now=current_time,
+        )
+
+        assert len(bid_orders_final) == 1  # Both orders are now older than 8s
+        assert len(ask_orders_final) == 1
+        assert Decimal("1.00000") in bid_orders_final
+        assert Decimal("1.10000") in ask_orders_final
+
+        # Test with status filtering combined with buffer
+        bid_orders_status_buffer = self.cache.own_bid_orders(
+            instrument.id,
+            status={OrderStatus.ACCEPTED},
+            accepted_buffer_ns=8_000_000_000,
+            ts_now=current_time,
+        )
+        ask_orders_status_buffer = self.cache.own_ask_orders(
+            instrument.id,
+            status={OrderStatus.ACCEPTED},
+            accepted_buffer_ns=8_000_000_000,
+            ts_now=current_time,
+        )
+
+        assert len(bid_orders_status_buffer) == 1
+        assert len(ask_orders_status_buffer) == 1
+        assert Decimal("1.00000") in bid_orders_status_buffer
+        assert Decimal("1.10000") in ask_orders_status_buffer

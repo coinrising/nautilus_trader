@@ -23,6 +23,12 @@ use rust_decimal::{
     prelude::{FromPrimitive, ToPrimitive},
 };
 
+/// Calculates the position size based on fixed risk parameters.
+///
+/// # Panics
+///
+/// Panics if converting `units` to a decimal fails,
+/// or if converting the final size to `f64` fails.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 pub fn calculate_fixed_risk_position_size(
@@ -129,7 +135,7 @@ mod tests {
             1,
         );
 
-        assert_eq!(result.as_f64(), 0.0);
+        assert_eq!(result, Quantity::from("0.0"));
     }
 
     #[rstest]
@@ -151,7 +157,7 @@ mod tests {
             1,
         );
 
-        assert_eq!(result.as_f64(), 0.0);
+        assert_eq!(result, Quantity::from("0.0"));
     }
 
     #[rstest]
@@ -172,7 +178,7 @@ mod tests {
             1,
         );
 
-        assert_eq!(result.as_f64(), 0.0);
+        assert_eq!(result, Quantity::from("0.0"));
     }
 
     #[rstest]
@@ -194,7 +200,7 @@ mod tests {
             1,
         );
 
-        assert_eq!(result.as_f64(), 1_000_000.0);
+        assert_eq!(result, Quantity::from("1000000.0"));
     }
 
     #[rstest]
@@ -216,7 +222,7 @@ mod tests {
             1,
         );
 
-        assert_eq!(result.as_f64(), 1_000_000.0);
+        assert_eq!(result, Quantity::from("1000000.0"));
     }
 
     #[rstest]
@@ -238,7 +244,7 @@ mod tests {
             1,
         );
 
-        assert_eq!(result.as_f64(), 0.0);
+        assert_eq!(result, Quantity::from("0.0"));
     }
 
     #[rstest]
@@ -260,7 +266,7 @@ mod tests {
             1,
         );
 
-        assert_eq!(result.as_f64(), 500_000.0);
+        assert_eq!(result, Quantity::from("500000.0"));
     }
 
     #[rstest]
@@ -282,7 +288,7 @@ mod tests {
             3, // 3 units
         );
 
-        assert_eq!(result.as_f64(), 1000000.0);
+        assert_eq!(result, Quantity::from("1000000.0"));
     }
 
     #[rstest]
@@ -304,7 +310,7 @@ mod tests {
             4, // 4 units
         );
 
-        assert_eq!(result.as_f64(), 275000.0);
+        assert_eq!(result, Quantity::from("275000.0"));
     }
 
     #[rstest]
@@ -326,6 +332,6 @@ mod tests {
             1,
         );
 
-        assert_eq!(result.as_f64(), 1000000.0);
+        assert_eq!(result, Quantity::from("1000000.0"));
     }
 }

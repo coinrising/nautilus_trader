@@ -76,7 +76,14 @@ LIMIT_ORDER_TYPES = {
     OrderType.MARKET_TO_LIMIT,
 }
 
-LOCAL_ACTIVE_ORDER_STATUS =  {
+CANCELLABLE_ORDER_STATUSES = {
+    OrderStatus.ACCEPTED,
+    OrderStatus.TRIGGERED,
+    OrderStatus.PENDING_UPDATE,
+    OrderStatus.PARTIALLY_FILLED,
+}
+
+LOCAL_ACTIVE_ORDER_STATUSES =  {
     OrderStatus.INITIALIZED,
     OrderStatus.EMULATED,
     OrderStatus.RELEASED,
@@ -319,6 +326,9 @@ cdef class Order:
         """
         raise NotImplementedError("method `to_dict` must be implemented in the subclass")  # pragma: no cover
 
+    cdef void set_activated_c(self, Price activation_price):
+        raise NotImplementedError("method `set_activated` must be implemented in the subclass")  # pragma: no cover
+
     cdef void set_triggered_price_c(self, Price triggered_price):
         Condition.not_none(triggered_price, "triggered_price")
         self._triggered_price = triggered_price
@@ -362,6 +372,9 @@ cdef class Order:
     cdef bint has_price_c(self):
         raise NotImplementedError("method `has_price_c` must be implemented in subclass")  # pragma: no cover
 
+    cdef bint has_activation_price_c(self):
+        return False
+
     cdef bint has_trigger_price_c(self):
         raise NotImplementedError("method `has_trigger_price_c` must be implemented in subclass")  # pragma: no cover
 
@@ -381,7 +394,7 @@ cdef class Order:
         return self._fsm.state == OrderStatus.EMULATED
 
     cdef bint is_active_local_c(self):
-        return self._fsm.state in LOCAL_ACTIVE_ORDER_STATUS
+        return self._fsm.state in LOCAL_ACTIVE_ORDER_STATUSES
 
     cdef bint is_primary_c(self):
         return self.exec_algorithm_id is not None and self.exec_spawn_id == self.client_order_id
@@ -594,6 +607,18 @@ cdef class Order:
 
         """
         return self.has_trigger_price_c()
+
+    @property
+    def has_activation_price(self):
+        """
+        Return whether the order has a `activation_price` property.
+
+        Returns
+        -------
+        bool
+
+        """
+        return self.has_activation_price_c()
 
     @property
     def is_buy(self):
@@ -1139,10 +1164,12 @@ cdef class Order:
         if self.avg_px == 0.0:
             return last_px
 
+        # Use previous filled quantity (before current fill) to avoid double-counting
+        # self.filled_qty already includes last_qty at this point
         cdef double filled_qty_f64 = self.filled_qty.as_f64_c()
-        cdef double total_qty = filled_qty_f64 + last_qty
-        if total_qty > 0:  # Protect divide by zero
-            return ((self.avg_px * filled_qty_f64) + (last_px * last_qty)) / total_qty
+        cdef double prev_filled_qty = filled_qty_f64 - last_qty
+        if filled_qty_f64 > 0:  # Protect divide by zero
+            return ((self.avg_px * prev_filled_qty) + (last_px * last_qty)) / filled_qty_f64
 
     cdef void _set_slippage(self):
         pass  # Optionally implement

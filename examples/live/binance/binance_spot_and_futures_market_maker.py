@@ -16,11 +16,11 @@
 
 from decimal import Decimal
 
-from nautilus_trader.adapters.binance.common.enums import BinanceAccountType
-from nautilus_trader.adapters.binance.config import BinanceDataClientConfig
-from nautilus_trader.adapters.binance.config import BinanceExecClientConfig
-from nautilus_trader.adapters.binance.factories import BinanceLiveDataClientFactory
-from nautilus_trader.adapters.binance.factories import BinanceLiveExecClientFactory
+from nautilus_trader.adapters.binance import BinanceAccountType
+from nautilus_trader.adapters.binance import BinanceDataClientConfig
+from nautilus_trader.adapters.binance import BinanceExecClientConfig
+from nautilus_trader.adapters.binance import BinanceLiveDataClientFactory
+from nautilus_trader.adapters.binance import BinanceLiveExecClientFactory
 from nautilus_trader.cache.config import CacheConfig
 from nautilus_trader.config import InstrumentProviderConfig
 from nautilus_trader.config import LiveExecEngineConfig
@@ -33,6 +33,7 @@ from nautilus_trader.model.data import BarType
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
+from nautilus_trader.model.venues import Venue
 
 
 # *** THIS IS A TEST STRATEGY WITH NO ALPHA ADVANTAGE WHATSOEVER. ***
@@ -75,6 +76,7 @@ config_node = TradingNodeConfig(
     # streaming=StreamingConfig(catalog_path="catalog"),
     data_clients={
         "BINANCE_SPOT": BinanceDataClientConfig(
+            venue=Venue("BINANCE_SPOT"),
             api_key=None,  # 'BINANCE_API_KEY' env var
             api_secret=None,  # 'BINANCE_API_SECRET' env var
             account_type=BinanceAccountType.SPOT,
@@ -85,9 +87,10 @@ config_node = TradingNodeConfig(
             instrument_provider=InstrumentProviderConfig(load_all=True),
         ),
         "BINANCE_FUTURES": BinanceDataClientConfig(
+            venue=Venue("BINANCE_FUTURES"),
             api_key=None,  # 'BINANCE_API_KEY' env var
             api_secret=None,  # 'BINANCE_API_SECRET' env var
-            account_type=BinanceAccountType.USDT_FUTURE,
+            account_type=BinanceAccountType.USDT_FUTURES,
             base_url_http=None,  # Override with custom endpoint
             base_url_ws=None,  # Override with custom endpoint
             us=False,  # If client is for Binance US
@@ -97,6 +100,7 @@ config_node = TradingNodeConfig(
     },
     exec_clients={
         "BINANCE_SPOT": BinanceExecClientConfig(
+            venue=Venue("BINANCE_SPOT"),
             api_key=None,  # 'BINANCE_API_KEY' env var
             api_secret=None,  # 'BINANCE_API_SECRET' env var
             account_type=BinanceAccountType.SPOT,
@@ -110,9 +114,10 @@ config_node = TradingNodeConfig(
             retry_delay_max_ms=10_000,
         ),
         "BINANCE_FUTURES": BinanceExecClientConfig(
+            venue=Venue("BINANCE_FUTURES"),
             api_key=None,  # 'BINANCE_API_KEY' env var
             api_secret=None,  # 'BINANCE_API_SECRET' env var
-            account_type=BinanceAccountType.USDT_FUTURE,
+            account_type=BinanceAccountType.USDT_FUTURES,
             base_url_http=None,  # Override with custom endpoint
             base_url_ws=None,  # Override with custom endpoint
             us=False,  # If client is for Binance US
@@ -136,9 +141,9 @@ node = TradingNode(config=config_node)
 # Configure your strategies
 spot_symbol = "ETHUSDT"
 strat_config_spot = VolatilityMarketMakerConfig(
-    instrument_id=InstrumentId.from_str(f"{spot_symbol}.BINANCE"),
-    external_order_claims=[InstrumentId.from_str(f"{spot_symbol}.BINANCE")],
-    bar_type=BarType.from_str(f"{spot_symbol}.BINANCE-1-MINUTE-LAST-INTERNAL"),
+    instrument_id=InstrumentId.from_str(f"{spot_symbol}.BINANCE_SPOT"),
+    external_order_claims=[InstrumentId.from_str(f"{spot_symbol}.BINANCE_SPOT")],
+    bar_type=BarType.from_str(f"{spot_symbol}.BINANCE_SPOT-1-MINUTE-LAST-INTERNAL"),
     atr_period=20,
     atr_multiple=6.0,
     trade_size=Decimal("0.010"),
@@ -147,9 +152,9 @@ strat_config_spot = VolatilityMarketMakerConfig(
 
 futures_symbol = "ETHUSDT-PERP"
 strat_config_futures = VolatilityMarketMakerConfig(
-    instrument_id=InstrumentId.from_str(f"{futures_symbol}.BINANCE"),
-    external_order_claims=[InstrumentId.from_str(f"{futures_symbol}.BINANCE")],
-    bar_type=BarType.from_str(f"{futures_symbol}.BINANCE-1-MINUTE-LAST-EXTERNAL"),
+    instrument_id=InstrumentId.from_str(f"{futures_symbol}.BINANCE_FUTURES"),
+    external_order_claims=[InstrumentId.from_str(f"{futures_symbol}.BINANCE_FUTURES")],
+    bar_type=BarType.from_str(f"{futures_symbol}.BINANCE_FUTURES-1-MINUTE-LAST-EXTERNAL"),
     atr_period=20,
     atr_multiple=6.0,
     trade_size=Decimal("0.010"),

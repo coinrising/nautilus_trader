@@ -1,9 +1,9 @@
 # Getting Started
 
-To get started with NautilusTrader you will need the following:
+To get started with NautilusTrader, you will need:
 
-- A Python environment with the `nautilus_trader` package installed.
-- A way to launch Python scripts for backtesting and/or live trading (either from the command line, or Jupyter notebook etc).
+- A Python 3.11–3.13 environment with the `nautilus_trader` package installed.
+- A way to run Python scripts or Jupyter notebooks for backtesting and/or live trading.
 
 ## [Installation](installation.md)
 
@@ -15,18 +15,17 @@ The **Quickstart** provides a step-by-step walk through for setting up your firs
 
 ## Examples in repository
 
-The examples presented in the [online documentation](https://nautilustrader.io/docs/latest/) cover only a portion of all
-available examples. For a complete collection, we recommend downloading the [GitHub repository](https://github.com/nautechsystems/nautilus_trader).
+The [online documentation](https://nautilustrader.io/docs/latest/) shows just a subset of examples. For the full set, see this repository on GitHub.
 
 The following table lists example locations ordered by recommended learning progression:
 
 | Directory                   | Contains                                                                                                                    |
 |:----------------------------|:----------------------------------------------------------------------------------------------------------------------------|
-| `/examples`                 | Fully runnable self-contained examples.                                                                                     |
-| `/docs/tutorials`           | Various examples in form of Jupyter notebooks.                                                                              |
-| `/docs/concepts`            | Contains numerous small code snippets that provide an overview of available features, but examples are mostly not runnable. |
-| `/nautilus_trader/examples` | Example implementations of basic strategies + indicators (in pure python) + algorithms.                                     |
-| `/tests/unit_tests`         | Unit-tests can be useful when looking for specific implementation details not covered in the examples.                      |
+| [examples/](https://github.com/nautechsystems/nautilus_trader/tree/develop/examples)                 | Fully runnable, self-contained Python examples.                                                                                     |
+| [docs/tutorials/](../tutorials/)           | Jupyter notebook tutorials demonstrating common workflows.                                                                              |
+| [docs/concepts/](../concepts/)            | Concept guides with concise code snippets illustrating key features. |
+| [nautilus_trader/examples/](../../nautilus_trader/examples/) | Pure-Python examples of basic strategies, indicators, and execution algorithms.                                     |
+| [tests/unit_tests/](../../tests/unit_tests/)         | Unit tests covering core functionality and edge cases.                      |
 
 ## Backtesting API levels
 
@@ -34,8 +33,8 @@ NautilusTrader provides two different API levels for backtesting:
 
 | API Level      | Description                           | Characteristics                                                                                                                                                                                                                                                                                                                                                        |
 |:---------------|:--------------------------------------|:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| High-Level API | Uses `BacktestNode` and `TradingNode` | • Recommended for production use<br>• Provides easier transition to live trading<br>• Requires using the data catalog (structured storage of market data in Parquet format)                                                                                                                                                                                            |
-| Low-Level API  | Uses `BacktestEngine`                 | • Primarily intended for testing and development of the library, but it is very useful for general backtesting<br>• Does not support live trading transition<br>• Allows direct access to components, so it may be easier to understand for beginners<br>• More transparent about internal operations but may lead to developing habits incompatible with live trading |
+| High-Level API | Uses `BacktestNode` and `TradingNode` | Recommended for production: easier transition to live trading; requires a Parquet-based data catalog. |
+| Low-Level API  | Uses `BacktestEngine`                 | Intended for library development: no live-trading path; direct component access; may encourage non–live-compatible patterns. |
 
 Backtesting involves running simulated trading systems on historical data.
 
@@ -58,24 +57,23 @@ and then use this data with a `BacktestNode` to run a single backtest.
 
 ## Running in docker
 
-Alternatively, a self-contained dockerized Jupyter notebook server is available for download, which does not require any setup or
-installation. This is the fastest way to get up and running to try out NautilusTrader. Bear in mind that any data will be
-deleted when the container is deleted.
+Alternatively, you can download a self-contained dockerized Jupyter notebook server, which requires no setup or
+installation. This is the fastest way to get up and running to try out NautilusTrader. Note that deleting the container will also delete any data.
 
 - To get started, install docker:
-  - Go to [docker.com](https://docs.docker.com/get-docker/) and follow the instructions
-- From a terminal, download the latest image
+  - Go to [Docker installation guide](https://docs.docker.com/get-docker/) and follow the instructions.
+- From a terminal, download the latest image:
   - `docker pull ghcr.io/nautechsystems/jupyterlab:nightly --platform linux/amd64`
 - Run the docker container, exposing the jupyter port:
   - `docker run -p 8888:8888 ghcr.io/nautechsystems/jupyterlab:nightly`
-- Open your web browser to `localhost:{port}`
+- Open your web browser to `localhost:{port}`:
   - <http://localhost:8888>
 
 :::info
 NautilusTrader currently exceeds the rate limit for Jupyter notebook logging (stdout output),
-this is why `log_level` in the examples is set to `ERROR`. If you lower this level to see
-more logging then the notebook will hang during cell execution. A fix is currently
-being investigated which involves either raising the configured rate limits for
+therefore we set `log_level` to `ERROR` in the examples. Lowering this level to see
+more logging will cause the notebook to hang during cell execution. We are currently
+investigating a fix that involves either raising the configured rate limits for
 Jupyter, or throttling the log flushing from Nautilus.
 
 - <https://github.com/jupyterlab/jupyterlab/issues/12845>

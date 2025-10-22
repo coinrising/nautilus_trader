@@ -22,6 +22,11 @@ use nautilus_model::{
 use rust_decimal::prelude::ToPrimitive;
 
 pub trait FeeModel {
+    /// Calculates commission for a fill.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if commission calculation fails.
     fn get_commission(
         &self,
         order: &OrderAny,
@@ -69,11 +74,15 @@ pub struct FixedFeeModel {
 
 impl FixedFeeModel {
     /// Creates a new [`FixedFeeModel`] instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `commission` is negative.
     pub fn new(commission: Money, change_commission_once: Option<bool>) -> anyhow::Result<Self> {
-        if commission.as_f64() < 0.0 {
-            anyhow::bail!("Commission must be greater than or equal to zero.")
+        if commission.raw < 0 {
+            anyhow::bail!("Commission must be greater than or equal to zero")
         }
-        let zero_commission = Money::new(0.0, commission.currency);
+        let zero_commission = Money::zero(commission.currency);
         Ok(Self {
             commission,
             zero_commission,
@@ -113,7 +122,7 @@ impl FeeModel for MakerTakerFeeModel {
         let commission = match order.liquidity_side() {
             Some(LiquiditySide::Maker) => notional * instrument.maker_fee().to_f64().unwrap(),
             Some(LiquiditySide::Taker) => notional * instrument.taker_fee().to_f64().unwrap(),
-            Some(LiquiditySide::NoLiquiditySide) | None => anyhow::bail!("Liquidity side not set."),
+            Some(LiquiditySide::NoLiquiditySide) | None => anyhow::bail!("Liquidity side not set"),
         };
         if instrument.is_inverse() {
             Ok(Money::new(commission, instrument.base_currency().unwrap()))
@@ -136,7 +145,6 @@ mod tests {
         types::{Currency, Money, Price, Quantity},
     };
     use rstest::rstest;
-    use rust_decimal::prelude::ToPrimitive;
 
     use super::{FeeModel, FixedFeeModel, MakerTakerFeeModel};
 
@@ -219,7 +227,7 @@ mod tests {
     fn test_maker_taker_fee_model_maker_commission() {
         let fee_model = MakerTakerFeeModel;
         let aud_usd = InstrumentAny::CurrencyPair(audusd_sim());
-        let maker_fee = aud_usd.maker_fee().to_f64().unwrap();
+        let maker_fee = aud_usd.maker_fee();
         let price = Price::from("1.0");
         let limit_order = OrderTestBuilder::new(OrderType::Limit)
             .instrument_id(aud_usd.id())
@@ -228,18 +236,18 @@ mod tests {
             .quantity(Quantity::from(100_000))
             .build();
         let fill = TestOrderStubs::make_filled_order(&limit_order, &aud_usd, LiquiditySide::Maker);
-        let expected_commission_amount = fill.quantity().as_f64() * price.as_f64() * maker_fee;
+        let expected_commission = fill.quantity().as_decimal() * price.as_decimal() * maker_fee;
         let commission = fee_model
             .get_commission(&fill, Quantity::from(100_000), Price::from("1.0"), &aud_usd)
             .unwrap();
-        assert_eq!(commission.as_f64(), expected_commission_amount);
+        assert_eq!(commission.as_decimal(), expected_commission);
     }
 
     #[rstest]
     fn test_maker_taker_fee_model_taker_commission() {
         let fee_model = MakerTakerFeeModel;
         let aud_usd = InstrumentAny::CurrencyPair(audusd_sim());
-        let maker_fee = aud_usd.taker_fee().to_f64().unwrap();
+        let taker_fee = aud_usd.taker_fee();
         let price = Price::from("1.0");
         let limit_order = OrderTestBuilder::new(OrderType::Limit)
             .instrument_id(aud_usd.id())
@@ -249,10 +257,10 @@ mod tests {
             .build();
 
         let fill = TestOrderStubs::make_filled_order(&limit_order, &aud_usd, LiquiditySide::Taker);
-        let expected_commission_amount = fill.quantity().as_f64() * price.as_f64() * maker_fee;
+        let expected_commission = fill.quantity().as_decimal() * price.as_decimal() * taker_fee;
         let commission = fee_model
             .get_commission(&fill, Quantity::from(100_000), Price::from("1.0"), &aud_usd)
             .unwrap();
-        assert_eq!(commission.as_f64(), expected_commission_amount);
+        assert_eq!(commission.as_decimal(), expected_commission);
     }
 }

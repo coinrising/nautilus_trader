@@ -26,6 +26,7 @@ from nautilus_trader.common.component cimport Logger
 from nautilus_trader.common.component cimport MessageBus
 from nautilus_trader.common.component cimport is_logging_initialized
 from nautilus_trader.core.correctness cimport Condition
+from nautilus_trader.core.message cimport Command
 from nautilus_trader.core.message cimport Event
 from nautilus_trader.core.rust.model cimport ContingencyType
 from nautilus_trader.core.rust.model cimport OrderStatus
@@ -558,7 +559,7 @@ cdef class OrderManager:
         Condition.not_none(command, "command")
 
         if self.log_commands and is_logging_initialized():
-            self._log.info(f"{CMD}{SENT} {command}")  # pragma: no cover  (no logging in tests)
+            self._log.info(f"{CMD}{SENT} [Emulator] {command}")  # pragma: no cover  (no logging in tests)
         self._msgbus.send(endpoint="OrderEmulator.execute", msg=command)
 
     cpdef void send_algo_command(self, TradingCommand command, ExecAlgorithmId exec_algorithm_id):
@@ -566,21 +567,21 @@ cdef class OrderManager:
         Condition.not_none(exec_algorithm_id, "exec_algorithm_id")
 
         if self.log_commands and is_logging_initialized():
-            self._log.info(f"{CMD}{SENT} {command}")  # pragma: no cover  (no logging in tests)
+            self._log.info(f"{CMD}{SENT} [Algorithm] {command}")  # pragma: no cover  (no logging in tests)
         self._msgbus.send(endpoint=f"{exec_algorithm_id}.execute", msg=command)
 
     cpdef void send_risk_command(self, TradingCommand command):
         Condition.not_none(command, "command")
 
         if self.log_commands and is_logging_initialized():
-            self._log.info(f"{CMD}{SENT} {command}")  # pragma: no cover  (no logging in tests)
+            self._log.info(f"{CMD}{SENT} [Risk] {command}")  # pragma: no cover  (no logging in tests)
         self._msgbus.send(endpoint="RiskEngine.execute", msg=command)
 
-    cpdef void send_exec_command(self, TradingCommand command):
+    cpdef void send_exec_command(self, Command command):
         Condition.not_none(command, "command")
 
         if self.log_commands and is_logging_initialized():
-            self._log.info(f"{CMD}{SENT} {command}")  # pragma: no cover  (no logging in tests)
+            self._log.info(f"{CMD}{SENT} [Execution] {command}")  # pragma: no cover  (no logging in tests)
         self._msgbus.send(endpoint="ExecEngine.execute", msg=command)
 
     cpdef void send_risk_event(self, OrderEvent event):

@@ -32,6 +32,14 @@ pub struct FillModel {
 
 impl FillModel {
     /// Creates a new [`FillModel`] instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any probability parameter is out of range [0.0, 1.0].
+    ///
+    /// # Panics
+    ///
+    /// Panics if probability checks fail.
     pub fn new(
         prob_fill_on_limit: f64,
         prob_fill_on_stop: f64,
@@ -55,16 +63,38 @@ impl FillModel {
         })
     }
 
+    /// Returns `true` if a limit order should be filled based on the configured probability.
     pub fn is_limit_filled(&mut self) -> bool {
         self.event_success(self.prob_fill_on_limit)
     }
 
+    /// Returns `true` if a stop order should be filled based on the configured probability.
     pub fn is_stop_filled(&mut self) -> bool {
         self.event_success(self.prob_fill_on_stop)
     }
 
+    /// Returns `true` if an order should slip by one tick based on the configured probability.
     pub fn is_slipped(&mut self) -> bool {
         self.event_success(self.prob_slippage)
+    }
+
+    /// Returns a simulated `OrderBook` for fill simulation.
+    ///
+    /// This method allows custom fill models to provide their own liquidity
+    /// simulation by returning a custom `OrderBook` that represents the expected
+    /// market liquidity. The matching engine will use this simulated `OrderBook`
+    /// to determine fills.
+    ///
+    /// The default implementation returns None, which means the matching engine
+    /// will use its standard fill logic (maintaining backward compatibility).
+    pub fn get_orderbook_for_fill_simulation(
+        &self,
+        _instrument: &dyn std::any::Any, // Placeholder for instrument type
+        _order: &dyn std::any::Any,      // Placeholder for order type
+        _best_bid: f64,
+        _best_ask: f64,
+    ) -> Option<Box<dyn std::any::Any>> {
+        None // Default implementation - use existing fill logic
     }
 
     fn event_success(&mut self, probability: f64) -> bool {

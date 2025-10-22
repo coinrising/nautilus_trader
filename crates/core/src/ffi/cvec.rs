@@ -13,13 +13,37 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
+//! Utilities for transferring heap-allocated Rust `Vec<T>` values across an FFI boundary.
+//!
+//! The primary abstraction offered by this module is `CVec`, a C-compatible struct that stores
+//! a raw pointer (`ptr`) together with the vector’s logical `len` and `cap`.  By moving the
+//! allocation metadata into a plain `repr(C)` type we allow the memory created by Rust to be
+//! owned, inspected, and ultimately freed by foreign code (or vice-versa) without introducing
+//! undefined behaviour.
+//!
+//! Only a very small API surface is exposed to C:
+//!
+//! * `cvec_new` – create an empty `CVec` sentinel that can be returned to foreign code.
+//!
+//! De-allocation is intentionally **not** provided via a generic helper. Instead each FFI module
+//! must expose its own *type-specific* `vec_*_drop` function which reconstructs the original
+//! `Vec<T>` with [`Vec::from_raw_parts`] and allows it to drop. This avoids the size-mismatch risk
+//! that a one-size-fits-all `cvec_drop` had in the past.
+//!
+//! All other manipulation happens on the Rust side before relinquishing ownership.  This keeps the
+//! rules for memory safety straightforward: foreign callers must treat the memory region pointed
+//! to by `ptr` as **opaque** and interact with it solely through the functions provided here.
+
 use std::{ffi::c_void, fmt::Display, ptr::null};
 
+use crate::ffi::abort_on_panic;
+
 /// `CVec` is a C compatible struct that stores an opaque pointer to a block of
-/// memory, it's length and the capacity of the vector it was allocated from.
+/// memory, its length and the capacity of the vector it was allocated from.
 ///
-/// NOTE: Changing the values here may lead to undefined behavior when the
-/// memory is dropped.
+/// # Safety
+///
+/// Changing the values here may lead to undefined behavior when the memory is dropped.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct CVec {
@@ -33,11 +57,29 @@ pub struct CVec {
     pub cap: usize,
 }
 
-/// Empty derivation for Send to satisfy `pyclass` requirements
-/// however this is only designed for single threaded use for now
+// SAFETY: CVec is marked as Send to satisfy PyO3's PyCapsule requirements, which need
+// to transfer ownership across the Python/Rust boundary. However, CVec contains raw
+// pointers and is only safe to use in single-threaded contexts or with external
+// synchronization guarantees.
+//
+// The Send impl is required for:
+// 1. PyO3's PyCapsule::new_with_destructor which has a Send bound
+// 2. Transferring CVec ownership to Python (which runs on a single GIL-protected thread)
+//
+// IMPORTANT: Do not send CVec instances across threads without ensuring:
+// - The underlying data type T is itself Send + Sync
+// - Proper external synchronization (e.g., mutex) protects concurrent access
+// - The CVec is consumed on the same thread where it will be reconstructed
+//
+// In practice, CVec usage in this codebase is confined to the Python FFI boundary
+// where the Python GIL provides the necessary synchronization.
 unsafe impl Send for CVec {}
 
 impl CVec {
+    /// Returns an empty [`CVec`].
+    ///
+    /// This is primarily useful for constructing a sentinel value that represents the
+    /// absence of data when crossing the FFI boundary.
     #[must_use]
     pub const fn empty() -> Self {
         Self {
@@ -86,18 +128,12 @@ impl Display for CVec {
 ////////////////////////////////////////////////////////////////////////////////
 // C API
 ////////////////////////////////////////////////////////////////////////////////
-#[cfg(feature = "ffi")]
-#[unsafe(no_mangle)]
-pub extern "C" fn cvec_drop(cvec: CVec) {
-    let CVec { ptr, len, cap } = cvec;
-    let data: Vec<u8> = unsafe { Vec::from_raw_parts(ptr.cast::<u8>(), len, cap) };
-    drop(data); // Memory freed here
-}
 
+/// Construct a new *empty* [`CVec`] value for use as initialiser/sentinel in foreign code.
 #[cfg(feature = "ffi")]
 #[unsafe(no_mangle)]
-pub const extern "C" fn cvec_new() -> CVec {
-    CVec::empty()
+pub extern "C" fn cvec_new() -> CVec {
+    abort_on_panic(CVec::empty)
 }
 
 #[cfg(test)]

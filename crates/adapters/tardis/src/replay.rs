@@ -19,11 +19,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use arrow::array::RecordBatch;
+use anyhow::Context;
+use arrow::record_batch::RecordBatch;
 use chrono::{DateTime, Duration, NaiveDate};
 use futures_util::{StreamExt, future::join_all, pin_mut};
 use heck::ToSnakeCase;
-use nautilus_core::{UnixNanos, parsing::precision_from_str};
+use nautilus_core::{UnixNanos, datetime::unix_nanos_to_iso8601, parsing::precision_from_str};
 use nautilus_model::{
     data::{
         Bar, BarType, Data, OrderBookDelta, OrderBookDeltas_API, OrderBookDepth10, QuoteTick,
@@ -31,22 +32,20 @@ use nautilus_model::{
     },
     identifiers::InstrumentId,
 };
-use nautilus_serialization::{
-    arrow::{
-        bars_to_arrow_record_batch_bytes, book_deltas_to_arrow_record_batch_bytes,
-        book_depth10_to_arrow_record_batch_bytes, quotes_to_arrow_record_batch_bytes,
-        trades_to_arrow_record_batch_bytes,
-    },
-    parquet::write_batch_to_parquet,
+use nautilus_serialization::arrow::{
+    bars_to_arrow_record_batch_bytes, book_deltas_to_arrow_record_batch_bytes,
+    book_depth10_to_arrow_record_batch_bytes, quotes_to_arrow_record_batch_bytes,
+    trades_to_arrow_record_batch_bytes,
 };
+use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
 use thousands::Separable;
 use ustr::Ustr;
 
-use super::{enums::Exchange, http::models::InstrumentInfo};
+use super::{enums::TardisExchange, http::models::TardisInstrumentInfo};
 use crate::{
     config::TardisReplayConfig,
     http::TardisHttpClient,
-    machine::{TardisMachineClient, types::InstrumentMiniInfo},
+    machine::{TardisMachineClient, types::TardisInstrumentMiniInfo},
     parse::{normalize_instrument_id, parse_instrument_id},
 };
 
@@ -76,15 +75,15 @@ impl DateCursor {
 async fn gather_instruments_info(
     config: &TardisReplayConfig,
     http_client: &TardisHttpClient,
-) -> HashMap<Exchange, Vec<InstrumentInfo>> {
+) -> HashMap<TardisExchange, Vec<TardisInstrumentInfo>> {
     let futures = config.options.iter().map(|options| {
-        let exchange = options.exchange.clone();
+        let exchange = options.exchange;
         let client = &http_client;
 
         tracing::info!("Requesting instruments for {exchange}");
 
         async move {
-            match client.instruments_info(exchange.clone(), None, None).await {
+            match client.instruments_info(exchange, None, None).await {
                 Ok(instruments) => Some((exchange, instruments)),
                 Err(e) => {
                     tracing::error!("Error fetching instruments for {exchange}: {e}");
@@ -94,7 +93,7 @@ async fn gather_instruments_info(
         }
     });
 
-    let results: Vec<(Exchange, Vec<InstrumentInfo>)> =
+    let results: Vec<(TardisExchange, Vec<TardisInstrumentInfo>)> =
         join_all(futures).await.into_iter().flatten().collect();
 
     tracing::info!("Received all instruments");
@@ -102,13 +101,26 @@ async fn gather_instruments_info(
     results.into_iter().collect()
 }
 
+/// Run the Tardis Machine replay from a JSON configuration file.
+///
+/// # Errors
+///
+/// Returns an error if reading or parsing the config file fails,
+/// or if any downstream replay operation fails.
+/// Run the Tardis Machine replay from a JSON configuration file.
+///
+/// # Panics
+///
+/// Panics if unable to determine the output path (current directory fallback fails).
 pub async fn run_tardis_machine_replay_from_config(config_filepath: &Path) -> anyhow::Result<()> {
     tracing::info!("Starting replay");
     tracing::info!("Config filepath: {config_filepath:?}");
 
-    let config_data = fs::read_to_string(config_filepath).expect("Failed to read config file");
-    let config: TardisReplayConfig =
-        serde_json::from_str(&config_data).expect("Failed to parse config JSON");
+    // Load and parse the replay configuration
+    let config_data = fs::read_to_string(config_filepath)
+        .with_context(|| format!("Failed to read config file: {config_filepath:?}"))?;
+    let config: TardisReplayConfig = serde_json::from_str(&config_data)
+        .context("Failed to parse config JSON into TardisReplayConfig")?;
 
     let path = config
         .output_path
@@ -116,9 +128,9 @@ pub async fn run_tardis_machine_replay_from_config(config_filepath: &Path) -> an
         .map(Path::new)
         .map(Path::to_path_buf)
         .or_else(|| {
-            std::env::var("NAUTILUS_CATALOG_PATH")
+            std::env::var("NAUTILUS_PATH")
                 .ok()
-                .map(|env_path| PathBuf::from(env_path).join("data"))
+                .map(|env_path| PathBuf::from(env_path).join("catalog").join("data"))
         })
         .unwrap_or_else(|| std::env::current_dir().expect("Failed to get current directory"));
 
@@ -135,7 +147,7 @@ pub async fn run_tardis_machine_replay_from_config(config_filepath: &Path) -> an
 
     for (exchange, instruments) in &info_map {
         for inst in instruments {
-            let instrument_type = inst.instrument_type.clone();
+            let instrument_type = inst.instrument_type;
             let price_precision = precision_from_str(&inst.price_increment.to_string());
             let size_precision = precision_from_str(&inst.amount_increment.to_string());
 
@@ -145,10 +157,10 @@ pub async fn run_tardis_machine_replay_from_config(config_filepath: &Path) -> an
                 parse_instrument_id(exchange, inst.id)
             };
 
-            let info = InstrumentMiniInfo::new(
+            let info = TardisInstrumentMiniInfo::new(
                 instrument_id,
                 Some(Ustr::from(&inst.id)),
-                exchange.clone(),
+                *exchange,
                 price_precision,
                 size_precision,
             );
@@ -157,7 +169,7 @@ pub async fn run_tardis_machine_replay_from_config(config_filepath: &Path) -> an
     }
 
     tracing::info!("Starting tardis-machine stream");
-    let stream = machine_client.replay(config.options).await;
+    let stream = machine_client.replay(config.options).await?;
     pin_mut!(stream);
 
     // Initialize date cursors
@@ -176,24 +188,38 @@ pub async fn run_tardis_machine_replay_from_config(config_filepath: &Path) -> an
 
     let mut msg_count = 0;
 
-    while let Some(msg) = stream.next().await {
-        match msg {
-            Data::Deltas(msg) => {
-                handle_deltas_msg(msg, &mut deltas_map, &mut deltas_cursors, &path);
-            }
-            Data::Depth10(msg) => {
-                handle_depth10_msg(*msg, &mut depths_map, &mut depths_cursors, &path);
-            }
-            Data::Quote(msg) => handle_quote_msg(msg, &mut quotes_map, &mut quotes_cursors, &path),
-            Data::Trade(msg) => handle_trade_msg(msg, &mut trades_map, &mut trades_cursors, &path),
-            Data::Bar(msg) => handle_bar_msg(msg, &mut bars_map, &mut bars_cursors, &path),
-            Data::Delta(_) => panic!("Individual delta message not implemented (or required)"),
-            _ => panic!("Not implemented"),
-        }
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(msg) => {
+                match msg {
+                    Data::Deltas(msg) => {
+                        handle_deltas_msg(msg, &mut deltas_map, &mut deltas_cursors, &path);
+                    }
+                    Data::Depth10(msg) => {
+                        handle_depth10_msg(*msg, &mut depths_map, &mut depths_cursors, &path);
+                    }
+                    Data::Quote(msg) => {
+                        handle_quote_msg(msg, &mut quotes_map, &mut quotes_cursors, &path);
+                    }
+                    Data::Trade(msg) => {
+                        handle_trade_msg(msg, &mut trades_map, &mut trades_cursors, &path);
+                    }
+                    Data::Bar(msg) => handle_bar_msg(msg, &mut bars_map, &mut bars_cursors, &path),
+                    Data::Delta(_) => {
+                        panic!("Individual delta message not implemented (or required)")
+                    }
+                    _ => panic!("Not implemented"),
+                }
 
-        msg_count += 1;
-        if msg_count % 100_000 == 0 {
-            tracing::debug!("Processed {} messages", msg_count.separate_with_commas());
+                msg_count += 1;
+                if msg_count % 100_000 == 0 {
+                    tracing::debug!("Processed {} messages", msg_count.separate_with_commas());
+                }
+            }
+            Err(e) => {
+                tracing::error!("Stream error: {e:?}");
+                break;
+            }
         }
     }
 
@@ -417,29 +443,94 @@ fn batch_and_write_bars(bars: Vec<Bar>, bar_type: &BarType, date: NaiveDate, pat
     };
 
     let filepath = path.join(parquet_filepath_bars(bar_type, date));
-    match write_batch_to_parquet(batch, &filepath, None, None, None) {
-        Ok(()) => tracing::info!("File written: {filepath:?}"),
-        Err(e) => tracing::error!("Error writing {filepath:?}: {e:?}"),
+    if let Err(e) = write_parquet_local(batch, &filepath) {
+        tracing::error!("Error writing {filepath:?}: {e:?}");
+    } else {
+        tracing::info!("File written: {filepath:?}");
     }
 }
 
+/// Asserts that the given date is on or after the UNIX epoch (1970-01-01).
+///
+/// # Panics
+///
+/// Panics if the date is before 1970-01-01, as pre-epoch dates cannot be
+/// reliably represented as UnixNanos without overflow issues.
+fn assert_post_epoch(date: NaiveDate) {
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).expect("UNIX epoch must exist");
+    if date < epoch {
+        panic!("Tardis replay filenames require dates on or after 1970-01-01; received {date}");
+    }
+}
+
+/// Converts an ISO 8601 timestamp to a filesystem-safe format.
+///
+/// This function replaces colons and dots with hyphens to make the timestamp
+/// safe for use in filenames across different filesystems.
+fn iso_timestamp_to_file_timestamp(iso_timestamp: &str) -> String {
+    iso_timestamp.replace([':', '.'], "-")
+}
+
+/// Converts timestamps to a filename using ISO 8601 format.
+///
+/// This function converts two Unix nanosecond timestamps to a filename that uses
+/// ISO 8601 format with filesystem-safe characters, matching the catalog convention.
+fn timestamps_to_filename(timestamp_1: UnixNanos, timestamp_2: UnixNanos) -> String {
+    let datetime_1 = iso_timestamp_to_file_timestamp(&unix_nanos_to_iso8601(timestamp_1));
+    let datetime_2 = iso_timestamp_to_file_timestamp(&unix_nanos_to_iso8601(timestamp_2));
+
+    format!("{datetime_1}_{datetime_2}.parquet")
+}
+
 fn parquet_filepath(typename: &str, instrument_id: &InstrumentId, date: NaiveDate) -> PathBuf {
+    assert_post_epoch(date);
+
     let typename = typename.to_snake_case();
     let instrument_id_str = instrument_id.to_string().replace('/', "");
-    let date_str = date.to_string().replace('-', "");
+
+    let start_utc = date.and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let end_utc = date.and_hms_opt(23, 59, 59).unwrap() + Duration::nanoseconds(999_999_999);
+
+    let start_nanos = start_utc
+        .timestamp_nanos_opt()
+        .expect("valid nanosecond timestamp");
+    let end_nanos = (end_utc.and_utc())
+        .timestamp_nanos_opt()
+        .expect("valid nanosecond timestamp");
+
+    let filename = timestamps_to_filename(
+        UnixNanos::from(start_nanos as u64),
+        UnixNanos::from(end_nanos as u64),
+    );
+
     PathBuf::new()
         .join(typename)
         .join(instrument_id_str)
-        .join(format!("{date_str}.parquet"))
+        .join(filename)
 }
 
 fn parquet_filepath_bars(bar_type: &BarType, date: NaiveDate) -> PathBuf {
+    assert_post_epoch(date);
+
     let bar_type_str = bar_type.to_string().replace('/', "");
-    let date_str = date.to_string().replace('-', "");
-    PathBuf::new()
-        .join("bar")
-        .join(bar_type_str)
-        .join(format!("{date_str}.parquet"))
+
+    // Calculate start and end timestamps for the day (UTC)
+    let start_utc = date.and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let end_utc = date.and_hms_opt(23, 59, 59).unwrap() + Duration::nanoseconds(999_999_999);
+
+    let start_nanos = start_utc
+        .timestamp_nanos_opt()
+        .expect("valid nanosecond timestamp");
+    let end_nanos = (end_utc.and_utc())
+        .timestamp_nanos_opt()
+        .expect("valid nanosecond timestamp");
+
+    let filename = timestamps_to_filename(
+        UnixNanos::from(start_nanos as u64),
+        UnixNanos::from(end_nanos as u64),
+    );
+
+    PathBuf::new().join("bar").join(bar_type_str).join(filename)
 }
 
 fn write_batch(
@@ -450,10 +541,27 @@ fn write_batch(
     path: &Path,
 ) {
     let filepath = path.join(parquet_filepath(typename, instrument_id, date));
-    match write_batch_to_parquet(batch, &filepath, None, None, None) {
-        Ok(()) => tracing::info!("File written: {filepath:?}"),
-        Err(e) => tracing::error!("Error writing {filepath:?}: {e:?}"),
+    if let Err(e) = write_parquet_local(batch, &filepath) {
+        tracing::error!("Error writing {filepath:?}: {e:?}");
+    } else {
+        tracing::info!("File written: {filepath:?}");
     }
+}
+
+fn write_parquet_local(batch: RecordBatch, file_path: &Path) -> anyhow::Result<()> {
+    if let Some(parent) = file_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let file = std::fs::File::create(file_path)?;
+    let props = WriterProperties::builder()
+        .set_compression(Compression::SNAPPY)
+        .build();
+
+    let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(())
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

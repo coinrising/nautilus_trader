@@ -24,20 +24,27 @@ use std::{cell::RefCell, rc::Rc};
 use nautilus_common::{
     cache::Cache,
     messages::data::{
-        RequestBars, RequestBookSnapshot, RequestData, RequestInstrument, RequestInstruments,
+        RequestBars, RequestBookSnapshot, RequestCustomData, RequestInstrument, RequestInstruments,
         RequestQuotes, RequestTrades, SubscribeBars, SubscribeBookDeltas, SubscribeBookDepth10,
-        SubscribeBookSnapshots, SubscribeData, SubscribeIndexPrices, SubscribeInstrument,
+        SubscribeBookSnapshots, SubscribeCustomData, SubscribeIndexPrices, SubscribeInstrument,
         SubscribeInstrumentClose, SubscribeInstrumentStatus, SubscribeInstruments,
         SubscribeMarkPrices, SubscribeQuotes, SubscribeTrades, UnsubscribeBars,
-        UnsubscribeBookDeltas, UnsubscribeBookDepth10, UnsubscribeBookSnapshots, UnsubscribeData,
-        UnsubscribeIndexPrices, UnsubscribeInstrument, UnsubscribeInstrumentClose,
-        UnsubscribeInstrumentStatus, UnsubscribeInstruments, UnsubscribeMarkPrices,
-        UnsubscribeQuotes, UnsubscribeTrades,
+        UnsubscribeBookDeltas, UnsubscribeBookDepth10, UnsubscribeBookSnapshots,
+        UnsubscribeCustomData, UnsubscribeIndexPrices, UnsubscribeInstrument,
+        UnsubscribeInstrumentClose, UnsubscribeInstrumentStatus, UnsubscribeInstruments,
+        UnsubscribeMarkPrices, UnsubscribeQuotes, UnsubscribeTrades,
     },
 };
 use nautilus_data::client::DataClient;
 use nautilus_model::identifiers::{ClientId, Venue};
 
+#[derive(Debug)]
+/// Data client implementation for backtesting market data operations.
+///
+/// The `BacktestDataClient` provides a data client interface specifically designed
+/// for backtesting environments. It handles market data subscriptions and requests
+/// during backtesting, coordinating with the backtesting engine to provide
+/// historical data replay functionality.
 pub struct BacktestDataClient {
     pub client_id: ClientId,
     pub venue: Venue,
@@ -54,6 +61,7 @@ impl BacktestDataClient {
     }
 }
 
+#[async_trait::async_trait]
 impl DataClient for BacktestDataClient {
     fn client_id(&self) -> ClientId {
         self.client_id
@@ -63,27 +71,27 @@ impl DataClient for BacktestDataClient {
         Some(self.venue)
     }
 
-    fn start(&self) -> anyhow::Result<()> {
+    fn start(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 
-    fn stop(&self) -> anyhow::Result<()> {
+    fn stop(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 
-    fn reset(&self) -> anyhow::Result<()> {
+    fn reset(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 
-    fn dispose(&self) -> anyhow::Result<()> {
+    fn dispose(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 
-    fn connect(&self) -> anyhow::Result<()> {
+    async fn connect(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 
-    fn disconnect(&self) -> anyhow::Result<()> {
+    async fn disconnect(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -97,7 +105,7 @@ impl DataClient for BacktestDataClient {
 
     // -- COMMAND HANDLERS ---------------------------------------------------------------------------
 
-    fn subscribe(&mut self, _cmd: &SubscribeData) -> anyhow::Result<()> {
+    fn subscribe(&mut self, _cmd: &SubscribeCustomData) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -155,7 +163,7 @@ impl DataClient for BacktestDataClient {
         Ok(())
     }
 
-    fn unsubscribe(&mut self, _cmd: &UnsubscribeData) -> anyhow::Result<()> {
+    fn unsubscribe(&mut self, _cmd: &UnsubscribeCustomData) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -218,7 +226,7 @@ impl DataClient for BacktestDataClient {
 
     // -- DATA REQUEST HANDLERS ---------------------------------------------------------------------------
 
-    fn request_data(&self, request: &RequestData) -> anyhow::Result<()> {
+    fn request_data(&self, request: &RequestCustomData) -> anyhow::Result<()> {
         todo!()
     }
 
@@ -246,3 +254,9 @@ impl DataClient for BacktestDataClient {
         todo!()
     }
 }
+
+// SAFETY: Cannot be sent across thread boundaries
+#[allow(unsafe_code)]
+unsafe impl Send for BacktestDataClient {}
+#[allow(unsafe_code)]
+unsafe impl Sync for BacktestDataClient {}

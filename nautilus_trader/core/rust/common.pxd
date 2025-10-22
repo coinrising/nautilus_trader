@@ -71,6 +71,21 @@ cdef extern from "../includes/common.h":
         # A trigger when the component has successfully faulted.
         FAULT_COMPLETED # = 15,
 
+    # The log level for log messages.
+    cpdef enum LogLevel:
+        # The **OFF** log level. A level lower than all other log levels (off).
+        OFF # = 0,
+        # The **TRACE** log level. Only available in Rust for debug/development builds.
+        TRACE # = 1,
+        # The **DEBUG** log level.
+        DEBUG # = 2,
+        # The **INFO** log level.
+        INFO # = 3,
+        # The **WARNING** log level.
+        WARNING # = 4,
+        # The **ERROR** log level.
+        ERROR # = 5,
+
     # The log color for log messages.
     cpdef enum LogColor:
         # The default/normal log color.
@@ -88,33 +103,52 @@ cdef extern from "../includes/common.h":
         # The red log color, typically used with [`LogLevel::Error`] level.
         RED # = 6,
 
-    # The log level for log messages.
-    cpdef enum LogLevel:
-        # The **OFF** log level. A level lower than all other log levels (off).
-        OFF # = 0,
-        # The **TRACE** log level. Only available in Rust for debug/development builds.
-        TRACE # = 1,
-        # The **DEBUG** log level.
-        DEBUG # = 2,
-        # The **INFO** log level.
-        INFO # = 3,
-        # The **WARNING** log level.
-        WARNING # = 4,
-        # The **ERROR** log level.
-        ERROR # = 5,
-
     # A real-time clock which uses system time.
     #
     # Timestamps are guaranteed to be unique and monotonically increasing.
+    #
+    # # Threading
+    #
+    # The clock holds thread-local runtime state and must remain on its originating thread.
     cdef struct LiveClock:
         pass
 
+    # A guard that manages the lifecycle of the logging subsystem.
+    #
+    # `LogGuard` ensures the logging thread remains active while instances exist and properly
+    # terminates when all guards are dropped. The system uses reference counting to track active
+    # guards - when the last `LogGuard` is dropped, the logging thread is joined to ensure all
+    # pending log messages are written before the process terminates.
+    #
+    # # Reference Counting
+    #
+    # The logging system maintains a global atomic counter of active `LogGuard` instances. This
+    # ensures that:
+    # - The logging thread remains active as long as at least one `LogGuard` exists.
+    # - All log messages are properly flushed when intermediate guards are dropped.
+    # - The logging thread is cleanly terminated and joined when the last guard is dropped.
+    #
+    # # Shutdown Behavior
+    #
+    # When the last guard is dropped, the logging thread is signaled to close, drains pending
+    # messages, and is joined to ensure all logs are written before process termination.
+    #
+    # **Python on Windows:** Non-deterministic GC order during interpreter shutdown can
+    # occasionally prevent proper thread join, resulting in truncated logs.
+    #
+    # # Limits
+    #
+    # The system supports a maximum of 255 concurrent `LogGuard` instances.
     cdef struct LogGuard:
         pass
 
     # A static test clock.
     #
     # Stores the current timestamp internally which can be advanced.
+    #
+    # # Threading
+    #
+    # This clock is thread-affine; use it only from the thread that created it.
     cdef struct TestClock:
         pass
 
@@ -163,7 +197,7 @@ cdef extern from "../includes/common.h":
         UUID4_t event_id;
         # UNIX timestamp (nanoseconds) when the event occurred.
         uint64_t ts_event;
-        # UNIX timestamp (nanoseconds) when the instance was initialized.
+        # UNIX timestamp (nanoseconds) when the instance was created.
         uint64_t ts_init;
 
     # Legacy time event handler for Cython/FFI inter-operatbility
@@ -178,34 +212,30 @@ cdef extern from "../includes/common.h":
         # The callable raw pointer.
         char *callback_ptr;
 
-    # Returns whether the core logger is enabled.
-    uint8_t logging_is_initialized();
-
-    # Sets the logging system to bypass mode.
-    void logging_set_bypass();
-
-    # Shuts down the logging system.
-    void logging_shutdown();
-
-    # Returns whether the core logger is using ANSI colors.
-    uint8_t logging_is_colored();
-
-    # Sets the global logging clock to real-time mode.
-    void logging_clock_set_realtime_mode();
-
-    # Sets the global logging clock to static mode.
-    void logging_clock_set_static_mode();
-
-    # Sets the global logging clock static time with the given UNIX timestamp (nanoseconds).
-    void logging_clock_set_static_time(uint64_t time_ns);
+    # Match a topic and a string pattern using iterative backtracking algorithm
+    # pattern can contains -
+    # '*' - match 0 or more characters after this
+    # '?' - match any character once
+    # 'a-z' - match the specific character
+    #
+    # # Safety
+    #
+    # Passing `NULL` pointers will result in a panic.
+    uint8_t is_matching_ffi(const char *topic, const char *pattern);
 
     TestClock_API test_clock_new();
 
     void test_clock_drop(TestClock_API clock);
 
+    # Registers the default callback handler for TestClock.
+    #
     # # Safety
     #
-    # - Assumes `callback_ptr` is a valid `PyCallable` pointer.
+    # Assumes `callback_ptr` is a valid `PyCallable` pointer.
+    #
+    # # Panics
+    #
+    # Panics if the `callback_ptr` is null or represents the Python `None` object.
     void test_clock_register_default_handler(TestClock_API *clock, PyObject *callback_ptr);
 
     void test_clock_set_time(const TestClock_API *clock, uint64_t to_time_ns);
@@ -224,8 +254,13 @@ cdef extern from "../includes/common.h":
 
     # # Safety
     #
-    # - Assumes `name_ptr` is a valid C string pointer.
-    # - Assumes `callback_ptr` is a valid `PyCallable` pointer.
+    # This function assumes:
+    # - `name_ptr` is a valid C string pointer.
+    # - `callback_ptr` is a valid `PyCallable` pointer.
+    #
+    # # Panics
+    #
+    # Panics if `callback_ptr` is null or if setting the timer fails.
     void test_clock_set_time_alert(TestClock_API *clock,
                                    const char *name_ptr,
                                    uint64_t alert_time_ns,
@@ -234,31 +269,42 @@ cdef extern from "../includes/common.h":
 
     # # Safety
     #
-    # - Assumes `name_ptr` is a valid C string pointer.
-    # - Assumes `callback_ptr` is a valid `PyCallable` pointer.
+    # This function assumes:
+    # - `name_ptr` is a valid C string pointer.
+    # - `callback_ptr` is a valid `PyCallable` pointer.
+    #
+    # # Parameters
+    #
+    # - `start_time_ns`: UNIX timestamp in nanoseconds. Use `0` to indicate "use current time".
+    # - `stop_time_ns`: UNIX timestamp in nanoseconds. Use `0` to indicate "no stop time".
+    #
+    # # Panics
+    #
+    # Panics if `callback_ptr` is null or represents the Python `None` object.
     void test_clock_set_timer(TestClock_API *clock,
                               const char *name_ptr,
                               uint64_t interval_ns,
                               uint64_t start_time_ns,
                               uint64_t stop_time_ns,
                               PyObject *callback_ptr,
-                              uint8_t allow_past);
+                              uint8_t allow_past,
+                              uint8_t fire_immediately);
 
     # # Safety
     #
-    # - Assumes `set_time` is a correct `uint8_t` of either 0 or 1.
+    # Assumes `set_time` is a correct `uint8_t` of either 0 or 1.
     CVec test_clock_advance_time(TestClock_API *clock, uint64_t to_time_ns, uint8_t set_time);
 
     void vec_time_event_handlers_drop(CVec v);
 
     # # Safety
     #
-    # - Assumes `name_ptr` is a valid C string pointer.
+    # Assumes `name_ptr` is a valid C string pointer.
     uint64_t test_clock_next_time(TestClock_API *clock, const char *name_ptr);
 
     # # Safety
     #
-    # - Assumes `name_ptr` is a valid C string pointer.
+    # Assumes `name_ptr` is a valid C string pointer.
     void test_clock_cancel_timer(TestClock_API *clock, const char *name_ptr);
 
     void test_clock_cancel_timers(TestClock_API *clock);
@@ -269,7 +315,11 @@ cdef extern from "../includes/common.h":
 
     # # Safety
     #
-    # - Assumes `callback_ptr` is a valid `PyCallable` pointer.
+    # Assumes `callback_ptr` is a valid `PyCallable` pointer.
+    #
+    # # Panics
+    #
+    # Panics if `callback_ptr` is null or represents the Python `None` object.
     void live_clock_register_default_handler(LiveClock_API *clock, PyObject *callback_ptr);
 
     double live_clock_timestamp(LiveClock_API *clock);
@@ -286,14 +336,15 @@ cdef extern from "../includes/common.h":
 
     # # Safety
     #
-    # - Assumes `name_ptr` is a valid C string pointer.
-    # - Assumes `callback_ptr` is a valid `PyCallable` pointer.
+    # This function assumes:
+    # - `name_ptr` is a valid C string pointer.
+    # - `callback_ptr` is a valid `PyCallable` pointer.
     #
     # # Panics
     #
-    # This function panics:
-    # - If `name` is not a valid string.
-    # - If `callback_ptr` is NULL and no default callback has been assigned on the clock.
+    # This function panics if:
+    # - `name` is not a valid string.
+    # - `callback_ptr` is NULL and no default callback has been assigned on the clock.
     void live_clock_set_time_alert(LiveClock_API *clock,
                                    const char *name_ptr,
                                    uint64_t alert_time_ns,
@@ -302,30 +353,37 @@ cdef extern from "../includes/common.h":
 
     # # Safety
     #
-    # - Assumes `name_ptr` is a valid C string pointer.
-    # - Assumes `callback_ptr` is a valid `PyCallable` pointer.
+    # This function assumes:
+    # - `name_ptr` is a valid C string pointer.
+    # - `callback_ptr` is a valid `PyCallable` pointer.
+    #
+    # # Parameters
+    #
+    # - `start_time_ns`: UNIX timestamp in nanoseconds. Use `0` to indicate "use current time".
+    # - `stop_time_ns`: UNIX timestamp in nanoseconds. Use `0` to indicate "no stop time".
     #
     # # Panics
     #
-    # This function panics:
-    # - If `name` is not a valid string.
-    # - If `callback_ptr` is NULL and no default callback has been assigned on the clock.
+    # This function panics if:
+    # - `name` is not a valid string.
+    # - `callback_ptr` is NULL and no default callback has been assigned on the clock.
     void live_clock_set_timer(LiveClock_API *clock,
                               const char *name_ptr,
                               uint64_t interval_ns,
                               uint64_t start_time_ns,
                               uint64_t stop_time_ns,
                               PyObject *callback_ptr,
-                              uint8_t allow_past);
+                              uint8_t allow_past,
+                              uint8_t fire_immediately);
 
     # # Safety
     #
-    # - Assumes `name_ptr` is a valid C string pointer.
+    # Assumes `name_ptr` is a valid C string pointer.
     uint64_t live_clock_next_time(LiveClock_API *clock, const char *name_ptr);
 
     # # Safety
     #
-    # - Assumes `name_ptr` is a valid C string pointer.
+    # Assumes `name_ptr` is a valid C string pointer.
     void live_clock_cancel_timer(LiveClock_API *clock, const char *name_ptr);
 
     void live_clock_cancel_timers(LiveClock_API *clock);
@@ -336,7 +394,11 @@ cdef extern from "../includes/common.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
+    # # Panics
+    #
+    # Panics if the input C string does not match a valid enum variant.
     ComponentState component_state_from_cstr(const char *ptr);
 
     const char *component_trigger_to_cstr(ComponentTrigger value);
@@ -345,7 +407,11 @@ cdef extern from "../includes/common.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
+    # # Panics
+    #
+    # Panics if the input C string does not match a valid enum variant.
     ComponentTrigger component_trigger_from_cstr(const char *ptr);
 
     const char *log_level_to_cstr(LogLevel value);
@@ -354,7 +420,11 @@ cdef extern from "../includes/common.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
+    # # Panics
+    #
+    # Panics if the input C string does not match a valid enum variant.
     LogLevel log_level_from_cstr(const char *ptr);
 
     const char *log_color_to_cstr(LogColor value);
@@ -363,7 +433,11 @@ cdef extern from "../includes/common.h":
     #
     # # Safety
     #
-    # - Assumes `ptr` is a valid C string pointer.
+    # Assumes `ptr` is a valid C string pointer.
+    #
+    # # Panics
+    #
+    # Panics if the input C string does not match a valid enum variant.
     LogColor log_color_from_cstr(const char *ptr);
 
     # Initializes logging.
@@ -375,13 +449,18 @@ cdef extern from "../includes/common.h":
     #
     # # Safety
     #
-    # Should only be called once during an applications run, ideally at the
+    # Should only be called once during an application's run, ideally at the
     # beginning of the run.
     #
-    # - Assume `directory_ptr` is either NULL or a valid C string pointer.
-    # - Assume `file_name_ptr` is either NULL or a valid C string pointer.
-    # - Assume `file_format_ptr` is either NULL or a valid C string pointer.
-    # - Assume `component_level_ptr` is either NULL or a valid C string pointer.
+    # This function assumes:
+    # - `directory_ptr` is either NULL or a valid C string pointer.
+    # - `file_name_ptr` is either NULL or a valid C string pointer.
+    # - `file_format_ptr` is either NULL or a valid C string pointer.
+    # - `component_level_ptr` is either NULL or a valid C string pointer.
+    #
+    # # Panics
+    #
+    # Panics if initializing the Rust logger fails.
     LogGuard_API logging_init(TraderId_t trader_id,
                               UUID4_t instance_id,
                               LogLevel level_stdout,
@@ -393,6 +472,7 @@ cdef extern from "../includes/common.h":
                               uint8_t is_colored,
                               uint8_t is_bypassed,
                               uint8_t print_config,
+                              uint8_t log_components_only,
                               uint64_t max_file_size,
                               uint32_t max_backup_count);
 
@@ -400,8 +480,9 @@ cdef extern from "../includes/common.h":
     #
     # # Safety
     #
-    # - Assumes `component_ptr` is a valid C string pointer.
-    # - Assumes `message_ptr` is a valid C string pointer.
+    # This function assumes:
+    # - `component_ptr` is a valid C string pointer.
+    # - `message_ptr` is a valid C string pointer.
     void logger_log(LogLevel level,
                     LogColor color,
                     const char *component_ptr,
@@ -411,8 +492,9 @@ cdef extern from "../includes/common.h":
     #
     # # Safety
     #
-    # - Assumes `machine_id_ptr` is a valid C string pointer.
-    # - Assumes `component_ptr` is a valid C string pointer.
+    # This function assumes:
+    # - `machine_id_ptr` is a valid C string pointer.
+    # - `component_ptr` is a valid C string pointer.
     void logging_log_header(TraderId_t trader_id,
                             const char *machine_id_ptr,
                             UUID4_t instance_id,
@@ -422,7 +504,7 @@ cdef extern from "../includes/common.h":
     #
     # # Safety
     #
-    # - Assumes `component_ptr` is a valid C string pointer.
+    # Assumes `component_ptr` is a valid C string pointer.
     void logging_log_sysinfo(const char *component_ptr);
 
     # Flushes global logger buffers of any records.
@@ -431,9 +513,23 @@ cdef extern from "../includes/common.h":
     # Flushes global logger buffers of any records and then drops the logger.
     void logger_drop(LogGuard_API log_guard);
 
+    uint8_t logging_is_initialized();
+
+    void logging_set_bypass();
+
+    void logging_shutdown();
+
+    uint8_t logging_is_colored();
+
+    void logging_clock_set_realtime_mode();
+
+    void logging_clock_set_static_mode();
+
+    void logging_clock_set_static_time(uint64_t time_ns);
+
     # # Safety
     #
-    # - Assumes `name_ptr` is borrowed from a valid Python UTF-8 `str`.
+    # Assumes `name_ptr` is borrowed from a valid Python UTF-8 `str`.
     TimeEvent_t time_event_new(const char *name_ptr,
                                UUID4_t event_id,
                                uint64_t ts_event,

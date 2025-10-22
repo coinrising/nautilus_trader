@@ -30,7 +30,7 @@ use super::enums::{DatabentoStatisticType, DatabentoStatisticUpdateAction};
 /// Represents a Databento publisher ID.
 pub type PublisherId = u16;
 
-/// Represents a Databento dataset code.
+/// Represents a Databento dataset ID.
 pub type Dataset = Ustr;
 
 /// Represents a Databento publisher.
@@ -42,7 +42,7 @@ pub type Dataset = Ustr;
 pub struct DatabentoPublisher {
     /// The publisher ID assigned by Databento, which denotes the dataset and venue.
     pub publisher_id: PublisherId,
-    /// The Databento dataset code for the publisher.
+    /// The Databento dataset ID for the publisher.
     pub dataset: dbn::Dataset,
     /// The venue for the publisher.
     pub venue: dbn::Venue,
@@ -87,6 +87,7 @@ pub struct DatabentoImbalance {
 impl DatabentoImbalance {
     /// Creates a new [`DatabentoImbalance`] instance.
     #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub const fn new(
         instrument_id: InstrumentId,
         ref_price: Price,
@@ -99,8 +100,8 @@ impl DatabentoImbalance {
         ts_event: UnixNanos,
         ts_recv: UnixNanos,
         ts_init: UnixNanos,
-    ) -> anyhow::Result<Self> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             instrument_id,
             ref_price,
             cont_book_clr_price,
@@ -112,7 +113,7 @@ impl DatabentoImbalance {
             ts_event,
             ts_recv,
             ts_init,
-        })
+        }
     }
 }
 
@@ -157,6 +158,7 @@ pub struct DatabentoStatistics {
 impl DatabentoStatistics {
     /// Creates a new [`DatabentoStatistics`] instance.
     #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub const fn new(
         instrument_id: InstrumentId,
         stat_type: DatabentoStatisticType,
@@ -171,8 +173,8 @@ impl DatabentoStatistics {
         ts_event: UnixNanos,
         ts_recv: UnixNanos,
         ts_init: UnixNanos,
-    ) -> anyhow::Result<Self> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             instrument_id,
             stat_type,
             update_action,
@@ -186,6 +188,6 @@ impl DatabentoStatistics {
             ts_event,
             ts_recv,
             ts_init,
-        })
+        }
     }
 }

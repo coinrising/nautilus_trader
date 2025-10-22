@@ -23,19 +23,15 @@ use nautilus_common::{
     clock::Clock,
     msgbus::{handler::ShareableMessageHandler, register},
 };
-use nautilus_core::UUID4;
+use nautilus_core::{UUID4, WeakCell};
 use ustr::Ustr;
 
-use crate::{
-    messages::{
-        cancel::CancelOrderHandlerAny, modify::ModifyOrderHandlerAny, submit::SubmitOrderHandlerAny,
-    },
-    order_emulator::{
-        emulator::OrderEmulator,
-        handlers::{OrderEmulatorExecuteHandler, OrderEmulatorOnEventHandler},
-    },
+use crate::order_emulator::{
+    emulator::OrderEmulator,
+    handlers::{OrderEmulatorExecuteHandler, OrderEmulatorOnEventHandler},
 };
 
+#[derive(Debug)]
 pub struct OrderEmulatorAdapter {
     emulator: Rc<RefCell<OrderEmulator>>,
 }
@@ -46,53 +42,54 @@ impl OrderEmulatorAdapter {
 
         Self::initialize_execute_handler(emulator.clone());
         Self::initialize_on_event_handler(emulator.clone());
-        Self::initialize_submit_order_handler(emulator.clone());
-        Self::initialize_cancel_order_handler(emulator.clone());
-        Self::initialize_modify_order_handler(emulator.clone());
+        // Self::initialize_submit_order_handler(emulator.clone());
+        // Self::initialize_cancel_order_handler(emulator.clone());
+        // Self::initialize_modify_order_handler(emulator.clone());
 
         Self { emulator }
     }
 
-    fn initialize_submit_order_handler(emulator: Rc<RefCell<OrderEmulator>>) {
-        let handler = SubmitOrderHandlerAny::OrderEmulator(emulator.clone());
-        emulator.borrow_mut().set_submit_order_handler(handler);
-    }
-
-    fn initialize_cancel_order_handler(emulator: Rc<RefCell<OrderEmulator>>) {
-        let handler = CancelOrderHandlerAny::OrderEmulator(emulator.clone());
-        emulator.borrow_mut().set_cancel_order_handler(handler);
-    }
-
-    fn initialize_modify_order_handler(emulator: Rc<RefCell<OrderEmulator>>) {
-        let handler = ModifyOrderHandlerAny::OrderEmulator(emulator.clone());
-        emulator.borrow_mut().set_modify_order_handler(handler);
-    }
+    // TODO: WIP: Revisit with actor framework
+    // fn initialize_submit_order_handler(emulator: Rc<RefCell<OrderEmulator>>) {
+    //     let handler = SubmitOrderHandlerAny::OrderEmulator(emulator.clone());
+    //     emulator.borrow_mut().set_submit_order_handler(handler);
+    // }
+    //
+    // fn initialize_cancel_order_handler(emulator: Rc<RefCell<OrderEmulator>>) {
+    //     let handler = CancelOrderHandlerAny::OrderEmulator(emulator.clone());
+    //     emulator.borrow_mut().set_cancel_order_handler(handler);
+    // }
+    //
+    // fn initialize_modify_order_handler(emulator: Rc<RefCell<OrderEmulator>>) {
+    //     let handler = ModifyOrderHandlerAny::OrderEmulator(emulator.clone());
+    //     emulator.borrow_mut().set_modify_order_handler(handler);
+    // }
 
     fn initialize_execute_handler(emulator: Rc<RefCell<OrderEmulator>>) {
-        let handler = ShareableMessageHandler(Rc::new(OrderEmulatorExecuteHandler {
-            id: Ustr::from(&UUID4::new().to_string()),
-            emulator,
-        }));
+        let handler = ShareableMessageHandler(Rc::new(OrderEmulatorExecuteHandler::new(
+            Ustr::from(&UUID4::new().to_string()),
+            WeakCell::from(Rc::downgrade(&emulator)),
+        )));
 
-        register("OrderEmulator.execute", handler);
+        register("OrderEmulator.execute".into(), handler);
     }
 
     fn initialize_on_event_handler(emulator: Rc<RefCell<OrderEmulator>>) {
-        let handler = ShareableMessageHandler(Rc::new(OrderEmulatorOnEventHandler {
-            id: Ustr::from(&UUID4::new().to_string()),
-            emulator,
-        }));
+        let handler = ShareableMessageHandler(Rc::new(OrderEmulatorOnEventHandler::new(
+            Ustr::from(&UUID4::new().to_string()),
+            WeakCell::from(Rc::downgrade(&emulator)),
+        )));
 
-        register("OrderEmulator.on_event", handler);
+        register("OrderEmulator.on_event".into(), handler);
     }
 
     #[must_use]
-    pub fn get_emulator(&self) -> Ref<OrderEmulator> {
+    pub fn get_emulator(&self) -> Ref<'_, OrderEmulator> {
         self.emulator.borrow()
     }
 
     #[must_use]
-    pub fn get_emulator_mut(&self) -> RefMut<OrderEmulator> {
+    pub fn get_emulator_mut(&self) -> RefMut<'_, OrderEmulator> {
         self.emulator.borrow_mut()
     }
 }

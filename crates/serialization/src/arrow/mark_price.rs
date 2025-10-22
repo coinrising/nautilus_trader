@@ -124,11 +124,15 @@ impl DecodeFromRecordBatch for MarkPriceUpdate {
         let ts_event_values = extract_column::<UInt64Array>(cols, "ts_event", 1, DataType::UInt64)?;
         let ts_init_values = extract_column::<UInt64Array>(cols, "ts_init", 2, DataType::UInt64)?;
 
-        assert_eq!(
-            value_values.value_length(),
-            PRECISION_BYTES,
-            "Price precision uses {PRECISION_BYTES} byte value"
-        );
+        if value_values.value_length() != PRECISION_BYTES {
+            return Err(EncodingError::ParseError(
+                "value",
+                format!(
+                    "Invalid value length: expected {PRECISION_BYTES}, found {}",
+                    value_values.value_length()
+                ),
+            ));
+        }
 
         let result: Result<Vec<Self>, EncodingError> = (0..record_batch.num_rows())
             .map(|row| {
@@ -163,8 +167,9 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::{array::Array, record_batch::RecordBatch};
-    use nautilus_model::types::{fixed::FIXED_SCALAR, price::PriceRaw};
+    use nautilus_model::types::price::PriceRaw;
     use rstest::rstest;
+    use rust_decimal_macros::dec;
 
     use super::*;
     use crate::arrow::get_raw_price;
@@ -237,11 +242,11 @@ mod tests {
         assert_eq!(value_values.len(), 2);
         assert_eq!(
             get_raw_price(value_values.value(0)),
-            (50200.00 * FIXED_SCALAR) as PriceRaw
+            Price::from(dec!(50200.00).to_string()).raw
         );
         assert_eq!(
             get_raw_price(value_values.value(1)),
-            (50300.00 * FIXED_SCALAR) as PriceRaw
+            Price::from(dec!(50300.00).to_string()).raw
         );
         assert_eq!(ts_event_values.len(), 2);
         assert_eq!(ts_event_values.value(0), 1);

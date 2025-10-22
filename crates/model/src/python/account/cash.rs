@@ -31,8 +31,13 @@ use crate::{
 #[pymethods]
 impl CashAccount {
     #[new]
-    pub fn py_new(event: AccountState, calculate_account_state: bool) -> Self {
-        Self::new(event, calculate_account_state)
+    #[pyo3(signature = (event, calculate_account_state, allow_borrowing = false))]
+    pub fn py_new(
+        event: AccountState,
+        calculate_account_state: bool,
+        allow_borrowing: bool,
+    ) -> Self {
+        Self::new(event, calculate_account_state, allow_borrowing)
     }
 
     fn __richcmp__(&self, other: &Self, op: CompareOp, py: Python<'_>) -> Py<PyAny> {
@@ -46,6 +51,11 @@ impl CashAccount {
     #[getter]
     fn id(&self) -> AccountId {
         self.id
+    }
+
+    #[getter]
+    fn allow_borrowing(&self) -> bool {
+        self.allow_borrowing
     }
 
     fn __repr__(&self) -> String {
@@ -144,7 +154,7 @@ impl CashAccount {
     #[pyo3(signature = (instrument, side, quantity, price, use_quote_for_inverse=None))]
     fn py_calculate_balance_locked(
         &mut self,
-        instrument: PyObject,
+        instrument: Py<PyAny>,
         side: OrderSide,
         quantity: Quantity,
         price: Price,
@@ -160,7 +170,7 @@ impl CashAccount {
     #[pyo3(signature = (instrument, last_qty, last_px, liquidity_side, use_quote_for_inverse=None))]
     fn py_calculate_commission(
         &self,
-        instrument: PyObject,
+        instrument: Py<PyAny>,
         last_qty: Quantity,
         last_px: Price,
         liquidity_side: LiquiditySide,
@@ -185,7 +195,7 @@ impl CashAccount {
     #[pyo3(signature = (instrument, fill, position=None))]
     fn py_calculate_pnls(
         &self,
-        instrument: PyObject,
+        instrument: Py<PyAny>,
         fill: OrderFilled,
         position: Option<Position>,
         py: Python,
@@ -196,10 +206,10 @@ impl CashAccount {
     }
 
     #[pyo3(name = "to_dict")]
-    fn py_to_dict(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn py_to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let dict = PyDict::new(py);
         dict.set_item("calculate_account_state", self.calculate_account_state)?;
-        let events_list: PyResult<Vec<PyObject>> =
+        let events_list: PyResult<Vec<Py<PyAny>>> =
             self.events.iter().map(|item| item.py_to_dict(py)).collect();
         dict.set_item("events", events_list.unwrap())?;
         Ok(dict.into())

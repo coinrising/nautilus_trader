@@ -13,13 +13,13 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-use std::ops::{Deref, DerefMut};
+use std::{
+    fmt::Display,
+    ops::{Deref, DerefMut},
+};
 
 use indexmap::IndexMap;
-use nautilus_core::{
-    UUID4, UnixNanos,
-    correctness::{FAILED, check_predicate_true},
-};
+use nautilus_core::{UUID4, UnixNanos, correctness::FAILED};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use ustr::Ustr;
@@ -35,7 +35,7 @@ use crate::{
         AccountId, ClientOrderId, ExecAlgorithmId, InstrumentId, OrderListId, PositionId,
         StrategyId, Symbol, TradeId, TraderId, Venue, VenueOrderId,
     },
-    orders::OrderError,
+    orders::{OrderError, check_display_qty, check_time_in_force},
     types::{Currency, Money, Price, Quantity, quantity::check_positive_quantity},
 };
 
@@ -62,8 +62,8 @@ impl StopMarketOrder {
     ///
     /// Returns an error if:
     /// - The `quantity` is not positive.
-    /// - The `time_in_force` is `GTD` **and** `expire_time` is `None` or zero.
     /// - The `display_qty` (when provided) exceeds `quantity`.
+    /// - The `time_in_force` is `GTD` **and** `expire_time` is `None` or zero.
     #[allow(clippy::too_many_arguments)]
     pub fn new_checked(
         trader_id: TraderId,
@@ -93,17 +93,8 @@ impl StopMarketOrder {
         ts_init: UnixNanos,
     ) -> anyhow::Result<Self> {
         check_positive_quantity(quantity, stringify!(quantity))?;
-
-        if let Some(q) = display_qty {
-            check_predicate_true(q <= quantity, "`display_qty` may not exceed `quantity`")?;
-        }
-
-        if time_in_force == TimeInForce::Gtd {
-            check_predicate_true(
-                expire_time.unwrap_or_default() > 0,
-                "`expire_time` is required for `GTD` order",
-            )?;
-        }
+        check_display_qty(display_qty, quantity)?;
+        check_time_in_force(time_in_force, expire_time)?;
 
         let init_order = OrderInitialized::new(
             trader_id,
@@ -448,9 +439,21 @@ impl Order for StopMarketOrder {
         if let OrderEventAny::Updated(ref event) = event {
             self.update(event);
         };
+
         let is_order_filled = matches!(event, OrderEventAny::Filled(_));
+        let is_order_triggered = matches!(event, OrderEventAny::Triggered(_));
+        let ts_event = if is_order_triggered {
+            Some(event.ts_event())
+        } else {
+            None
+        };
 
         self.core.apply(event)?;
+
+        if is_order_triggered {
+            self.is_triggered = true;
+            self.ts_triggered = ts_event;
+        }
 
         if is_order_filled {
             self.core.set_slippage(self.trigger_price);
@@ -467,7 +470,7 @@ impl Order for StopMarketOrder {
         }
 
         self.quantity = event.quantity;
-        self.leaves_qty = self.quantity - self.filled_qty;
+        self.leaves_qty = self.quantity.saturating_sub(self.filled_qty);
     }
 
     fn is_triggered(&self) -> Option<bool> {
@@ -495,7 +498,7 @@ impl Order for StopMarketOrder {
     }
 
     fn set_liquidity_side(&mut self, liquidity_side: LiquiditySide) {
-        self.liquidity_side = Some(liquidity_side)
+        self.liquidity_side = Some(liquidity_side);
     }
 
     fn would_reduce_only(&self, side: PositionSide, position_qty: Quantity) -> bool {
@@ -504,6 +507,44 @@ impl Order for StopMarketOrder {
 
     fn previous_status(&self) -> Option<OrderStatus> {
         self.core.previous_status
+    }
+}
+
+impl Display for StopMarketOrder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "StopMarketOrder(\
+            {} {} {} {} {}, \
+            status={}, \
+            client_order_id={}, \
+            venue_order_id={}, \
+            position_id={}, \
+            exec_algorithm_id={}, \
+            exec_spawn_id={}, \
+            tags={:?}\
+            )",
+            self.side,
+            self.quantity.to_formatted_string(),
+            self.instrument_id,
+            self.order_type,
+            self.time_in_force,
+            self.status,
+            self.client_order_id,
+            self.venue_order_id.map_or_else(
+                || "None".to_string(),
+                |venue_order_id| format!("{venue_order_id}")
+            ),
+            self.position_id.map_or_else(
+                || "None".to_string(),
+                |position_id| format!("{position_id}")
+            ),
+            self.exec_algorithm_id
+                .map_or_else(|| "None".to_string(), |id| format!("{id}")),
+            self.exec_spawn_id
+                .map_or_else(|| "None".to_string(), |id| format!("{id}")),
+            self.tags
+        )
     }
 }
 
@@ -550,10 +591,13 @@ impl From<OrderInitialized> for StopMarketOrder {
 mod tests {
     use rstest::rstest;
 
+    use super::*;
     use crate::{
-        enums::{OrderSide, OrderType, TimeInForce, TriggerType},
+        enums::{TimeInForce, TriggerType},
+        events::order::initialized::OrderInitializedBuilder,
+        identifiers::InstrumentId,
         instruments::{CurrencyPair, stubs::*},
-        orders::{Order, builder::OrderTestBuilder},
+        orders::{builder::OrderTestBuilder, stubs::TestOrderStubs},
         types::{Price, Quantity},
     };
 
@@ -579,6 +623,22 @@ mod tests {
         assert_eq!(order.display_qty(), None);
         assert_eq!(order.trigger_instrument_id(), None);
         assert_eq!(order.order_list_id(), None);
+    }
+
+    #[rstest]
+    fn test_display(_audusd_sim: CurrencyPair) {
+        let order = OrderTestBuilder::new(OrderType::StopMarket)
+            .instrument_id(_audusd_sim.id)
+            .side(OrderSide::Buy)
+            .trigger_price(Price::from("0.68000"))
+            .trigger_type(TriggerType::LastPrice)
+            .quantity(Quantity::from(1))
+            .build();
+
+        assert_eq!(
+            order.to_string(),
+            "StopMarketOrder(BUY 1 AUD/USD.SIM STOP_MARKET GTC, status=INITIALIZED, client_order_id=O-19700101-000000-001-001-1, venue_order_id=None, position_id=None, exec_algorithm_id=None, exec_spawn_id=None, tags=None)"
+        );
     }
 
     #[rstest]
@@ -619,5 +679,102 @@ mod tests {
             .time_in_force(TimeInForce::Gtd)
             .quantity(Quantity::from(1))
             .build();
+    }
+
+    #[rstest]
+    fn test_stop_market_order_update() {
+        // Create and accept a basic stop market order
+        let order = OrderTestBuilder::new(OrderType::StopMarket)
+            .instrument_id(InstrumentId::from("BTC-USDT.BINANCE"))
+            .quantity(Quantity::from(10))
+            .trigger_price(Price::new(100.0, 2))
+            .build();
+
+        let mut accepted_order = TestOrderStubs::make_accepted_order(&order);
+
+        // Update with new values
+        let updated_trigger_price = Price::new(95.0, 2);
+        let updated_quantity = Quantity::from(5);
+
+        let event = OrderUpdated {
+            client_order_id: accepted_order.client_order_id(),
+            strategy_id: accepted_order.strategy_id(),
+            trigger_price: Some(updated_trigger_price),
+            quantity: updated_quantity,
+            ..Default::default()
+        };
+
+        accepted_order.apply(OrderEventAny::Updated(event)).unwrap();
+
+        // Verify updates were applied correctly
+        assert_eq!(accepted_order.quantity(), updated_quantity);
+        assert_eq!(accepted_order.trigger_price(), Some(updated_trigger_price));
+    }
+
+    #[rstest]
+    fn test_stop_market_order_expire_time() {
+        // Create a stop market order with an expire time
+        let expire_time = UnixNanos::from(1234567890);
+        let order = OrderTestBuilder::new(OrderType::StopMarket)
+            .instrument_id(InstrumentId::from("BTC-USDT.BINANCE"))
+            .quantity(Quantity::from(10))
+            .trigger_price(Price::new(100.0, 2))
+            .expire_time(expire_time)
+            .build();
+
+        // Assert that the expire time is set correctly
+        assert_eq!(order.expire_time(), Some(expire_time));
+    }
+
+    #[rstest]
+    fn test_stop_market_order_trigger_instrument_id() {
+        // Create a stop market order with a trigger instrument ID
+        let trigger_instrument_id = InstrumentId::from("ETH-USDT.BINANCE");
+        let order = OrderTestBuilder::new(OrderType::StopMarket)
+            .instrument_id(InstrumentId::from("BTC-USDT.BINANCE"))
+            .quantity(Quantity::from(10))
+            .trigger_price(Price::new(100.0, 2))
+            .trigger_instrument_id(trigger_instrument_id)
+            .build();
+
+        // Assert that the trigger instrument ID is set correctly
+        assert_eq!(order.trigger_instrument_id(), Some(trigger_instrument_id));
+    }
+
+    #[rstest]
+    fn test_stop_market_order_from_order_initialized() {
+        // Create an OrderInitialized event with required fields
+        let order_initialized = OrderInitializedBuilder::default()
+            .order_type(OrderType::StopMarket)
+            .quantity(Quantity::from(10))
+            .trigger_price(Some(Price::new(100.0, 2)))
+            .trigger_type(Some(TriggerType::Default))
+            .build()
+            .unwrap();
+
+        // Convert the OrderInitialized event into a StopMarketOrder
+        let order: StopMarketOrder = order_initialized.clone().into();
+
+        // Assert fields match the OrderInitialized event
+        assert_eq!(order.trader_id(), order_initialized.trader_id);
+        assert_eq!(order.strategy_id(), order_initialized.strategy_id);
+        assert_eq!(order.instrument_id(), order_initialized.instrument_id);
+        assert_eq!(order.client_order_id(), order_initialized.client_order_id);
+        assert_eq!(order.quantity(), order_initialized.quantity);
+        assert_eq!(order.trigger_price(), order_initialized.trigger_price);
+        assert_eq!(order.trigger_type(), order_initialized.trigger_type);
+    }
+
+    #[rstest]
+    fn test_stop_market_order_is_triggered() {
+        // Create a stop market order
+        let order = OrderTestBuilder::new(OrderType::StopMarket)
+            .instrument_id(InstrumentId::from("BTC-USDT.BINANCE"))
+            .quantity(Quantity::from(10))
+            .trigger_price(Price::new(100.0, 2))
+            .build();
+
+        // Assert that the is_triggered flag is initially false
+        assert_eq!(order.is_triggered(), Some(false));
     }
 }

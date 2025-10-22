@@ -29,7 +29,7 @@ use crate::{
 #[derive(Copy, Clone, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.model")
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.model", frozen, eq)
 )]
 pub struct AccountBalance {
     /// The account balance currency.
@@ -47,8 +47,7 @@ impl AccountBalance {
     ///
     /// # Errors
     ///
-    /// This function returns an error:
-    /// - If `total` is not the result of `locked` + `free`.
+    /// Returns an error if `total` is not the result of `locked` + `free`.
     ///
     /// # Notes
     ///
@@ -56,10 +55,7 @@ impl AccountBalance {
     pub fn new_checked(total: Money, locked: Money, free: Money) -> anyhow::Result<Self> {
         check_predicate_true(
             total == locked + free,
-            &format!(
-                "total balance is not equal to the sum of locked and free balances: {} != {} + {}",
-                total, locked, free
-            ),
+            &format!("`total` ({total}) - `locked` ({locked}) != `free` ({free})"),
         )?;
         Ok(Self {
             currency: total.currency,
@@ -73,8 +69,7 @@ impl AccountBalance {
     ///
     /// # Panics
     ///
-    /// This function panics:
-    /// - If a correctness check fails. See [`AccountBalance::new_checked`] for more details.
+    /// Panics if a correctness check fails. See [`AccountBalance::new_checked`] for more details.
     pub fn new(total: Money, locked: Money, free: Money) -> Self {
         Self::new_checked(total, locked, free).expect(FAILED)
     }
@@ -108,7 +103,7 @@ impl Display for AccountBalance {
 #[derive(Copy, Clone, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.model")
+    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.model", frozen, eq)
 )]
 pub struct MarginBalance {
     pub initial: Money,

@@ -13,6 +13,8 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
+//! Implementation of a simple *cash* account – an account that cannot hold leveraged positions.
+
 use std::{
     collections::HashMap,
     fmt::Display,
@@ -39,13 +41,15 @@ use crate::{
 )]
 pub struct CashAccount {
     pub base: BaseAccount,
+    pub allow_borrowing: bool,
 }
 
 impl CashAccount {
     /// Creates a new [`CashAccount`] instance.
-    pub fn new(event: AccountState, calculate_account_state: bool) -> Self {
+    pub fn new(event: AccountState, calculate_account_state: bool, allow_borrowing: bool) -> Self {
         Self {
             base: BaseAccount::new(event, calculate_account_state),
+            allow_borrowing,
         }
     }
 
@@ -60,7 +64,7 @@ impl CashAccount {
 
     #[must_use]
     pub const fn is_unleveraged(&self) -> bool {
-        false
+        true
     }
 
     /// Recalculates the account balance for the specified currency based on current margins.
@@ -177,7 +181,23 @@ impl Account for CashAccount {
     }
 
     fn apply(&mut self, event: AccountState) {
+        // Check for negative balances if borrowing is not allowed
+        if !self.allow_borrowing {
+            for balance in &event.balances {
+                if balance.total.as_decimal() < rust_decimal::Decimal::ZERO {
+                    panic!(
+                        "Account balance negative: {} {}",
+                        balance.total.as_decimal(),
+                        balance.currency.code
+                    );
+                }
+            }
+        }
         self.base_apply(event);
+    }
+
+    fn purge_account_events(&mut self, ts_now: nautilus_core::UnixNanos, lookback_secs: u64) {
+        self.base.base_purge_account_events(ts_now, lookback_secs);
     }
 
     fn calculate_balance_locked(

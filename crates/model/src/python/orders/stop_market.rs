@@ -14,7 +14,10 @@
 // -------------------------------------------------------------------------------------------------
 
 use indexmap::IndexMap;
-use nautilus_core::{UUID4, python::to_pyruntime_err};
+use nautilus_core::{
+    UUID4,
+    python::{to_pyruntime_err, to_pyvalue_err},
+};
 use pyo3::prelude::*;
 use rust_decimal::Decimal;
 use ustr::Ustr;
@@ -63,9 +66,8 @@ impl StopMarketOrder {
         exec_algorithm_params: Option<IndexMap<String, String>>,
         exec_spawn_id: Option<ClientOrderId>,
         tags: Option<Vec<String>>,
-    ) -> Self {
-        let exec_algorithm_params = exec_algorithm_params.map(str_indexmap_to_ustr);
-        Self::new(
+    ) -> PyResult<Self> {
+        Self::new_checked(
             trader_id,
             strategy_id,
             instrument_id,
@@ -86,18 +88,19 @@ impl StopMarketOrder {
             linked_order_ids,
             parent_order_id,
             exec_algorithm_id,
-            exec_algorithm_params,
+            exec_algorithm_params.map(str_indexmap_to_ustr),
             exec_spawn_id,
             tags.map(|vec| vec.into_iter().map(|s| Ustr::from(s.as_str())).collect()),
             init_id,
             ts_init.into(),
         )
+        .map_err(to_pyvalue_err)
     }
 
     #[staticmethod]
     #[pyo3(name = "create")]
     fn py_create(init: OrderInitialized) -> PyResult<Self> {
-        Ok(StopMarketOrder::from(init))
+        Ok(Self::from(init))
     }
 
     #[staticmethod]
@@ -126,7 +129,7 @@ impl StopMarketOrder {
 
     #[getter]
     #[pyo3(name = "events")]
-    fn py_events(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+    fn py_events(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         self.events()
             .into_iter()
             .map(|event| order_event_to_pyobject(py, event.clone()))
@@ -144,7 +147,7 @@ impl StopMarketOrder {
     }
 
     #[pyo3(name = "apply")]
-    fn py_apply(&mut self, event: PyObject, py: Python<'_>) -> PyResult<()> {
+    fn py_apply(&mut self, event: Py<PyAny>, py: Python<'_>) -> PyResult<()> {
         let event_any = pyobject_to_order_event(py, event).unwrap();
         self.apply(event_any).map(|_| ()).map_err(to_pyruntime_err)
     }

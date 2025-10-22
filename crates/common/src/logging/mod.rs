@@ -14,19 +14,38 @@
 // -------------------------------------------------------------------------------------------------
 
 //! The logging framework for Nautilus systems.
+//!
+//! This module implements a high-performance logging subsystem that operates in a separate thread
+//! using an MPSC channel for log message delivery. The system uses reference counting to track
+//! active `LogGuard` instances, ensuring the logging thread completes all pending writes before
+//! termination.
+//!
+//! # LogGuard Reference Counting
+//!
+//! The logging system maintains a global count of active `LogGuard` instances using an atomic
+//! counter (`LOGGING_GUARDS_ACTIVE`). When a `LogGuard` is created, the counter is incremented,
+//! and when dropped, it's decremented. When the last `LogGuard` is dropped (counter reaches zero),
+//! the logging thread is properly joined to ensure all buffered log messages are written to their
+//! destinations before the process terminates.
+//!
+//! The system supports a maximum of 255 concurrent `LogGuard` instances. Attempting to create
+//! more will cause a panic.
 
 pub mod headers;
 pub mod logger;
+pub mod macros;
 pub mod writer;
 
 use std::{
     collections::HashMap,
     env,
     str::FromStr,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
 use log::LevelFilter;
+// Re-exports
+pub use macros::{log_debug, log_error, log_info, log_trace, log_warn};
 use nautilus_core::{UUID4, time::get_atomic_clock_static};
 use nautilus_model::identifiers::TraderId;
 use tracing_subscriber::EnvFilter;
@@ -51,48 +70,42 @@ static LOGGING_INITIALIZED: AtomicBool = AtomicBool::new(false);
 static LOGGING_BYPASSED: AtomicBool = AtomicBool::new(false);
 static LOGGING_REALTIME: AtomicBool = AtomicBool::new(true);
 static LOGGING_COLORED: AtomicBool = AtomicBool::new(true);
+static LOGGING_GUARDS_ACTIVE: AtomicU8 = AtomicU8::new(0);
 
 /// Returns whether the core logger is enabled.
-#[unsafe(no_mangle)]
-pub extern "C" fn logging_is_initialized() -> u8 {
-    u8::from(LOGGING_INITIALIZED.load(Ordering::Relaxed))
+pub fn logging_is_initialized() -> bool {
+    LOGGING_INITIALIZED.load(Ordering::Relaxed)
 }
 
-/// Sets the logging system to bypass mode.
-#[unsafe(no_mangle)]
-pub extern "C" fn logging_set_bypass() {
+/// Sets the logging subsystem to bypass mode.
+pub fn logging_set_bypass() {
     LOGGING_BYPASSED.store(true, Ordering::Relaxed);
 }
 
-/// Shuts down the logging system.
-#[unsafe(no_mangle)]
-pub extern "C" fn logging_shutdown() {
-    // Flush any buffered logs and mark logging as uninitialized
-    log::logger().flush();
-    LOGGING_INITIALIZED.store(false, Ordering::Relaxed);
+/// Shuts down the logging subsystem.
+pub fn logging_shutdown() {
+    // Perform a graceful shutdown: prevent new logs, signal Close, drain and join.
+    // Delegates to logger implementation which has access to the internals.
+    crate::logging::logger::shutdown_graceful();
 }
 
 /// Returns whether the core logger is using ANSI colors.
-#[unsafe(no_mangle)]
-pub extern "C" fn logging_is_colored() -> u8 {
-    u8::from(LOGGING_COLORED.load(Ordering::Relaxed))
+pub fn logging_is_colored() -> bool {
+    LOGGING_COLORED.load(Ordering::Relaxed)
 }
 
 /// Sets the global logging clock to real-time mode.
-#[unsafe(no_mangle)]
-pub extern "C" fn logging_clock_set_realtime_mode() {
+pub fn logging_clock_set_realtime_mode() {
     LOGGING_REALTIME.store(true, Ordering::Relaxed);
 }
 
 /// Sets the global logging clock to static mode.
-#[unsafe(no_mangle)]
-pub extern "C" fn logging_clock_set_static_mode() {
+pub fn logging_clock_set_static_mode() {
     LOGGING_REALTIME.store(false, Ordering::Relaxed);
 }
 
 /// Sets the global logging clock static time with the given UNIX timestamp (nanoseconds).
-#[unsafe(no_mangle)]
-pub extern "C" fn logging_clock_set_static_time(time_ns: u64) {
+pub fn logging_clock_set_static_time(time_ns: u64) {
     let clock = get_atomic_clock_static();
     clock.set_time(time_ns.into());
 }
@@ -137,7 +150,6 @@ pub fn init_tracing() -> anyhow::Result<()> {
 ///
 /// Should only be called once during an applications run, ideally at the
 /// beginning of the run.
-/// Initialize logging.
 ///
 /// Logging should be used for Python and sync Rust logic which is most of
 /// the components in the `nautilus_trader` package.
@@ -152,9 +164,15 @@ pub fn init_logging(
     config: LoggerConfig,
     file_config: FileWriterConfig,
 ) -> anyhow::Result<LogGuard> {
+    // Only set these after successful initialization
+    let is_colored = config.is_colored;
+    let guard = Logger::init_with_config(trader_id, instance_id, config, file_config)?;
+
+    // Set flags only after successful initialization
     LOGGING_INITIALIZED.store(true, Ordering::Relaxed);
-    LOGGING_COLORED.store(config.is_colored, Ordering::Relaxed);
-    Logger::init_with_config(trader_id, instance_id, config, file_config)
+    LOGGING_COLORED.store(is_colored, Ordering::Relaxed);
+
+    Ok(guard)
 }
 
 #[must_use]
@@ -169,6 +187,11 @@ pub const fn map_log_level_to_filter(log_level: LogLevel) -> LevelFilter {
     }
 }
 
+/// Parses a string into a [`LevelFilter`].
+///
+/// # Panics
+///
+/// Panics if the provided string is not a valid `LevelFilter`.
 #[must_use]
 pub fn parse_level_filter_str(s: &str) -> LevelFilter {
     let mut log_level_str = s.to_string().to_uppercase();
@@ -180,6 +203,11 @@ pub fn parse_level_filter_str(s: &str) -> LevelFilter {
 }
 
 #[must_use]
+/// Parses component-specific log levels from a JSON value map.
+///
+/// # Panics
+///
+/// Panics if a JSON value in the map is not a string representing a log level.
 pub fn parse_component_levels(
     original_map: Option<HashMap<String, serde_json::Value>>,
 ) -> HashMap<Ustr, LevelFilter> {
@@ -199,4 +227,29 @@ pub fn parse_component_levels(
         }
         None => HashMap::new(),
     }
+}
+
+/// Logs that a task has started using `tracing::debug!`.
+pub fn log_task_started(task_name: &str) {
+    tracing::debug!("Started task '{task_name}'");
+}
+
+/// Logs that a task has stopped using `tracing::debug!`.
+pub fn log_task_stopped(task_name: &str) {
+    tracing::debug!("Stopped task '{task_name}'");
+}
+
+/// Logs that a task is being awaited using `tracing::debug!`.
+pub fn log_task_awaiting(task_name: &str) {
+    tracing::debug!("Awaiting task '{task_name}'");
+}
+
+/// Logs that a task was aborted using `tracing::debug!`.
+pub fn log_task_aborted(task_name: &str) {
+    tracing::debug!("Aborted task '{task_name}'");
+}
+
+/// Logs that there was an error in a task `tracing::error!`.
+pub fn log_task_error(task_name: &str, e: &anyhow::Error) {
+    tracing::error!("Error in task '{task_name}': {e}");
 }

@@ -13,14 +13,16 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
+//! Python bindings for the Databento live client.
+
 use std::{
-    collections::HashMap,
     fs,
     path::PathBuf,
     str::FromStr,
     sync::{Arc, RwLock},
 };
 
+use ahash::AHashMap;
 use databento::{dbn, live::Subscription};
 use indexmap::IndexMap;
 use nautilus_core::python::{IntoPyObjectNautilusExt, to_pyruntime_err, to_pyvalue_err};
@@ -53,8 +55,9 @@ pub struct DatabentoLiveClient {
     cmd_rx: Option<tokio::sync::mpsc::UnboundedReceiver<LiveCommand>>,
     buffer_size: usize,
     publisher_venue_map: IndexMap<u16, Venue>,
-    symbol_venue_map: Arc<RwLock<HashMap<Symbol, Venue>>>,
+    symbol_venue_map: Arc<RwLock<AHashMap<Symbol, Venue>>>,
     use_exchange_as_venue: bool,
+    bars_timestamp_on_close: bool,
 }
 
 impl DatabentoLiveClient {
@@ -65,32 +68,34 @@ impl DatabentoLiveClient {
 
     async fn process_messages(
         mut msg_rx: tokio::sync::mpsc::Receiver<LiveMessage>,
-        callback: PyObject,
-        callback_pyo3: PyObject,
+        callback: Py<PyAny>,
+        callback_pyo3: Py<PyAny>,
     ) -> PyResult<()> {
         tracing::debug!("Processing messages...");
         // Continue to process messages until channel is hung up
         while let Some(msg) = msg_rx.recv().await {
             tracing::trace!("Received message: {msg:?}");
+
             match msg {
-                LiveMessage::Data(data) => Python::with_gil(|py| {
+                LiveMessage::Data(data) => Python::attach(|py| {
                     let py_obj = data_to_pycapsule(py, data);
                     call_python(py, &callback, py_obj);
                 }),
-                LiveMessage::Instrument(data) => Python::with_gil(|py| {
-                    let py_obj =
-                        instrument_any_to_pyobject(py, data).expect("Failed creating instrument");
-                    call_python(py, &callback, py_obj);
-                }),
-                LiveMessage::Status(data) => Python::with_gil(|py| {
+                LiveMessage::Instrument(data) => {
+                    Python::attach(|py| match instrument_any_to_pyobject(py, data) {
+                        Ok(py_obj) => call_python(py, &callback, py_obj),
+                        Err(e) => tracing::error!("Failed creating instrument: {e}"),
+                    });
+                }
+                LiveMessage::Status(data) => Python::attach(|py| {
                     let py_obj = data.into_py_any_unwrap(py);
                     call_python(py, &callback_pyo3, py_obj);
                 }),
-                LiveMessage::Imbalance(data) => Python::with_gil(|py| {
+                LiveMessage::Imbalance(data) => Python::attach(|py| {
                     let py_obj = data.into_py_any_unwrap(py);
                     call_python(py, &callback_pyo3, py_obj);
                 }),
-                LiveMessage::Statistics(data) => Python::with_gil(|py| {
+                LiveMessage::Statistics(data) => Python::attach(|py| {
                     let py_obj = data.into_py_any_unwrap(py);
                     call_python(py, &callback_pyo3, py_obj);
                 }),
@@ -116,7 +121,7 @@ impl DatabentoLiveClient {
     }
 }
 
-fn call_python(py: Python, callback: &PyObject, py_obj: PyObject) {
+fn call_python(py: Python, callback: &Py<PyAny>, py_obj: Py<PyAny>) {
     if let Err(e) = callback.call1(py, (py_obj,)) {
         // TODO: Improve this by checking for the actual exception type
         if !e.to_string().contains("CancelledError") {
@@ -127,14 +132,18 @@ fn call_python(py: Python, callback: &PyObject, py_obj: PyObject) {
 
 #[pymethods]
 impl DatabentoLiveClient {
+    /// # Errors
+    ///
+    /// Returns a `PyErr` if reading or parsing the publishers file fails.
     #[new]
     pub fn py_new(
         key: String,
         dataset: String,
         publishers_filepath: PathBuf,
         use_exchange_as_venue: bool,
+        bars_timestamp_on_close: Option<bool>,
     ) -> PyResult<Self> {
-        let publishers_json = fs::read_to_string(publishers_filepath)?;
+        let publishers_json = fs::read_to_string(publishers_filepath).map_err(to_pyvalue_err)?;
         let publishers_vec: Vec<DatabentoPublisher> =
             serde_json::from_str(&publishers_json).map_err(to_pyvalue_err)?;
         let publisher_venue_map = publishers_vec
@@ -144,7 +153,7 @@ impl DatabentoLiveClient {
 
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<LiveCommand>();
 
-        // Hard-coded to a reasonable size for now
+        // Hardcoded to a reasonable size for now
         let buffer_size = 100_000;
 
         Ok(Self {
@@ -156,8 +165,9 @@ impl DatabentoLiveClient {
             is_running: false,
             is_closed: false,
             publisher_venue_map,
-            symbol_venue_map: Arc::new(RwLock::new(HashMap::new())),
+            symbol_venue_map: Arc::new(RwLock::new(AHashMap::new())),
             use_exchange_as_venue,
+            bars_timestamp_on_close: bars_timestamp_on_close.unwrap_or(true),
         })
     }
 
@@ -180,14 +190,20 @@ impl DatabentoLiveClient {
         start: Option<u64>,
         snapshot: Option<bool>,
     ) -> PyResult<()> {
-        let mut symbol_venue_map = self.symbol_venue_map.write().unwrap();
+        let mut symbol_venue_map = self
+            .symbol_venue_map
+            .write()
+            .map_err(|e| to_pyruntime_err(format!("symbol_venue_map lock poisoned: {e}")))?;
         let symbols: Vec<String> = instrument_ids
             .iter()
             .map(|instrument_id| {
                 instrument_id_to_symbol_string(*instrument_id, &mut symbol_venue_map)
             })
             .collect();
-        let stype_in = infer_symbology_type(symbols.first().unwrap());
+        let first_symbol = symbols
+            .first()
+            .ok_or_else(|| to_pyvalue_err("No symbols provided"))?;
+        let stype_in = infer_symbology_type(first_symbol);
         let symbols: Vec<&str> = symbols.iter().map(String::as_str).collect();
         check_consistent_symbology(symbols.as_slice()).map_err(to_pyvalue_err)?;
         let mut sub = Subscription::builder()
@@ -210,8 +226,8 @@ impl DatabentoLiveClient {
     fn py_start<'py>(
         &mut self,
         py: Python<'py>,
-        callback: PyObject,
-        callback_pyo3: PyObject,
+        callback: Py<PyAny>,
+        callback_pyo3: Py<PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
         if self.is_closed {
             return Err(to_pyruntime_err("Client already closed"));
@@ -229,7 +245,10 @@ impl DatabentoLiveClient {
         // Consume the receiver
         // SAFETY: We guard the client from being started more than once with the
         // `is_running` flag, so here it is safe to unwrap the command receiver.
-        let cmd_rx = self.cmd_rx.take().unwrap();
+        let cmd_rx = self
+            .cmd_rx
+            .take()
+            .ok_or_else(|| to_pyruntime_err("Command receiver already taken"))?;
 
         let mut feed_handler = DatabentoFeedHandler::new(
             self.key.clone(),
@@ -239,6 +258,7 @@ impl DatabentoLiveClient {
             self.publisher_venue_map.clone(),
             self.symbol_venue_map.clone(),
             self.use_exchange_as_venue,
+            self.bars_timestamp_on_close,
         );
 
         self.send_command(LiveCommand::Start)?;

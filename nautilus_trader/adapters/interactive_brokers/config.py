@@ -28,7 +28,6 @@ from nautilus_trader.config import NautilusConfig
 
 
 class SymbologyMethod(Enum):
-    DATABENTO = "databento"
     IB_SIMPLIFIED = "simplified"
     IB_RAW = "raw"
 
@@ -54,6 +53,10 @@ class DockerizedIBGatewayConfig(NautilusConfig, frozen=True):
         The timeout (seconds) for trying to launch IBG docker container when start=True.
     container_image: str, optional
         The reference to the container image used by the IB Gateway.
+    vnc_port: int | None, optional, default None
+        The VNC port for the container. Set to None to disable VNC access.
+        The VNC server provides remote desktop access to the IB Gateway interface.
+        Examples: 5900, 5901, 5902, etc.
 
     """
 
@@ -63,9 +66,11 @@ class DockerizedIBGatewayConfig(NautilusConfig, frozen=True):
     read_only_api: bool = True
     timeout: int = 300
     container_image: str = "ghcr.io/gnzsnz/ib-gateway:stable"
+    vnc_port: int | None = None
 
     def __repr__(self):
         masked_username = self._mask_sensitive_info(self.username)
+
         return (
             f"DockerizedIBGatewayConfig(username={masked_username}, "
             f"password=********, trading_mode='{self.trading_mode}', "
@@ -76,6 +81,7 @@ class DockerizedIBGatewayConfig(NautilusConfig, frozen=True):
     def _mask_sensitive_info(value: str | None) -> str:
         if value is None:
             return "None"
+
         return value[0] + "*" * (len(value) - 2) + value[-1] if len(value) > 2 else "*" * len(value)
 
 
@@ -109,9 +115,6 @@ class InteractiveBrokersInstrumentProviderConfig(InstrumentProviderConfig, froze
         - IB_SIMPLIFIED: Adopts a simplified symbology format specific to Interactive Brokers which uses Venue acronym.
         Instrument symbols use a cleaner notation, such as `ESZ28.CME` or `EUR/USD.IDEALPRO`.
         This format prioritizes ease of readability and usability and is default.
-        - DATABENTO: Utilizes the symbology format defined by the Databento adapter, ensuring seamless integration with
-        `DatabentoDataClient` when used alongside `InteractiveBrokersExecClientConfig`. Example notation includes
-        `ESZ8.GLBX`. Note that this symbology is only compatible with venues supported by Databento.
     build_options_chain: bool (default: None)
         Search for full option chain. Global setting for all applicable instruments.
     build_futures_chain: bool (default: None)
@@ -122,6 +125,11 @@ class InteractiveBrokersInstrumentProviderConfig(InstrumentProviderConfig, froze
     max_expiry_days: int (default: None)
         Filters the options_chain and futures_chain which are expiring before specified number of days.
         Global setting for all applicable instruments.
+    convert_exchange_to_mic_venue: bool (default: False)
+        Whether to convert IB exchanges to MIC venues when converting an IB contract to an instrument id.
+    symbol_to_mic_venue: dict, optional
+        A dictionary to override the default MIC venue conversion.
+        A key is a symbol prefix (for example ES for all futures and options on it), the value is the MIC venue to use.
     cache_validity_days: int (default: None)
         Default None, will request fresh pull upon starting of TradingNode [only once].
         Setting value will pull the instruments at specified interval, useful when TradingNode runs for many days.
@@ -134,6 +142,7 @@ class InteractiveBrokersInstrumentProviderConfig(InstrumentProviderConfig, froze
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, InteractiveBrokersInstrumentProviderConfig):
             return False
+
         return (
             self.load_ids == other.load_ids
             and self.load_contracts == other.load_contracts
@@ -152,6 +161,15 @@ class InteractiveBrokersInstrumentProviderConfig(InstrumentProviderConfig, froze
                 self.build_futures_chain,
                 self.min_expiry_days,
                 self.max_expiry_days,
+                self.symbology_method,
+                self.convert_exchange_to_mic_venue,
+                (
+                    tuple(sorted(self.symbol_to_mic_venue.items()))
+                    if self.symbol_to_mic_venue
+                    else None
+                ),
+                self.cache_validity_days,
+                self.pickle_path,
             ),
         )
 
@@ -161,6 +179,8 @@ class InteractiveBrokersInstrumentProviderConfig(InstrumentProviderConfig, froze
     build_futures_chain: bool | None = None
     min_expiry_days: int | None = None
     max_expiry_days: int | None = None
+    convert_exchange_to_mic_venue: bool = False
+    symbol_to_mic_venue: dict = {}
 
     cache_validity_days: int | None = None
     pickle_path: str | None = None
@@ -233,6 +253,13 @@ class InteractiveBrokersExecClientConfig(LiveExecClientConfig, frozen=True):
         The client's gateway container configuration.
     connection_timeout : int, default 300
         The timeout (seconds) to wait for the client connection to be established.
+    fetch_all_open_orders : bool, default False
+        If True, uses reqAllOpenOrders to fetch orders from all API clients and TWS GUI.
+        If False, uses reqOpenOrders to fetch only orders from current client ID session.
+        Note: When using reqAllOpenOrders with client ID 0, it can see orders from all
+        sources including TWS GUI, but cannot see orders from other non-zero client IDs.
+    track_option_exercise_from_position_update : bool, default False
+        If True, subscribes to real-time position updates to track option exercises.
 
     """
 
@@ -245,3 +272,5 @@ class InteractiveBrokersExecClientConfig(LiveExecClientConfig, frozen=True):
     account_id: str | None = None
     dockerized_gateway: DockerizedIBGatewayConfig | None = None
     connection_timeout: int = 300
+    fetch_all_open_orders: bool = False
+    track_option_exercise_from_position_update: bool = False

@@ -45,6 +45,7 @@ cdef class Quantity:
 
     cdef Quantity add(self, Quantity other)
     cdef Quantity sub(self, Quantity other)
+    cdef Quantity saturating_sub(self, Quantity other)
     cdef void add_assign(self, Quantity other)
     cdef void sub_assign(self, Quantity other)
 
@@ -188,6 +189,7 @@ cdef class AccountBalance:
 
     @staticmethod
     cdef AccountBalance from_dict_c(dict values)
+    cpdef AccountBalance copy(self)
     cpdef dict to_dict(self)
 
 
@@ -203,6 +205,7 @@ cdef class MarginBalance:
 
     @staticmethod
     cdef MarginBalance from_dict_c(dict values)
+    cpdef MarginBalance copy(self)
     cpdef dict to_dict(self)
 
 
