@@ -55,6 +55,13 @@ class GateWebSocketClient:
         self._public_subscriptions: set[str] = set()
         self._private_subscriptions: set[str] = set()
         
+        # Authentication state management
+        self._is_authenticated: bool = False
+        self._auth_lock: asyncio.Lock = asyncio.Lock()
+        self._last_login_time: float = 0.0
+        self._login_retry_count: int = 0
+        self._max_login_retries: int = 3
+        
         # Task management
         self._tasks: set[asyncio.Task] = set()
 
@@ -98,6 +105,8 @@ class GateWebSocketClient:
                 if self._client is None:
                     self._client = await websockets.connect(self._base_url)
                     self._log.info(f"Connected to {self._base_url}", LogColor.BLUE)
+                    # Reset auth state on reconnect
+                    self._is_authenticated = False
                     await self._subscribe_all()
                 try:
                     # self._log.info("Waiting for message...")
@@ -114,6 +123,11 @@ class GateWebSocketClient:
                 if msg.get('error'):
                     self._log.error(f"ws received error {msg['error']}")
                     continue
+                
+                # Check for authentication errors in any message
+                if self._check_auth_error(msg):
+                    await self._handle_auth_failure()
+                
                 await self._handler(msg)
             except asyncio.CancelledError:
                 # Task cancelled while running outer try-block: exit quietly
@@ -128,6 +142,8 @@ class GateWebSocketClient:
                         except:
                             pass
                 self._client = None
+                # Reset auth state on connection loss
+                self._is_authenticated = False
 
     async def _heartbeat(self):
         while self.running:
@@ -152,11 +168,22 @@ class GateWebSocketClient:
                     await asyncio.sleep(10)
                     continue
                 if self._client is not None:
-                    if time.time() > next_login_time:
-                        await self.api_login()
-                        next_login_time = time.time() + 300
+                    current_time = time.time()
+                    # Login if not authenticated or if it's time for periodic refresh
+                    if not self._is_authenticated or current_time > next_login_time:
+                        async with self._auth_lock:
+                            # Double-check after acquiring lock
+                            if not self._is_authenticated or current_time > next_login_time:
+                                success = await self._perform_login_with_retry()
+                                if success:
+                                    next_login_time = current_time + 300  # Refresh every 5 minutes
+                                    self._login_retry_count = 0
+                                else:
+                                    # If login failed, retry more frequently
+                                    next_login_time = current_time + 30
                 else:
                     next_login_time = 0
+                    self._is_authenticated = False
                 await asyncio.sleep(60)    
             except GeneratorExit:
                 # Task is being cancelled, exit gracefully
@@ -191,8 +218,17 @@ class GateWebSocketClient:
         if self._client is None:
             self._log.error("Cannot subscribe all: not connected")
             return
+        # Subscribe to public channels first
         for subscription in self._public_subscriptions:
             await self._subscribe(json.loads(subscription))
+        # For private channels, ensure we're authenticated first
+        if self._private_subscriptions and self.enable_login:
+            if not self._is_authenticated:
+                self._log.warning("Not authenticated, attempting login before subscribing to private channels")
+                success = await self._perform_login_with_retry()
+                if not success:
+                    self._log.error("Failed to authenticate, private subscriptions may fail")
+        # Subscribe to private channels
         for subscription in self._private_subscriptions:
             await self._subscribe(json.loads(subscription), need_auth=True)
 
@@ -267,10 +303,104 @@ class GateWebSocketClient:
         await self._subscribe(subscription, True)
 
 
+    ################################################################################
+    # Authentication Management
+    ################################################################################
+    
+    def _check_auth_error(self, msg: dict) -> bool:
+        """Check if message indicates authentication failure."""
+        # Check for "Not login" error in various message formats
+        if isinstance(msg, dict):
+            # Check in data.errs.message
+            if "data" in msg and isinstance(msg["data"], dict):
+                if "errs" in msg["data"]:
+                    errs = msg["data"]["errs"]
+                    if isinstance(errs, dict) and "message" in errs:
+                        message = str(errs["message"]).lower()
+                        if "not login" in message or "unauthorized" in message or "authentication" in message:
+                            return True
+            # Check in error field
+            if "error" in msg:
+                error = str(msg["error"]).lower()
+                if "not login" in error or "unauthorized" in error or "authentication" in error:
+                    return True
+        return False
+    
+    async def _handle_auth_failure(self) -> None:
+        """Handle authentication failure by re-authenticating and re-subscribing."""
+        async with self._auth_lock:
+            # Check if we're already handling auth failure (lock prevents concurrent calls)
+            # If already not authenticated and recently tried, skip to avoid spam
+            current_time = time.time()
+            if not self._is_authenticated and (current_time - self._last_login_time) < 10:
+                # Recently tried to login, skip
+                return
+            
+            self._log.warning("Authentication failure detected, re-authenticating...")
+            self._is_authenticated = False
+            
+            # Perform login with retry
+            success = await self._perform_login_with_retry()
+            if success:
+                # Re-subscribe to all private channels
+                self._log.info("Re-authentication successful, re-subscribing to private channels...")
+                await self._resubscribe_private_channels()
+            else:
+                self._log.error("Failed to re-authenticate after failure")
+    
+    async def _perform_login_with_retry(self) -> bool:
+        """Perform login with retry logic."""
+        for attempt in range(self._max_login_retries):
+            try:
+                await self.api_login()
+                # Wait a bit for login response
+                await asyncio.sleep(1)
+                # Note: Actual success is determined by login response handler
+                # For now, we assume success if no exception is raised
+                # The handler will set _is_authenticated based on response
+                self._last_login_time = time.time()
+                return True
+            except Exception as e:
+                self._login_retry_count += 1
+                self._log.warning(f"Login attempt {attempt + 1}/{self._max_login_retries} failed: {e}")
+                if attempt < self._max_login_retries - 1:
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+        return False
+    
+    async def _resubscribe_private_channels(self) -> None:
+        """Re-subscribe to all private channels after re-authentication."""
+        if not self._private_subscriptions:
+            return
+        
+        self._log.info(f"Re-subscribing to {len(self._private_subscriptions)} private channels...")
+        for subscription_str in list(self._private_subscriptions):
+            try:
+                subscription = json.loads(subscription_str)
+                await self._subscribe(subscription, need_auth=True)
+                # Small delay to avoid overwhelming the server
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                self._log.error(f"Failed to re-subscribe to {subscription_str}: {e}")
+    
+    def set_authenticated(self, authenticated: bool) -> None:
+        """Set authentication state (called by message handler)."""
+        if authenticated != self._is_authenticated:
+            self._is_authenticated = authenticated
+            if authenticated:
+                self._log.info("WebSocket authentication successful", LogColor.GREEN)
+                self._login_retry_count = 0
+            else:
+                self._log.warning("WebSocket authentication state set to False", LogColor.YELLOW)
+    
+    @property
+    def is_authenticated(self) -> bool:
+        """Check if currently authenticated."""
+        return self._is_authenticated
+
     # order action
     async def api_login(self) -> None:
         signature = self._gen_sign_ws("spot.login", "api", int(time.time()))
-        self._log.info(f"signature: {signature}")
+        self._log.info(f"Performing WebSocket login...", LogColor.BLUE)
         login_dict = {
             'time': int(time.time()),
             'channel': 'spot.login', 

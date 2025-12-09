@@ -523,9 +523,20 @@ class GateExecutionClient(LiveExecutionClient):
                 channel = msg.get('header').get('channel')
 
             product_type, topic = channel.split('.')
+            
+            # Handle login response first
+            if topic == "login":
+                await self._handle_login_response(product_type, msg)
+                return
+            
+            # Check for authentication errors in private channel messages
+            if topic in {'balances', 'orders', 'usertrades', 'order_place', 'order_cancel', 'priceorders'}:
+                if await self._check_and_handle_auth_error(product_type, msg):
+                    # Authentication error detected and handled, skip further processing
+                    return
+            
             if topic == 'balances':
                 await self._update_account_state()
-                
             elif topic == 'orders':
                 self._handle_account_order_update(product_type, msg)
             elif topic == 'usertrades':
@@ -534,12 +545,6 @@ class GateExecutionClient(LiveExecutionClient):
                 self._handle_order_place(product_type, msg)
             elif topic == "order_cancel":
                 self._handle_order_cancel(product_type, msg)
-            elif topic == "login":
-                if not "errs" in msg["data"]:
-                    self._log.info(f"WebSocket login success: {msg}")
-                else:
-                    self._log.error(f"WebSocket login failed: {msg}")
-                    raise GateError(400, f"WebSocket login failed: {msg}")
             elif topic == "priceorders":
                 self._handle_priceorder_place(product_type, msg)
             else:
@@ -547,6 +552,35 @@ class GateExecutionClient(LiveExecutionClient):
         except Exception as e:
             exception_text = traceback.format_exc()
             self._log.error(f"Failed to handle websocket msg {msg} with: {exception_text}")
+    
+    async def _handle_login_response(self, product_type: str, msg: dict) -> None:
+        """Handle login response and update authentication state."""
+        ws_client = self._ws_clients.get(GateProductType(product_type))
+        if ws_client is None:
+            self._log.error(f"No WebSocket client found for product type: {product_type}")
+            return
+        
+        if "errs" in msg.get("data", {}):
+            self._log.error(f"WebSocket login failed: {msg}")
+            ws_client.set_authenticated(False)
+            raise GateError(400, f"WebSocket login failed: {msg}")
+        else:
+            self._log.info(f"WebSocket login success: {msg}")
+            ws_client.set_authenticated(True)
+    
+    async def _check_and_handle_auth_error(self, product_type: str, msg: dict) -> bool:
+        """Check for authentication errors and handle them. Returns True if auth error was detected."""
+        ws_client = self._ws_clients.get(GateProductType(product_type))
+        if ws_client is None:
+            return False
+        
+        # Check if message indicates authentication failure
+        if ws_client._check_auth_error(msg):
+            self._log.warning(f"Authentication error detected in {product_type} channel message")
+            # Trigger re-authentication (this is handled asynchronously in the client)
+            await ws_client._handle_auth_failure()
+            return True
+        return False
 
     def _handle_priceorder_place(self, product_type: str, msg: dict) -> None:
             # {
@@ -630,29 +664,26 @@ class GateExecutionClient(LiveExecutionClient):
             self._log.error(f'Failed to handle order update: {exception_text}')
 
     def _handle_order_cancel(self, product_type: str, msg: dict) -> None:
-        if "errs" in msg["data"]:
-            self._log.info(f"WebSocket order cancel result: {msg}")
-        try: 
-            if "errs" in msg["data"] and  "Not login" in msg["data"]["errs"]["message"]:
-                self._log.error("Relogin")
-                for ws_client in self._ws_clients.values():
-                    asyncio.run(ws_client.api_login()) 
-        except:
-            return 
+        """Handle order cancel response. Auth errors are handled in _check_and_handle_auth_error."""
+        if "errs" in msg.get("data", {}):
+            errs = msg["data"]["errs"]
+            if isinstance(errs, dict) and "message" in errs:
+                message = errs["message"]
+                # Log non-auth errors
+                if "Not login" not in message:
+                    self._log.info(f"WebSocket order cancel result: {msg}")
 
     def _handle_order_place(self, product_type: str, msg: dict) -> None:
-        if "errs" in msg["data"]:
-            if "POC" in msg["data"]["errs"]["message"]:
-                self._log.info(f"WebSocket order place result: {msg}")
-            else:
-                self._log.error(f"WebSocket order place result: {msg}")
-        try: 
-            if "errs" in msg["data"] and  "Not login" in msg["data"]["errs"]["message"]:
-                self._log.error("Relogin")
-                for ws_client in self._ws_clients.values():
-                    asyncio.run(ws_client.api_login()) 
-        except:
-            return 
+        """Handle order place response. Auth errors are handled in _check_and_handle_auth_error."""
+        if "errs" in msg.get("data", {}):
+            errs = msg["data"]["errs"]
+            if isinstance(errs, dict) and "message" in errs:
+                message = errs["message"]
+                # Log non-auth errors
+                if "POC" in message:
+                    self._log.info(f"WebSocket order place result: {msg}")
+                elif "Not login" not in message:
+                    self._log.error(f"WebSocket order place result: {msg}") 
 
 
     def _handle_account_order_update(self, product_type: str, msg: dict) -> None:
