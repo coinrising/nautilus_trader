@@ -20,7 +20,8 @@ import importlib
 from collections.abc import Callable
 from decimal import Decimal
 from io import StringIO
-from typing import Annotated, Any
+from typing import Annotated
+from typing import Any
 
 import msgspec
 import pandas as pd
@@ -105,8 +106,11 @@ def nautilus_schema_hook(type_: type[Any]) -> dict[str, Any]:
 
 
 def msgspec_encoding_hook(obj: Any) -> Any:  # noqa: C901 (too complex)
+    # Check for fully_qualified_name first, before generic type check
+    if isinstance(obj, type) and hasattr(obj, "fully_qualified_name"):
+        return obj.fully_qualified_name()
     if isinstance(obj, type):
-        return str(type)
+        return str(obj)
     if isinstance(obj, Decimal):
         return str(obj)
     if isinstance(obj, UUID4):
@@ -123,8 +127,6 @@ def msgspec_encoding_hook(obj: Any) -> Any:  # noqa: C901 (too complex)
         return obj.isoformat()
     if isinstance(obj, Environment):
         return obj.value
-    if isinstance(obj, type) and hasattr(obj, "fully_qualified_name"):
-        return obj.fully_qualified_name()
     if type(obj) in CUSTOM_ENCODINGS:
         func = CUSTOM_ENCODINGS[type(obj)]
         return func(obj)
@@ -564,9 +566,9 @@ class LoggingConfig(NautilusConfig, frozen=True):
         The maximum number of backup log files to keep when rotating.
     log_colors : bool, default True
         If ANSI codes should be used to produce colored log lines.
-    log_component_levels : dict[str, LogLevel]
+    log_component_levels : dict[str, str]
         The additional per component log level filters, where keys are component
-        IDs (e.g. actor/strategy IDs) and values are log levels.
+        IDs (e.g. actor/strategy IDs) and values are log level strings (case-insensitive).
     log_components_only : bool, default False
         If only components with explicit component-level filters should be logged.
         When enabled, only log messages from components that have been explicitly

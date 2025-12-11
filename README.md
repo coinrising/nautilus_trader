@@ -10,16 +10,16 @@
 
 | Branch    | Version                                                                                                                                                                                                                     | Status                                                                                                                                                                                            |
 | :-------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `master`  | [![version](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnautechsystems%2Fnautilus_trader%2Fmaster%2Fversion.json)](https://packages.nautechsystems.io/simple/nautilus-trader/index.html)  | [![build](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml/badge.svg?branch=nightly)](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml) |
+| `master`  | [![version](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnautechsystems%2Fnautilus_trader%2Fmaster%2Fversion.json)](https://packages.nautechsystems.io/simple/nautilus-trader/index.html)  | [![build](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml/badge.svg?branch=master)](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml)  |
 | `nightly` | [![version](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnautechsystems%2Fnautilus_trader%2Fnightly%2Fversion.json)](https://packages.nautechsystems.io/simple/nautilus-trader/index.html) | [![build](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml/badge.svg?branch=nightly)](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml) |
 | `develop` | [![version](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fnautechsystems%2Fnautilus_trader%2Fdevelop%2Fversion.json)](https://packages.nautechsystems.io/simple/nautilus-trader/index.html) | [![build](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml/badge.svg?branch=develop)](https://github.com/nautechsystems/nautilus_trader/actions/workflows/build.yml) |
 
 | Platform           | Rust   | Python    |
 | :----------------- | :----- | :-------- |
-| `Linux (x86_64)`   | 1.90.0 | 3.11-3.13 |
-| `Linux (ARM64)`    | 1.90.0 | 3.11-3.13 |
-| `macOS (ARM64)`    | 1.90.0 | 3.11-3.13 |
-| `Windows (x86_64)` | 1.90.0 | 3.11-3.13 |
+| `Linux (x86_64)`   | 1.91.0 | 3.12-3.14 |
+| `Linux (ARM64)`    | 1.91.0 | 3.12-3.14 |
+| `macOS (ARM64)`    | 1.91.0 | 3.12-3.14 |
+| `Windows (x86_64)` | 1.91.0 | 3.12-3.13 |
 
 - **Docs**: <https://nautilustrader.io/docs/>
 - **Website**: <https://nautilustrader.io>
@@ -142,7 +142,7 @@ The following integrations are currently supported; see [docs/integrations/](htt
 - `beta`: Completed to a minimally working state and in a beta testing phase.
 - `stable`: Stabilized feature set and API, the integration has been tested by both developers and users to a reasonable level (some bugs may still remain).
 
-See the [Integrations](https://nautilustrader.io/docs/latest/integrations/index.html) documentation for further details.
+See the [Integrations](https://nautilustrader.io/docs/latest/integrations/) documentation for further details.
 
 ## Versioning and releases
 
@@ -268,10 +268,10 @@ To install the latest available pre-release (including development wheels):
 pip install -U nautilus_trader --pre --index-url=https://packages.nautechsystems.io/simple
 ```
 
-To install a specific development wheel (e.g., `1.221.0a20250912` for September 12, 2025):
+To install a specific development wheel (e.g., `1.221.0a20251026` for October 26, 2025):
 
 ```bash
-pip install nautilus_trader==1.221.0a20250912 --index-url=https://packages.nautechsystems.io/simple
+pip install nautilus_trader==1.221.0a20251026 --index-url=https://packages.nautechsystems.io/simple
 ```
 
 #### Available versions
@@ -451,7 +451,7 @@ Indicators and strategies can be developed in both Python and Cython. For perfor
 latency-sensitive applications, we recommend using Cython. Below are some examples:
 
 - [indicator](/nautilus_trader/examples/indicators/ema_python.py) example written in Python.
-- [indicator](/nautilus_trader/indicators/) examples written in Cython.
+- [indicator](/nautilus_trader/indicators/) implementations written in Cython.
 - [strategy](/nautilus_trader/examples/strategies/) examples written in Python.
 - [backtest](/examples/backtest/) examples using a `BacktestEngine` directly.
 
@@ -499,7 +499,7 @@ http://127.0.0.1:8888/lab
 ## Development
 
 We aim to provide the most pleasant developer experience possible for this hybrid codebase of Python, Cython and Rust.
-See the [Developer Guide](https://nautilustrader.io/docs/latest/developer_guide/index.html) for helpful information.
+See the [Developer Guide](https://nautilustrader.io/docs/latest/developer_guide/) for helpful information.
 
 > [!TIP]
 >

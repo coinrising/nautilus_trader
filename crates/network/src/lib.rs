@@ -46,12 +46,12 @@
 //!
 //! To run standard tests:
 //! ```bash
-//! cargo test -p nautilus-network
+//! cargo nextest run -p nautilus-network
 //! ```
 //!
 //! To run turmoil network simulation tests:
 //! ```bash
-//! cargo test -p nautilus-network --features turmoil
+//! cargo nextest run -p nautilus-network --features turmoil
 //! ```
 //!
 //! The turmoil tests simulate various network conditions (reconnections, partitions, etc.) in a deterministic way,
@@ -66,7 +66,6 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 
 pub mod backoff;
-pub mod fix;
 pub mod http;
 pub mod mode;
 pub mod net;

@@ -58,10 +58,10 @@ repos:
         description: Lint Dockerfiles for best practices and errors
 
   - repo: https://github.com/crate-ci/typos
-    rev: v1.38.1
+    rev: v1.38.1 # v1.38.1 (reverts to v1 on updates)
     hooks:
       - id: typos
-        description: Checks for common typos.
+        description: Checks for common typos
         args: ["--force-exclude"]
         types_or: [rust, python, cython, toml, yaml, rst, markdown]
 
@@ -69,7 +69,7 @@ repos:
     rev: v2.4.1
     hooks:
       - id: codespell
-        description: Checks for common misspellings.
+        description: Checks for common misspellings
         types_or: [rust, python, cython, toml, yaml, rst, markdown]
 
   - repo: https://github.com/gitleaks/gitleaks
@@ -77,8 +77,16 @@ repos:
     hooks:
       - id: gitleaks
         name: gitleaks (secrets scan)
-        description: Detects hard-coded secrets prior to commit.
+        description: Detects hard-coded secrets prior to commit
         args: ["--staged", "--redact"]
+
+  - repo: https://github.com/google/osv-scanner
+    rev: v2.2.4
+    hooks:
+      - id: osv-scanner
+        name: osv-scanner (dependency vulnerabilities)
+        description: Scans Cargo.lock and uv.lock for known vulnerabilities (defense-in-depth)
+        args: ["--config=osv-scanner.toml", "--lockfile=Cargo.lock", "--lockfile=uv.lock"]
 
   ##############################################################################
   #  GitHub Actions linting (complementary tools covering different aspects)
@@ -86,12 +94,12 @@ repos:
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.8
     hooks:
-      - id: actionlint-docker
+      - id: actionlint
         name: actionlint (syntax/structure)
         description: Checks GitHub Actions workflow syntax and structural correctness
 
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: v1.15.2
+    rev: v1.16.2
     hooks:
       - id: zizmor
         name: zizmor (security)
@@ -137,16 +145,15 @@ repos:
   ##############################################################################
   #  Rust formatting and linting
   ##############################################################################
-  - repo: local
+  - repo: https://github.com/EmbarkStudios/cargo-deny
+    rev: 0.18.5
     hooks:
       - id: cargo-deny
-        name: cargo deny
-        description: Run cargo-deny security checks (advisories, sources, bans)
-        entry: .pre-commit-hooks/cargo_deny.sh
-        language: script
-        files: '(Cargo\.(toml|lock)|deny\.toml)$'
-        pass_filenames: false
+        name: cargo deny (dependency vulnerabilities)
+        args: ["--all-features", "check"]
 
+  - repo: local
+    hooks:
       - id: check-anyhow-usage
         name: check anyhow usage
         description:
@@ -167,9 +174,18 @@ repos:
         files: '\.rs$'
         pass_filenames: false
 
+      - id: check-error-conventions
+        name: check error conventions
+        description:
+          Enforces error variable naming conventions (Rust use Err(e), Python use as e:)
+        entry: .pre-commit-hooks/check_error_conventions.sh
+        language: script
+        types_or: [rust, python, cython]
+        pass_filenames: false
+
       - id: fmt
         name: cargo fmt
-        description: Format files with cargo fmt.
+        description: Format files with cargo fmt
         entry: bash .pre-commit-hooks/cargo_fmt_stable.sh
         language: system
         args: ["--all", "--", "--check"]
@@ -177,31 +193,10 @@ repos:
         types: [file]
         pass_filenames: false
 
-      - id: cargo-clippy
-        name: cargo clippy
-        description: Run the Clippy linter on the package.
-        entry: cargo clippy
-        language: system
-        args:
-          [
-            "--benches",
-            "--no-default-features",
-            "--features",
-            "high-precision,ffi,python,extension-module",
-            "--",
-            "-D",
-            "warnings",
-          ]
-        files: '\.(rs|toml)$'
-        types: [file]
-        pass_filenames: false
-
-      - id: cargo-doc
-        name: cargo doc
-        description: Check documentation builds without errors or warnings.
-        entry:
-          bash -c 'RUSTDOCFLAGS="--cfg docsrs -D warnings" cargo doc --features
-          "high-precision,ffi,python,extension-module" --no-deps --workspace --quiet'
+      - id: cargo-clippy-and-doc
+        name: cargo clippy + doc
+        description: Run clippy and doc checks together to share build artifacts
+        entry: bash .pre-commit-hooks/cargo_clippy_and_doc.sh
         language: system
         files: '\.(rs|toml)$'
         types: [file]
@@ -217,16 +212,8 @@ repos:
         name: add-trailing-comma
         types: [python]
 
-  - repo: https://github.com/psf/black
-    rev: 25.9.0
-    hooks:
-      - id: black
-        types_or: [python, pyi]
-        entry: "black"
-        args: ["--config", "pyproject.toml"]
-
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.12.12  # Pinned to v0.12.12 for import sorting stability
+    rev: v0.14.3
     hooks:
       - id: ruff
         args: ["--fix"]
@@ -235,8 +222,8 @@ repos:
     rev: 7.0.0
     hooks:
       - id: isort
-        name: isort (cython)
-        types_or: [cython]
+        name: isort
+        types_or: [python, pyi, cython]
         entry: "isort"
         args: ["--settings-file", "pyproject.toml"]
 
@@ -244,9 +231,11 @@ repos:
     rev: v1.7.7
     hooks:
       - id: docformatter
+        language_version: python3.13  # Pin to 3.13 due to untokenize incompatibility with 3.14
         additional_dependencies: [tomli]
         args: [
-          "--black",
+          "--wrap-summaries", "88",
+          "--wrap-descriptions", "88",
           "--make-summary-multi-line",
           "--pre-summary-newline",
           "--blank",
@@ -273,7 +262,7 @@ repos:
         ]
 
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: 0.8.24  # Must match uv-version file
+    rev: 0.9.7  # Must match uv-version file
     hooks:
       - id: uv-lock
         files: ^python/uv\.lock$
@@ -283,6 +272,9 @@ repos:
     hooks:
       - id: nbstripout
 
+  ##############################################################################
+  #  Markdown formatting and linting
+  ##############################################################################
   - repo: https://github.com/DavidAnson/markdownlint-cli2
     rev: v0.18.1
     hooks:

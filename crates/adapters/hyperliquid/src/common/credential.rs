@@ -13,7 +13,14 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-use std::{env, fmt, fs, path::Path};
+#![allow(unused_assignments)] // Fields are accessed via methods, false positive from nightly
+
+use std::{
+    env,
+    fmt::{Debug, Display},
+    fs,
+    path::Path,
+};
 
 use serde::Deserialize;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -77,14 +84,14 @@ impl EvmPrivateKey {
     }
 }
 
-impl fmt::Debug for EvmPrivateKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Debug for EvmPrivateKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("EvmPrivateKey(***redacted***)")
     }
 }
 
-impl fmt::Display for EvmPrivateKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for EvmPrivateKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("EvmPrivateKey(***redacted***)")
     }
 }
@@ -131,15 +138,15 @@ impl VaultAddress {
     }
 }
 
-impl fmt::Debug for VaultAddress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Debug for VaultAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let hex = self.to_hex();
         write!(f, "VaultAddress({}...{})", &hex[..6], &hex[hex.len() - 4..])
     }
 }
 
-impl fmt::Display for VaultAddress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Display for VaultAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_hex())
     }
 }
@@ -152,8 +159,8 @@ pub struct Secrets {
     pub is_testnet: bool,
 }
 
-impl fmt::Debug for Secrets {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Debug for Secrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct(stringify!(Secrets))
             .field("private_key", &self.private_key)
             .field("vault_address", &self.vault_address)
@@ -262,7 +269,7 @@ impl Secrets {
         }
 
         let raw: RawSecrets = serde_json::from_str(json)
-            .map_err(|e| Error::bad_request(format!("Invalid JSON: {}", e)))?;
+            .map_err(|e| Error::bad_request(format!("Invalid JSON: {e}")))?;
 
         let private_key = EvmPrivateKey::new(raw.private_key)?;
 
@@ -427,28 +434,6 @@ mod tests {
 
         for (input, expected) in test_cases {
             assert_eq!(normalize_address(input).unwrap(), expected);
-        }
-    }
-
-    #[rstest]
-    #[ignore = "This test modifies environment variables - run manually if needed"]
-    fn test_secrets_from_env() {
-        // Note: This test requires setting environment variables manually
-        // HYPERLIQUID_PK=1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
-        // HYPERLIQUID_VAULT=0x1234567890abcdef1234567890abcdef12345678
-        // HYPERLIQUID_NETWORK=testnet
-
-        // For now, just test the error case when variables are not set
-        match Secrets::from_env() {
-            Err(e) => {
-                assert!(
-                    e.to_string().contains("HYPERLIQUID_PK")
-                        || e.to_string().contains("environment variable not set")
-                );
-            }
-            Ok(_) => {
-                // If environment variables are actually set, that's fine too
-            }
         }
     }
 }

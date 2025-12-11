@@ -27,6 +27,7 @@ use crate::defi::{
     },
     pool_analysis::{
         position::PoolPosition,
+        quote::SwapQuote,
         snapshot::{PoolAnalytics, PoolSnapshot, PoolState},
         swap_math::compute_swap_step,
     },
@@ -36,7 +37,7 @@ use crate::defi::{
         full_math::{FullMath, Q128},
         liquidity_math::liquidity_math_add,
         sqrt_price_math::{get_amount0_delta, get_amount1_delta, get_amounts_for_liquidity},
-        tick::PoolTick,
+        tick::{CrossedTick, PoolTick},
         tick_math::{
             MAX_SQRT_RATIO, MIN_SQRT_RATIO, get_sqrt_ratio_at_tick, get_tick_at_sqrt_ratio,
         },
@@ -263,8 +264,9 @@ impl PoolProfiler {
         // For price limit use the final sqrt price from swap, which is a
         // good proxy to price limit
         let sqrt_price_limit_x96 = swap.sqrt_price_x96;
-        let (_, _) =
+        let swap_quote =
             self.simulate_swap_through_ticks(amount_specified, zero_for_one, sqrt_price_limit_x96)?;
+        self.apply_swap_quote(&swap_quote);
 
         // Verify simulation against event data - correct with event values if mismatch detected
         if swap.tick != self.state.current_tick {
@@ -294,6 +296,7 @@ impl PoolProfiler {
             swap.log_index,
         ));
         self.update_reporter_if_enabled(swap.block);
+        self.update_liquidity_analytics();
 
         Ok(())
     }
@@ -326,8 +329,9 @@ impl PoolProfiler {
         sqrt_price_limit_x96: U160,
     ) -> anyhow::Result<PoolSwap> {
         self.check_if_initialized();
-        let (amount0, amount1) =
+        let swap_quote =
             self.simulate_swap_through_ticks(amount_specified, zero_for_one, sqrt_price_limit_x96)?;
+        self.apply_swap_quote(&swap_quote);
 
         self.analytics.total_swaps += 1;
         let swap_event = PoolSwap::new(
@@ -342,8 +346,8 @@ impl PoolProfiler {
             None,
             sender,
             recipient,
-            amount0,
-            amount1,
+            swap_quote.amount0,
+            swap_quote.amount1,
             self.state.price_sqrt_ratio_x96,
             self.tick_map.liquidity,
             self.state.current_tick,
@@ -354,45 +358,49 @@ impl PoolProfiler {
         Ok(swap_event)
     }
 
-    /// Core swap simulation engine implementing UniswapV3 mathematics.
+    /// Core **read-only** swap simulation engine implementing UniswapV3 mathematics.
     ///
-    /// This private method contains the complete AMM swap algorithm and is the
-    /// computational heart of both [`Self::execute_swap`] (forward simulation)
-    /// and [`Self::process_swap`] (historical replay).
+    /// This method performs a complete swap simulation without modifying pool state,
+    /// working entirely on stack-allocated local copies of state variables. It returns
+    /// a comprehensive [`SwapQuote`] containing all swap results and profiling data,
+    /// including a complete audit trail of crossed ticks.
+    ///
     ///
     /// # Algorithm Overview
     ///
     /// 1. **Iterative price curve traversal**: Walks through liquidity ranges until
     ///    the input/output amount is exhausted or the price limit is reached
-    /// 2. **Tick crossing**: When reaching an initialized tick boundary, updates
-    ///    active liquidity by applying the tick's `liquidity_net`
-    /// 3. **Fee calculation**: Splits fees between LPs (via fee growth globals)
-    ///    and protocol (via protocol fee percentage)
-    /// 4. **State mutation**: Updates current tick, sqrt price, liquidity, and
-    ///    fee growth accumulators
+    /// 2. **Tick crossing tracking**: When crossing initialized tick boundaries, records
+    ///    the crossing in `crossed_ticks` vector with complete state snapshot (tick, direction, fee growth)
+    /// 3. **Local liquidity updates**: Tracks liquidity changes in local variables by reading
+    ///    `liquidity_net` from tick map (read-only, no mutations)
+    /// 4. **Fee calculation**: Splits fees between LPs and protocol, accumulates in local variables
+    /// 5. **Quote assembly**: Returns [`SwapQuote`] with amounts, prices, fees, and crossed tick data
     ///
     /// # Errors
     ///
     /// Returns error if:
     /// - Pool fee is not configured
     /// - Fee growth arithmetic overflows when scaling by liquidity
-    /// - Invalid state encountered during tick crossing
+    /// - Swap step calculations fail
     ///
     /// # Panics
     ///
     /// Panics if pool is not initialized
     pub fn simulate_swap_through_ticks(
-        &mut self,
+        &self,
         amount_specified: I256,
         zero_for_one: bool,
         sqrt_price_limit_x96: U160,
-    ) -> anyhow::Result<(I256, I256)> {
+    ) -> anyhow::Result<SwapQuote> {
         let mut current_sqrt_price = self.state.price_sqrt_ratio_x96;
         let mut current_tick = self.state.current_tick;
         let exact_input = amount_specified.is_positive();
         let mut amount_specified_remaining = amount_specified;
         let mut amount_calculated = I256::ZERO;
         let mut protocol_fee = U256::ZERO;
+        let mut lp_fee = U256::ZERO;
+        let mut crossed_ticks = Vec::new();
         let fee_tier = self.pool.fee.expect("Pool fee should be initialized");
         // Swapping cache variables
         let fee_protocol = if zero_for_one {
@@ -468,6 +476,9 @@ impl PoolProfiler {
                 protocol_fee += protocol_fee_delta;
             }
 
+            // Accumulate LP fee (protocol fee is already deducted if it exists).
+            lp_fee += step_fee_amount;
+
             // Update global fee tracker
             if self.tick_map.liquidity > 0 {
                 let fee_growth_delta =
@@ -481,8 +492,9 @@ impl PoolProfiler {
                 // Time to handle crossing into the next tick, which may change liquidity.
                 // If the tick is initialized, run the tick transition logic (liquidity changes, fee accumulators, etc.).
                 if initialized {
-                    let liquidity_net = self.tick_map.cross_tick(
+                    crossed_ticks.push(CrossedTick::new(
                         tick_next,
+                        zero_for_one,
                         if zero_for_one {
                             current_fee_growth_global
                         } else {
@@ -493,16 +505,7 @@ impl PoolProfiler {
                         } else {
                             current_fee_growth_global
                         },
-                    );
-
-                    // Apply liquidity change based on crossing direction
-                    // When crossing down (zeroForOne = true), negate liquidity_net before adding
-                    // When crossing up (zeroForOne = false), use liquidity_net as-is without negation
-                    self.tick_map.liquidity = if zero_for_one {
-                        liquidity_math_add(self.tick_map.liquidity, -liquidity_net)
-                    } else {
-                        liquidity_math_add(self.tick_map.liquidity, liquidity_net)
-                    };
+                    ));
                 }
 
                 current_tick = if zero_for_one {
@@ -515,24 +518,6 @@ impl PoolProfiler {
                 // So, update the tick to match the new price.
                 current_tick = get_tick_at_sqrt_ratio(current_sqrt_price);
             }
-        }
-
-        // Update pool state - match Solidity exactly
-        if self.state.current_tick != current_tick {
-            self.state.current_tick = current_tick;
-            self.state.price_sqrt_ratio_x96 = current_sqrt_price;
-        } else {
-            // Otherwise just update the price
-            self.state.price_sqrt_ratio_x96 = current_sqrt_price;
-        }
-
-        // Update fee growth global and if necessary, protocol fees
-        if zero_for_one {
-            self.state.fee_growth_global_0 = current_fee_growth_global;
-            self.state.protocol_fees_token0 += protocol_fee;
-        } else {
-            self.state.fee_growth_global_1 = current_fee_growth_global;
-            self.state.protocol_fees_token1 += protocol_fee;
         }
 
         // Calculate final amounts
@@ -548,7 +533,55 @@ impl PoolProfiler {
             )
         };
 
-        Ok((amount0, amount1))
+        let quote = SwapQuote::new(
+            amount0,
+            amount1,
+            self.state.price_sqrt_ratio_x96,
+            current_sqrt_price,
+            self.state.current_tick,
+            current_tick,
+            current_fee_growth_global,
+            lp_fee,
+            protocol_fee,
+            crossed_ticks,
+        );
+        Ok(quote)
+    }
+
+    /// Applies a swap quote to the pool state (mutations only, no simulation).
+    ///
+    /// This private method takes a [`SwapQuote`] generated by [`Self::simulate_swap_through_ticks`]
+    /// and applies its state changes to the pool, including:
+    /// - Price and tick updates
+    /// - Fee growth and protocol fee accumulation
+    /// - Tick crossing mutations (updating tick fee accumulators and active liquidity)
+    fn apply_swap_quote(&mut self, swap_quote: &SwapQuote) {
+        // Update price and tick.
+        self.state.current_tick = swap_quote.tick_after;
+        self.state.price_sqrt_ratio_x96 = swap_quote.sqrt_price_after_x96;
+
+        // Update fee growth and protocol fees based on swap direction.
+        if swap_quote.zero_for_one() {
+            self.state.fee_growth_global_0 = swap_quote.fee_growth_global_after;
+            self.state.protocol_fees_token0 += swap_quote.protocol_fee;
+        } else {
+            self.state.fee_growth_global_1 = swap_quote.fee_growth_global_after;
+            self.state.protocol_fees_token1 += swap_quote.protocol_fee;
+        }
+
+        // Apply tick crossings efficiently - only update crossed ticks
+        for crossed in &swap_quote.crossed_ticks {
+            let liquidity_net =
+                self.tick_map
+                    .cross_tick(crossed.tick, crossed.fee_growth_0, crossed.fee_growth_1);
+
+            // Update active liquidity based on crossing direction
+            self.tick_map.liquidity = if crossed.zero_for_one {
+                liquidity_math_add(self.tick_map.liquidity, -liquidity_net)
+            } else {
+                liquidity_math_add(self.tick_map.liquidity, liquidity_net)
+            };
+        }
     }
 
     /// Swaps an exact amount of token0 for token1.
@@ -711,6 +744,43 @@ impl PoolProfiler {
         )
     }
 
+    /// Returns a comprehensive swap quote without modifying pool state.
+    ///
+    /// This method simulates a swap and provides detailed profiling metrics including:
+    /// - Amounts of tokens that would be exchanged
+    /// - Price before and after the swap
+    /// - Fee breakdown (LP fees and protocol fees)
+    /// - List of crossed ticks with state snapshots
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - Pool fee is not configured
+    /// - Fee growth arithmetic overflows when scaling by liquidity
+    /// - Swap step calculations fail
+    ///
+    /// # Panics
+    ///
+    /// Panics if pool is not initialized
+    pub fn quote_swap(
+        &self,
+        amount_specified: I256,
+        zero_for_one: bool,
+        sqrt_price_limit_x96: Option<U160>,
+    ) -> anyhow::Result<SwapQuote> {
+        self.check_if_initialized();
+
+        let limit = sqrt_price_limit_x96.unwrap_or_else(|| {
+            if zero_for_one {
+                MIN_SQRT_RATIO + U160::from(1)
+            } else {
+                MAX_SQRT_RATIO - U160::from(1)
+            }
+        });
+
+        self.simulate_swap_through_ticks(amount_specified, zero_for_one, limit)
+    }
+
     /// Processes a mint (liquidity add) event from historical data.
     ///
     /// Updates pool state when liquidity is added to a position, validates ticks,
@@ -747,6 +817,7 @@ impl PoolProfiler {
             update.log_index,
         ));
         self.update_reporter_if_enabled(update.block);
+        self.update_liquidity_analytics();
 
         Ok(())
     }
@@ -877,6 +948,7 @@ impl PoolProfiler {
             update.log_index,
         ));
         self.update_reporter_if_enabled(update.block);
+        self.update_liquidity_analytics();
 
         Ok(())
     }
@@ -977,6 +1049,9 @@ impl PoolProfiler {
             position.collect_fees(collect.amount0, collect.amount1);
         }
 
+        // Cleanup position if it became empty after collecting all fees
+        self.cleanup_position_if_empty(&position_key);
+
         self.analytics.total_amount0_collected += U256::from(collect.amount0);
         self.analytics.total_amount1_collected += U256::from(collect.amount1);
 
@@ -988,6 +1063,7 @@ impl PoolProfiler {
             collect.log_index,
         ));
         self.update_reporter_if_enabled(collect.block);
+        self.update_liquidity_analytics();
 
         Ok(())
     }
@@ -1019,6 +1095,7 @@ impl PoolProfiler {
             flash.log_index,
         ));
         self.update_reporter_if_enabled(flash.block);
+        self.update_liquidity_analytics();
 
         Ok(())
     }
@@ -1215,6 +1292,49 @@ impl PoolProfiler {
         Ok(())
     }
 
+    /// Removes position from tracking if it's completely empty.
+    ///
+    /// This prevents accumulation of positions in the memory that are not used anymore.
+    fn cleanup_position_if_empty(&mut self, position_key: &str) {
+        if let Some(position) = self.positions.get(position_key)
+            && position.is_empty()
+        {
+            tracing::debug!(
+                "CLEANING UP EMPTY POSITION: owner={}, ticks=[{}, {}]",
+                position.owner,
+                position.tick_lower,
+                position.tick_upper,
+            );
+            self.positions.remove(position_key);
+        }
+    }
+
+    /// Calculates the liquidity utilization rate for the pool.
+    ///
+    /// The utilization rate measures what percentage of total deployed liquidity
+    /// is currently active (in-range and earning fees) at the current price tick.
+    pub fn liquidity_utilization_rate(&self) -> f64 {
+        let total_liquidity = self.get_total_liquidity();
+        let active_liquidity = self.get_active_liquidity();
+
+        if total_liquidity == U256::ZERO {
+            return 0.0;
+        }
+
+        // 6 decimal places
+        const PRECISION: u32 = 1_000_000;
+        let ratio = FullMath::mul_div(
+            U256::from(active_liquidity),
+            U256::from(PRECISION),
+            total_liquidity,
+        )
+        .unwrap_or(U256::ZERO);
+
+        // Safe to cast to u64: Since active_liquidity <= total_liquidity,
+        // the ratio is guaranteed to be <= PRECISION (1_000_000), which fits in u64
+        ratio.to::<u64>() as f64 / PRECISION as f64
+    }
+
     /// Validates tick range for position operations.
     ///
     /// Ensures ticks are properly ordered, aligned to tick spacing, and within
@@ -1247,6 +1367,11 @@ impl PoolProfiler {
         Ok(())
     }
 
+    /// Updates all liquidity analytics.
+    fn update_liquidity_analytics(&mut self) {
+        self.analytics.liquidity_utilization_rate = self.liquidity_utilization_rate();
+    }
+
     /// Returns the pool's active liquidity tracked by the tick map.
     ///
     /// This represents the effective liquidity available for trading at the current price.
@@ -1276,6 +1401,15 @@ impl PoolProfiler {
             })
             .map(|position| position.liquidity)
             .sum()
+    }
+
+    /// Calculates total liquidity across all positions, regardless of range status.
+    #[must_use]
+    pub fn get_total_liquidity(&self) -> U256 {
+        self.positions
+            .values()
+            .map(|position| U256::from(position.liquidity))
+            .fold(U256::ZERO, |acc, liq| acc + liq)
     }
 
     /// Restores the profiler state from a saved snapshot.
@@ -1337,6 +1471,9 @@ impl PoolProfiler {
 
         // Mark as initialized
         self.is_initialized = true;
+
+        // Recalculate analytics
+        self.update_liquidity_analytics();
 
         Ok(())
     }
@@ -1422,14 +1559,6 @@ impl PoolProfiler {
             .collect()
     }
 
-    /// Returns position keys for all currently active positions.
-    pub fn get_active_position_keys(&self) -> Vec<(Address, i32, i32)> {
-        self.get_active_positions()
-            .iter()
-            .map(|position| (position.owner, position.tick_lower, position.tick_upper))
-            .collect()
-    }
-
     /// Returns a list of all positions tracked by the profiler.
     ///
     /// This includes both active and inactive positions, regardless of their
@@ -1440,6 +1569,14 @@ impl PoolProfiler {
     /// A vector of references to all [`PoolPosition`] objects.
     pub fn get_all_positions(&self) -> Vec<&PoolPosition> {
         self.positions.values().collect()
+    }
+
+    /// Returns position keys for all tracked positions.
+    pub fn get_all_position_keys(&self) -> Vec<(Address, i32, i32)> {
+        self.get_all_positions()
+            .iter()
+            .map(|position| (position.owner, position.tick_lower, position.tick_upper))
+            .collect()
     }
 
     /// Extracts a complete snapshot of the current pool state.

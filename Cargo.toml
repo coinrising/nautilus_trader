@@ -34,11 +34,11 @@ members = [
 ]
 
 [workspace.package]
-version = "0.51.0"
+version = "0.52.0"
 edition = "2024"
-rust-version = "1.90.0"
+rust-version = "1.91.0"
 authors = ["Nautech Systems <info@nautechsystems.io>"]
-license = "LGPL-3.0"
+license = "LGPL-3.0-or-later"
 readme = "README.md"
 description = "A high-performance algorithmic trading platform and event-driven backtester"
 categories = ["finance", "simulation", "asynchronous"]
@@ -54,51 +54,51 @@ repository = "https://github.com/nautechsystems/nautilus_trader"
 homepage = "https://nautilustrader.io"
 
 [workspace.dependencies]
-nautilus-analysis = { path = "crates/analysis", version = "0.51.0" }
-nautilus-backtest = { path = "crates/backtest", version = "0.51.0" }
-nautilus-cli = { path = "crates/cli", version = "0.51.0" }
-nautilus-common = { path = "crates/common", version = "0.51.0" }
-nautilus-core = { path = "crates/core", version = "0.51.0" }
-nautilus-cryptography = { path = "crates/cryptography", version = "0.51.0" }
-nautilus-data = { path = "crates/data", version = "0.51.0" }
-nautilus-execution = { path = "crates/execution", version = "0.51.0" }
-nautilus-indicators = { path = "crates/indicators", version = "0.51.0" }
-nautilus-infrastructure = { path = "crates/infrastructure", version = "0.51.0" }
-nautilus-live = { path = "crates/live", version = "0.51.0" }
-nautilus-model = { path = "crates/model", version = "0.51.0" }
-nautilus-network = { path = "crates/network", version = "0.51.0" }
-nautilus-persistence = { path = "crates/persistence", version = "0.51.0" }
-nautilus-portfolio = { path = "crates/portfolio", version = "0.51.0" }
-nautilus-pyo3 = { path = "crates/pyo3", version = "0.51.0" }
-nautilus-risk = { path = "crates/risk", version = "0.51.0" }
-nautilus-serialization = { path = "crates/serialization", version = "0.51.0" }
-nautilus-system = { path = "crates/system", version = "0.51.0" }
-nautilus-testkit = { path = "crates/testkit", version = "0.51.0" }
-nautilus-trading = { path = "crates/trading", version = "0.51.0" }
+nautilus-analysis = { path = "crates/analysis", version = "0.52.0" }
+nautilus-backtest = { path = "crates/backtest", version = "0.52.0" }
+nautilus-cli = { path = "crates/cli", version = "0.52.0" }
+nautilus-common = { path = "crates/common", version = "0.52.0" }
+nautilus-core = { path = "crates/core", version = "0.52.0" }
+nautilus-cryptography = { path = "crates/cryptography", version = "0.52.0" }
+nautilus-data = { path = "crates/data", version = "0.52.0" }
+nautilus-execution = { path = "crates/execution", version = "0.52.0" }
+nautilus-indicators = { path = "crates/indicators", version = "0.52.0" }
+nautilus-infrastructure = { path = "crates/infrastructure", version = "0.52.0" }
+nautilus-live = { path = "crates/live", version = "0.52.0" }
+nautilus-model = { path = "crates/model", version = "0.52.0" }
+nautilus-network = { path = "crates/network", version = "0.52.0" }
+nautilus-persistence = { path = "crates/persistence", version = "0.52.0" }
+nautilus-portfolio = { path = "crates/portfolio", version = "0.52.0" }
+nautilus-pyo3 = { path = "crates/pyo3", version = "0.52.0" }
+nautilus-risk = { path = "crates/risk", version = "0.52.0" }
+nautilus-serialization = { path = "crates/serialization", version = "0.52.0" }
+nautilus-system = { path = "crates/system", version = "0.52.0" }
+nautilus-testkit = { path = "crates/testkit", version = "0.52.0" }
+nautilus-trading = { path = "crates/trading", version = "0.52.0" }
 
 # -----------------------------------------------------------------------------
 # Adapters
 # -----------------------------------------------------------------------------
-nautilus-blockchain = { path = "crates/adapters/blockchain", version = "0.51.0" }
-nautilus-bybit = { path = "crates/adapters/bybit", version = "0.51.0" }
-nautilus-coinbase-intx = { path = "crates/adapters/coinbase_intx", version = "0.51.0" }
-nautilus-bitmex = { path = "crates/adapters/bitmex", version = "0.51.0" }
-nautilus-databento = { path = "crates/adapters/databento", version = "0.51.0" }
-nautilus-hyperliquid = { path = "crates/adapters/hyperliquid", version = "0.51.0" }
-nautilus-okx = { path = "crates/adapters/okx", version = "0.51.0" }
-nautilus-tardis = { path = "crates/adapters/tardis", version = "0.51.0" }
+nautilus-blockchain = { path = "crates/adapters/blockchain", version = "0.52.0" }
+nautilus-bybit = { path = "crates/adapters/bybit", version = "0.52.0" }
+nautilus-coinbase-intx = { path = "crates/adapters/coinbase_intx", version = "0.52.0" }
+nautilus-bitmex = { path = "crates/adapters/bitmex", version = "0.52.0" }
+nautilus-databento = { path = "crates/adapters/databento", version = "0.52.0" }
+nautilus-hyperliquid = { path = "crates/adapters/hyperliquid", version = "0.52.0" }
+nautilus-okx = { path = "crates/adapters/okx", version = "0.52.0" }
+nautilus-tardis = { path = "crates/adapters/tardis", version = "0.52.0" }
 
 # -----------------------------------------------------------------------------
 # Dependencies
 # -----------------------------------------------------------------------------
 ahash = "0.8.12"
-alloy = { version = "1.0.41", default-features = false, features = [
+alloy = { version = "1.0.42", default-features = false, features = [
   "sol-types",
   "contract",
 ] }
 alloy-primitives = { version = "1.4.1", features = ["serde"] }
-alloy-signer = { version = "1.0.37", default-features = false }
-alloy-signer-local = { version = "1.0.37", default-features = false, features = [
+alloy-signer = { version = "1.0.42", default-features = false }
+alloy-signer-local = { version = "1.0.42", default-features = false, features = [
   "mnemonic",
 ] }
 anyhow = "1.0.100"
@@ -123,7 +123,7 @@ chrono = { version = "0.4.42", default-features = false, features = [
   "clock",
 ] }
 chrono-tz = "0.10.4"
-clap = { version = "4.5.50", features = ["derive", "env"] }
+clap = { version = "4.5.51", features = ["derive", "env"] }
 compare = "0.1.0"
 csv = "1.4.0"
 dashmap = "6.1.0"
@@ -131,12 +131,12 @@ databento = { version = "0.35.0", default-features = false, features = [
   "historical",
   "live",
 ] }
-datafusion = { version = "50.2.0", default-features = false, features = [
+datafusion = { version = "50.3.0", default-features = false, features = [
   "parquet",
   "regex_expressions",
   "unicode_expressions",
 ] }
-deranged = "0.5.4"
+deranged = "0.5.5"
 derive_builder = { version = "0.20.2", default-features = false, features = [
   "alloc",
 ] }
@@ -145,7 +145,7 @@ ed25519-dalek = "2.2.0"
 enum_dispatch = "0.3.13"
 evalexpr = "=11.3.1" # Pinned to v11.3.1 for MIT licensing
 fallible-streaming-iterator = "0.1.9"
-flate2 = "1.1.4"
+flate2 = "1.1.5"
 futures = { version = "0.3.31", default-features = false, features = [
   "std",
   "async-await",
@@ -157,7 +157,7 @@ hostname = "0.4.1"
 http = "1.3.1"
 hypersync-client = { version = "0.19.0" }
 hypersync-schema = { version = "0.3.0" }
-implied-vol = { version = "1.3.0", features = ["normal-distribution"] }
+implied-vol = { version = "2.0.0" }
 indexmap = { version = "2.12.0", features = ["serde"] }
 itertools = "0.14.0"
 itoa = "1.0.15"
@@ -182,7 +182,7 @@ parquet = { version = "56.2.0", default-features = false, features = [
   "async",
 ] }
 pem = "3.0.6"
-pyo3 = { version = "0.26.0", default-features = false, features = [
+pyo3 = { version = "0.27.1", default-features = false, features = [
   "chrono",
   "hashbrown",
   "indexmap",
@@ -190,12 +190,12 @@ pyo3 = { version = "0.26.0", default-features = false, features = [
   "rust_decimal",
   "serde",
 ] }
-pyo3-async-runtimes = { version = "0.26.0", default-features = false, features = [
+pyo3-async-runtimes = { version = "0.27.0", default-features = false, features = [
   "attributes",
   "tokio",
   "tokio-runtime",
 ] }
-pyo3-stub-gen = "0.14.1"
+pyo3-stub-gen = "0.16.1"
 rand = { version = "0.9.2", default-features = false, features = [
   "std",
   "thread_rng",
@@ -223,8 +223,8 @@ reqwest = { version = "0.12.24", default-features = false, features = [
 ] }
 rmp-serde = "1.3.0"
 rust_decimal = "1.39.0"
-rust_decimal_macros = "1.38.0"
-rustls = { version = "0.23.33", default-features = false, features = [
+rust_decimal_macros = "1.39.0"
+rustls = { version = "0.23.34", default-features = false, features = [
   "aws-lc-rs",
   "std",
 ] }
@@ -280,7 +280,7 @@ tokio-stream = "0.1.17"
 tokio-tungstenite = { version = "0.28.0", features = [
   "rustls-tls-webpki-roots",
 ] }
-tokio-util = { version = "0.7.16", default-features = false, features = ["io"] }
+tokio-util = { version = "0.7.17", default-features = false, features = ["io"] }
 toml = { version = "0.9.8", default-features = false, features = [
   "parse",
   "serde",
@@ -303,7 +303,7 @@ url = { version = "2.5.7", default-features = false }
 urlencoding = "2.1.3"
 ustr = { version = "1.1.0", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["v4", "serde"] }
-webpki-roots = "1.0.3"
+webpki-roots = "1.0.4"
 zeroize = { version = "1.8.2", features = ["alloc", "zeroize_derive"] }
 
 # -----------------------------------------------------------------------------
@@ -320,7 +320,7 @@ criterion = "0.7.0"
 http-body-util = "0.1.3"
 iai = "0.1.1"
 pretty_assertions = "1.4.1"
-proptest = "1.8.0"
+proptest = "1.9.0"
 rstest = "0.26.1"
 tempfile = "3.23.0"
 tracing-test = "0.2.5"
@@ -330,6 +330,16 @@ turmoil = "0.6.6"
 # Build dependencies
 # -----------------------------------------------------------------------------
 cbindgen = "0.29.2"
+
+# -----------------------------------------------------------------------------
+# Tools (for cargo install, used by Makefile and CI)
+# -----------------------------------------------------------------------------
+[workspace.metadata.tools]
+cargo-audit = "0.21.2"
+cargo-deny = "0.18.5"
+cargo-llvm-cov = "0.6.21"
+cargo-nextest = "0.9.108"
+lychee = "0.21.0"
 
 # -----------------------------------------------------------------------------
 # Profiles

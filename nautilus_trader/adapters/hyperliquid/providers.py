@@ -16,7 +16,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+from typing import Any
 
 from nautilus_trader.adapters.hyperliquid.constants import HYPERLIQUID_VENUE
 from nautilus_trader.adapters.hyperliquid.enums import DEFAULT_PRODUCT_TYPES
@@ -98,9 +99,7 @@ class HyperliquidInstrumentProvider(InstrumentProvider):
 
         loaded, skipped = self._ingest_instruments(instruments, filters)
 
-        if loaded:
-            self._log.info(f"Loaded {loaded} instruments for venue {HYPERLIQUID_VENUE.value}")
-        else:
+        if not loaded:
             self._log.warning("No Hyperliquid instruments matched the requested filters")
 
         if skipped:
@@ -121,8 +120,8 @@ class HyperliquidInstrumentProvider(InstrumentProvider):
         except AttributeError:  # method missing (old wheel?)
             self._log.error("HyperliquidHttpClient is missing load_instrument_definitions")
             raise
-        except Exception as exc:  # pragma: no cover - defensive logging
-            self._log.exception("Failed to fetch Hyperliquid instrument metadata", exc)
+        except Exception as e:  # pragma: no cover - defensive logging
+            self._log.exception("Failed to fetch Hyperliquid instrument metadata", e)
             raise
 
     def _reset_caches(self) -> None:

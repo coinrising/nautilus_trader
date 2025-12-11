@@ -13,6 +13,7 @@
 #  limitations under the License.
 # -------------------------------------------------------------------------------------------------
 
+import time
 from decimal import Decimal
 from typing import Any
 
@@ -35,6 +36,21 @@ from nautilus_trader.model.identifiers import Symbol
 from nautilus_trader.model.instruments import BinaryOption
 from nautilus_trader.model.objects import Price
 from nautilus_trader.model.objects import Quantity
+
+
+def validate_ethereum_address(address: str) -> None:
+    if not address.startswith("0x") or len(address) != 42:
+        raise ValueError(
+            f"Invalid Ethereum address format: {address!r}. "
+            f"Expected 0x prefix with 40 hexadecimal characters",
+        )
+    try:
+        int(address[2:], 16)
+    except ValueError as e:
+        raise ValueError(
+            f"Invalid Ethereum address format: {address!r}. "
+            f"Address contains non-hexadecimal characters",
+        ) from e
 
 
 def parse_order_side(order_side: PolymarketOrderSide) -> OrderSide:
@@ -67,6 +83,8 @@ def parse_time_in_force(order_type: PolymarketOrderType) -> TimeInForce:
             return TimeInForce.GTD
         case PolymarketOrderType.FOK:
             return TimeInForce.FOK
+        case PolymarketOrderType.FAK:
+            return TimeInForce.IOC
         case _:
             # Theoretically unreachable but retained to keep the match exhaustive
             raise ValueError(f"invalid order type, was {order_type}")
@@ -74,11 +92,11 @@ def parse_time_in_force(order_type: PolymarketOrderType) -> TimeInForce:
 
 def parse_order_status(order_status: PolymarketOrderStatus) -> OrderStatus:
     match order_status:
-        case PolymarketOrderStatus.UNMATCHED:
+        case PolymarketOrderStatus.INVALID | PolymarketOrderStatus.UNMATCHED:
             return OrderStatus.REJECTED
         case PolymarketOrderStatus.LIVE | PolymarketOrderStatus.DELAYED:
             return OrderStatus.ACCEPTED
-        case PolymarketOrderStatus.CANCELED:
+        case PolymarketOrderStatus.CANCELED | PolymarketOrderStatus.CANCELED_MARKET_RESOLVED:
             return OrderStatus.CANCELED
         case PolymarketOrderStatus.MATCHED:
             return OrderStatus.FILLED
@@ -88,7 +106,7 @@ def parse_instrument(
     market_info: dict[str, Any],
     token_id: str,
     outcome: str,
-    ts_init: int,
+    ts_init: int | None = None,
 ) -> BinaryOption:
     instrument_id = get_polymarket_instrument_id(str(market_info["condition_id"]), token_id)
     raw_symbol = Symbol(get_polymarket_token_id(instrument_id))
@@ -108,6 +126,8 @@ def parse_instrument(
 
     maker_fee = Decimal(str(market_info["maker_base_fee"]))
     taker_fee = Decimal(str(market_info["taker_base_fee"]))
+
+    ts_init = ts_init if ts_init is not None else time.time_ns()
 
     return BinaryOption(
         instrument_id=instrument_id,

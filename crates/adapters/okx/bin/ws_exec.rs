@@ -13,10 +13,6 @@
 //  limitations under the License.
 // -------------------------------------------------------------------------------------------------
 
-// Under development
-#![allow(dead_code)]
-#![allow(unused_variables)]
-
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -45,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let instruments = rest_client.request_instruments(inst_type, None).await?;
 
     let mut ws_client = OKXWebSocketClient::from_env().unwrap();
-    ws_client.initialize_instruments_cache(instruments.clone());
+    ws_client.cache_instruments(instruments.clone());
     ws_client.connect().await?;
 
     // Subscribe to execution channels: orders and account updates

@@ -30,6 +30,7 @@ use crate::opt::DatabaseConfig;
 /// # Errors
 ///
 /// Returns an error if the chain or DEX parameters are invalid.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_analyze_pool(
     chain: String,
     dex: String,
@@ -130,5 +131,9 @@ pub async fn run_analyze_pool(
     data_client
         .check_snapshot_validity(&profiler, already_valid)
         .await?;
+    log::info!(
+        "Pool liquidity utilization rate is {:.4}%",
+        profiler.liquidity_utilization_rate() * 100.0
+    );
     Ok(())
 }

@@ -19,7 +19,6 @@ from operator import attrgetter
 
 import pandas as pd
 
-# fmt: off
 from nautilus_trader.adapters.interactive_brokers.client import InteractiveBrokersClient
 from nautilus_trader.adapters.interactive_brokers.common import IB_VENUE
 from nautilus_trader.adapters.interactive_brokers.common import IBContract
@@ -62,9 +61,6 @@ from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.instruments.currency_pair import CurrencyPair
-
-
-# fmt: on
 
 
 class InteractiveBrokersDataClient(LiveMarketDataClient):
@@ -218,10 +214,11 @@ class InteractiveBrokersDataClient(LiveMarketDataClient):
                 generic_tick_list="",  # Empty for basic bid/ask data
             )
         else:
-            await self._client.subscribe_market_data(
+            await self._client.subscribe_ticks(
                 instrument_id=command.instrument_id,
                 contract=contract,
-                generic_tick_list="",  # Empty for basic bid/ask data
+                tick_type="BidAsk",
+                ignore_size=self._ignore_quote_tick_size_updates,
             )
 
     async def _subscribe_trade_ticks(self, command: SubscribeTradeTicks) -> None:

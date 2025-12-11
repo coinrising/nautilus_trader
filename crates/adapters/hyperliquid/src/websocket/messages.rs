@@ -20,6 +20,8 @@ use nautilus_model::reports::{FillReport, OrderStatusReport};
 use serde::{Deserialize, Serialize};
 use ustr::Ustr;
 
+use crate::common::enums::HyperliquidBarInterval;
+
 /// Represents an outbound WebSocket message from client to Hyperliquid.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "method")]
@@ -61,7 +63,10 @@ pub enum SubscriptionRequest {
     /// Web data for frontend
     WebData2 { user: String },
     /// Candlestick data
-    Candle { coin: Ustr, interval: String },
+    Candle {
+        coin: Ustr,
+        interval: HyperliquidBarInterval,
+    },
     /// Level 2 order book
     L2Book {
         coin: Ustr,
@@ -389,7 +394,7 @@ pub struct CandleData {
 }
 
 /// WebSocket book data
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WsBookData {
     pub coin: Ustr,
     pub levels: [Vec<WsLevelData>; 2], // [bids, asks]
@@ -397,7 +402,7 @@ pub struct WsBookData {
 }
 
 /// WebSocket level data
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WsLevelData {
     /// Price
     pub px: String,
@@ -408,7 +413,7 @@ pub struct WsLevelData {
 }
 
 /// WebSocket trade data
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WsTradeData {
     pub coin: Ustr,
     pub side: String,

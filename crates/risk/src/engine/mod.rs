@@ -903,8 +903,9 @@ impl RiskEngine {
                     }
 
                     match cum_notional_sell {
-                        Some(mut cum_notional_sell) => {
-                            cum_notional_sell.raw += cash_value.raw;
+                        Some(mut value) => {
+                            value.raw += cash_value.raw;
+                            cum_notional_sell = Some(value);
                         }
                         None => cum_notional_sell = Some(cash_value),
                     }
@@ -938,7 +939,13 @@ impl RiskEngine {
             ));
         }
 
-        if instrument.instrument_class() != InstrumentClass::Option && price_val.raw <= 0 {
+        if !matches!(
+            instrument.instrument_class(),
+            InstrumentClass::Option
+                | InstrumentClass::FuturesSpread
+                | InstrumentClass::OptionSpread
+        ) && price_val.raw <= 0
+        {
             return Some(format!("price {price_val} invalid (<= 0)"));
         }
 

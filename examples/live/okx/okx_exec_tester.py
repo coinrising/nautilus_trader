@@ -30,7 +30,6 @@ from nautilus_trader.core.nautilus_pyo3 import OKXInstrumentType
 from nautilus_trader.core.nautilus_pyo3 import OKXMarginMode
 from nautilus_trader.live.config import LiveRiskEngineConfig
 from nautilus_trader.live.node import TradingNode
-from nautilus_trader.model.enums import TimeInForce
 from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import TraderId
 from nautilus_trader.test_kit.strategies.tester_exec import ExecTester
@@ -41,26 +40,41 @@ from nautilus_trader.test_kit.strategies.tester_exec import ExecTesterConfig
 # *** IT IS NOT INTENDED TO BE USED TO TRADE LIVE WITH REAL MONEY. ***
 
 # Configuration - Change instrument_type to switch between trading modes
-instrument_type = OKXInstrumentType.SWAP  # SPOT, SWAP, FUTURES, OPTION
+instrument_type = OKXInstrumentType.SWAP  # SPOT, MARGIN, SWAP, FUTURES, OPTION
 token = "ETH"
 
 # Symbol mapping based on instrument type
 if instrument_type == OKXInstrumentType.SPOT:
     symbol = f"{token}-USDT"
     contract_types: tuple[OKXContractType, ...] | None = None  # SPOT doesn't use contract types
-    order_qty = Decimal("0.01")
+    order_qty = Decimal("10.00")  # In quote currency for buying
+    # order_qty = Decimal("0.01")  # In base currency for selling
     enable_sells = False
+    use_spot_margin = False
+    use_quote_quantity = True
+elif instrument_type == OKXInstrumentType.MARGIN:
+    symbol = f"{token}-USDT"
+    contract_types = None  # MARGIN doesn't use contract types
+    order_qty = Decimal("10.00")  # In quote currency for buying
+    # order_qty = Decimal("0.01")  # In base currency for selling
+    enable_sells = False
+    use_spot_margin = True
+    use_quote_quantity = True
 elif instrument_type == OKXInstrumentType.SWAP:
     symbol = f"{token}-USDT-SWAP"
     contract_types = (OKXContractType.LINEAR,)
     order_qty = Decimal("0.01")
     enable_sells = True
+    use_spot_margin = False
+    use_quote_quantity = False
 elif instrument_type == OKXInstrumentType.FUTURES:
     # Format: ETH-USD-YYMMDD (e.g., ETH-USD-241227, ETH-USD-250131)
     symbol = f"{token}-USD-251226"  # ETH-USD futures expiring 2025-12-26
     contract_types = (OKXContractType.INVERSE,)  # ETH-USD futures are inverse contracts
     order_qty = Decimal(1)
     enable_sells = True
+    use_spot_margin = False
+    use_quote_quantity = False
 elif instrument_type == OKXInstrumentType.OPTION:
     symbol = (
         f"{token}-USD-251226-4000-C"  # Example: ETH-USD call option, strike 4000, exp 2025-12-26
@@ -68,6 +82,8 @@ elif instrument_type == OKXInstrumentType.OPTION:
     contract_types = None  # Options don't use contract types in the same way
     order_qty = Decimal(1)
     enable_sells = True
+    use_spot_margin = False
+    use_quote_quantity = False
 else:
     raise ValueError(f"Unsupported instrument type: {instrument_type}")
 
@@ -76,7 +92,6 @@ instrument_id = InstrumentId.from_str(f"{symbol}.{OKX}")
 # Setup instruments and types based on instrument_type
 instrument_types: tuple[OKXInstrumentType, ...]
 if instrument_type in (OKXInstrumentType.SPOT, OKXInstrumentType.SWAP):
-    # Use dual spot and swap instruments for reconciliation (matching wingman setup)
     spot_instrument_id = InstrumentId.from_str(f"{token}-USDT.{OKX}")
     swap_instrument_id = InstrumentId.from_str(f"{token}-USDT-SWAP.{OKX}")
     reconciliation_instrument_ids = [spot_instrument_id, swap_instrument_id]
@@ -107,11 +122,13 @@ config_node = TradingNodeConfig(
         use_pyo3=True,
     ),
     exec_engine=LiveExecEngineConfig(
+        convert_quote_qty_to_base=False,
         reconciliation=True,
         reconciliation_instrument_ids=reconciliation_instrument_ids,
-        # reconciliation_lookback_mins=60,  # Limiting to 1-day for testing
+        # reconciliation_lookback_mins=60,
         open_check_interval_secs=5.0,
-        open_check_open_only=True,
+        open_check_open_only=False,
+        position_check_interval_secs=60,
         # own_books_audit_interval_secs=2.0,
         # manage_own_order_books=True,
         # snapshot_orders=True,
@@ -173,7 +190,8 @@ config_node = TradingNodeConfig(
             instrument_types=instrument_types,
             contract_types=contract_types,
             margin_mode=OKXMarginMode.CROSS,
-            use_spot_margin=False,
+            use_spot_margin=use_spot_margin,
+            # use_spot_cash_position_reports=True,  # Spot CASH position reports
             # use_mm_mass_cancel=True,
             is_demo=False,  # If client uses the demo API
             use_fills_channel=False,  # Set to True if VIP5+ to get separate fill reports
@@ -201,13 +219,13 @@ config_tester = ExecTesterConfig(
     enable_buys=True,
     enable_sells=enable_sells,
     open_position_on_start_qty=order_qty,
-    open_position_time_in_force=TimeInForce.FOK,
+    # open_position_time_in_force=TimeInForce.FOK,
     tob_offset_ticks=100,
     # stop_offset_ticks=1,
     order_qty=order_qty,
     # modify_orders_to_maintain_tob_offset=True,
     use_post_only=True,
-    # use_quote_quantity=True,
+    use_quote_quantity=use_quote_quantity,
     # enable_stop_buys=True,
     # enable_stop_sells=True,
     # stop_order_type=OrderType.STOP_MARKET,

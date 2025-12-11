@@ -95,13 +95,46 @@ def instrument() -> CurrencyPair:
 
 
 @pytest.fixture()
+def eth_usdt_instrument() -> CurrencyPair:
+    eth = _create_currency(
+        "ETH",
+        precision=8,
+        iso4217=0,
+        name="Ethereum",
+        currency_type=CurrencyType.CRYPTO,
+    )
+    usdt = _create_currency(
+        "USDT",
+        precision=8,
+        iso4217=0,
+        name="Tether",
+        currency_type=CurrencyType.CRYPTO,
+    )
+
+    return CurrencyPair(
+        instrument_id=InstrumentId(Symbol("ETH-USDT"), OKX_VENUE),
+        raw_symbol=Symbol("ETH-USDT"),
+        base_currency=eth,
+        quote_currency=usdt,
+        price_precision=2,
+        size_precision=6,
+        price_increment=Price.from_str("0.01"),
+        size_increment=Quantity.from_str("0.000001"),
+        ts_event=0,
+        ts_init=0,
+        maker_fee=Decimal("-0.0002"),
+        taker_fee=Decimal("0.0005"),
+    )
+
+
+@pytest.fixture()
 def account_state(account_id) -> AccountState:
     usd_currency = USD
 
     return AccountState(
         account_id=account_id,
         account_type=AccountType.CASH,
-        base_currency=usd_currency,
+        base_currency=None,  # Multi-currency account
         reported=True,
         balances=[
             AccountBalance(
@@ -126,19 +159,26 @@ def mock_http_client():
     mock.api_passphrase = "test_passphrase"
 
     mock.request_instruments = AsyncMock(return_value=[])
-    mock.add_instrument = MagicMock()
+    mock.cache_instrument = MagicMock()
     mock.cancel_all_requests = MagicMock()
     mock.is_initialized = MagicMock(return_value=True)
-    mock.http_get_server_time = AsyncMock(return_value=1234567890000)
+    mock.get_server_time = AsyncMock(return_value=1234567890000)
 
     mock_account_state = MagicMock()
     mock_account_state.to_dict = MagicMock(
         return_value={
             "account_id": "OKX-123",
             "account_type": "CASH",
-            "base_currency": "USD",
+            "base_currency": None,
             "reported": True,
-            "balances": [],
+            "balances": [
+                {
+                    "currency": "USD",
+                    "total": "100000.0",
+                    "locked": "0.0",
+                    "free": "100000.0",
+                },
+            ],
             "margins": [],
             "info": {},
             "event_id": str(TestIdStubs.uuid()),
@@ -165,6 +205,8 @@ def _create_ws_mock() -> MagicMock:
     mock.wait_until_active = AsyncMock()
     mock.close = AsyncMock()
     mock.subscribe_instruments = AsyncMock()
+    mock.subscribe_instrument = AsyncMock()
+    mock.cache_instruments = MagicMock()
     mock.subscribe_book = AsyncMock()
     mock.subscribe_book50_l2_tbt = AsyncMock()
     mock.subscribe_book_l2_tbt = AsyncMock()

@@ -20,7 +20,9 @@ import uuid
 from asyncio import Queue
 from collections import Counter
 from decimal import Decimal
-from typing import Any, Final, cast
+from typing import Any
+from typing import Final
+from typing import cast
 
 import pandas as pd
 
@@ -39,6 +41,7 @@ from nautilus_trader.core.message import Command
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.engine import ExecutionEngine
 from nautilus_trader.execution.messages import GenerateExecutionMassStatus
+from nautilus_trader.execution.messages import GenerateFillReports
 from nautilus_trader.execution.messages import GenerateOrderStatusReport
 from nautilus_trader.execution.messages import GenerateOrderStatusReports
 from nautilus_trader.execution.messages import GeneratePositionStatusReports
@@ -49,6 +52,7 @@ from nautilus_trader.execution.reports import FillReport
 from nautilus_trader.execution.reports import OrderStatusReport
 from nautilus_trader.execution.reports import PositionStatusReport
 from nautilus_trader.live.enqueue import ThrottledEnqueuer
+from nautilus_trader.live.reconciliation import adjust_fills_for_partial_window
 from nautilus_trader.live.reconciliation import calculate_reconciliation_price
 from nautilus_trader.live.reconciliation import create_inferred_order_filled_event
 from nautilus_trader.live.reconciliation import create_order_accepted_event
@@ -75,6 +79,7 @@ from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.identifiers import StrategyId
 from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.identifiers import VenueOrderId
+from nautilus_trader.model.instruments import CurrencyPair
 from nautilus_trader.model.instruments import Instrument
 from nautilus_trader.model.objects import Quantity
 from nautilus_trader.model.orders import Order
@@ -134,7 +139,10 @@ class LiveExecutionEngine(ExecutionEngine):
         self._recon_check_retries: Counter[ClientOrderId] = Counter()
         self._ts_last_query: dict[ClientOrderId, int] = {}
         self._order_local_activity_ns: dict[ClientOrderId, int] = {}
+        self._position_local_activity_ns: dict[InstrumentId, int] = {}
+        self._recent_fills_cache: dict[TradeId, int] = {}  # TradeId -> timestamp_ns (TTL cache)
         self._inferred_fill_ts: dict[ClientOrderId, int] = {}
+        self._fill_application_audit: dict[ClientOrderId, list[tuple[TradeId, str, int]]] = {}
         self._startup_reconciliation_event: asyncio.Event = asyncio.Event()
         self._filtered_external_orders_count: int = 0
 
@@ -185,6 +193,9 @@ class LiveExecutionEngine(ExecutionEngine):
         self.open_check_missing_retries: int = config.open_check_missing_retries
         self.max_single_order_queries_per_cycle: int = config.max_single_order_queries_per_cycle
         self.single_order_query_delay_ms: int = config.single_order_query_delay_ms
+        self.position_check_interval_secs: float | None = config.position_check_interval_secs
+        self.position_check_lookback_mins: int = config.position_check_lookback_mins
+        self.position_check_threshold_ms: int = config.position_check_threshold_ms
         self.reconciliation_startup_delay_secs: float = config.reconciliation_startup_delay_secs
         self.purge_closed_orders_interval_mins = config.purge_closed_orders_interval_mins
         self.purge_closed_orders_buffer_mins = config.purge_closed_orders_buffer_mins
@@ -212,6 +223,9 @@ class LiveExecutionEngine(ExecutionEngine):
         self._log.info(f"{config.open_check_missing_retries=}", LogColor.BLUE)
         self._log.info(f"{config.max_single_order_queries_per_cycle=}", LogColor.BLUE)
         self._log.info(f"{config.single_order_query_delay_ms=}", LogColor.BLUE)
+        self._log.info(f"{config.position_check_interval_secs=}", LogColor.BLUE)
+        self._log.info(f"{config.position_check_lookback_mins=}", LogColor.BLUE)
+        self._log.info(f"{config.position_check_threshold_ms=}", LogColor.BLUE)
         self._log.info(f"{config.reconciliation_startup_delay_secs=}", LogColor.BLUE)
         self._log.info(f"{config.purge_closed_orders_interval_mins=}", LogColor.BLUE)
         self._log.info(f"{config.purge_closed_orders_buffer_mins=}", LogColor.BLUE)
@@ -224,6 +238,7 @@ class LiveExecutionEngine(ExecutionEngine):
 
         self._inflight_check_threshold_ns: int = millis_to_nanos(self.inflight_check_threshold_ms)
         self._open_check_threshold_ns: int = millis_to_nanos(self.open_check_threshold_ms)
+        self._position_check_threshold_ns: int = millis_to_nanos(self.position_check_threshold_ms)
 
         # Register endpoints
         self._msgbus.register(
@@ -444,14 +459,30 @@ class LiveExecutionEngine(ExecutionEngine):
         if drop_last_query:
             self._ts_last_query.pop(client_order_id, None)
 
+    def _prune_recent_fills_cache(self, ttl_secs: float = 60.0) -> None:
+        # Remove expired fills from cache (default TTL: 60 seconds)
+        ts_now = self._clock.timestamp_ns()
+        ttl_ns = secs_to_nanos(ttl_secs)
+        expired_trade_ids = [
+            trade_id
+            for trade_id, ts_cached in self._recent_fills_cache.items()
+            if ts_now - ts_cached > ttl_ns
+        ]
+        for trade_id in expired_trade_ids:
+            self._recent_fills_cache.pop(trade_id, None)
+
     def _handle_event_with_tracking(self, event: OrderEvent) -> None:
         self._record_local_activity(event)
 
-        # Track inferred fill timestamps to prevent duplicate historical fills
-        if isinstance(event, OrderFilled) and event.reconciliation:
-            client_order_id = event.client_order_id
-            if client_order_id not in self._inferred_fill_ts:
-                self._inferred_fill_ts[client_order_id] = event.ts_event
+        if isinstance(event, OrderFilled):
+            self._recent_fills_cache[event.trade_id] = self._clock.timestamp_ns()
+            self._position_local_activity_ns[event.instrument_id] = event.ts_event
+
+            # Track inferred fill timestamps to prevent duplicate historical fills
+            if event.reconciliation:
+                client_order_id = event.client_order_id
+                if client_order_id not in self._inferred_fill_ts:
+                    self._inferred_fill_ts[client_order_id] = event.ts_event
 
         self._handle_event(event)
 
@@ -463,6 +494,7 @@ class LiveExecutionEngine(ExecutionEngine):
             self._clear_recon_tracking(order.client_order_id)
             self._order_local_activity_ns.pop(order.client_order_id, None)
             self._inferred_fill_ts.pop(order.client_order_id, None)
+            self._fill_application_audit.pop(order.client_order_id, None)
 
     def _on_start(self) -> None:
         if not self._loop.is_running():
@@ -479,7 +511,9 @@ class LiveExecutionEngine(ExecutionEngine):
 
         # Start reconciliation task if any check is configured
         if (
-            self.inflight_check_interval_ms > 0 or self.open_check_interval_secs
+            self.inflight_check_interval_ms
+            or self.open_check_interval_secs
+            or self.position_check_interval_secs
         ) and not self._reconciliation_task:
             self._reconciliation_task = self._loop.create_task(
                 self._continuous_reconciliation_loop(),
@@ -769,6 +803,8 @@ class LiveExecutionEngine(ExecutionEngine):
             # Track last execution times (in nanoseconds)
             ts_last_inflight_check = 0
             ts_last_consistency_check = 0
+            ts_last_position_check = 0
+            ts_last_cache_prune = 0
 
             # Convert intervals to nanoseconds (handle None values)
             inflight_check_interval_ns = (
@@ -779,6 +815,12 @@ class LiveExecutionEngine(ExecutionEngine):
             consistency_check_interval_ns = (
                 secs_to_nanos(self.open_check_interval_secs) if self.open_check_interval_secs else 0
             )
+            position_check_interval_ns = (
+                secs_to_nanos(self.position_check_interval_secs)
+                if self.position_check_interval_secs
+                else 0
+            )
+            cache_prune_interval_ns = secs_to_nanos(60.0)
 
             # Determine minimum sleep interval (in seconds)
             intervals_secs: list[float] = []
@@ -787,13 +829,16 @@ class LiveExecutionEngine(ExecutionEngine):
                 intervals_secs.append(self.inflight_check_interval_ms / 1000)
             if self.open_check_interval_secs:
                 intervals_secs.append(self.open_check_interval_secs)
+            if self.position_check_interval_secs:
+                intervals_secs.append(self.position_check_interval_secs)
 
             min_interval_secs = min(intervals_secs) if intervals_secs else 1.0
 
             self._log.info(
                 f"Starting continuous reconciliation with intervals: "
                 f"inflight={self.inflight_check_interval_ms}ms, "
-                f"consistency={self.open_check_interval_secs}s",
+                f"consistency={self.open_check_interval_secs}s, "
+                f"position={self.position_check_interval_secs}s",
                 LogColor.BLUE,
             )
 
@@ -827,7 +872,7 @@ class LiveExecutionEngine(ExecutionEngine):
 
                 ts_now = self._clock.timestamp_ns()
 
-                # Higher-frequency in-flight check (if configured)
+                # Check in-flight orders
                 if (
                     inflight_check_interval_ns > 0
                     and ts_now - ts_last_inflight_check >= inflight_check_interval_ns
@@ -841,7 +886,7 @@ class LiveExecutionEngine(ExecutionEngine):
                     except Exception as e:
                         self._log.exception("Failed in check_inflight_orders", e)
 
-                # Lower-frequency consistency check (if configured)
+                # Check open orders consistency
                 if (
                     consistency_check_interval_ns > 0
                     and ts_now - ts_last_consistency_check >= consistency_check_interval_ns
@@ -854,6 +899,27 @@ class LiveExecutionEngine(ExecutionEngine):
                         ts_last_consistency_check = ts_now
                     except Exception as e:
                         self._log.exception("Failed in check_orders_consistency", e)
+
+                # Check positions consistency
+                if (
+                    position_check_interval_ns > 0
+                    and ts_now - ts_last_position_check >= position_check_interval_ns
+                ):
+                    # Check stop signal before starting check
+                    if self._is_shutting_down:
+                        break
+                    try:
+                        await self._check_positions_consistency()
+                        ts_last_position_check = ts_now
+                    except Exception as e:
+                        self._log.exception("Failed in check_positions_consistency", e)
+
+                if ts_now - ts_last_cache_prune >= cache_prune_interval_ns:
+                    try:
+                        self._prune_recent_fills_cache()
+                        ts_last_cache_prune = ts_now
+                    except Exception as e:
+                        self._log.exception("Failed in prune_recent_fills_cache", e)
 
                 await asyncio.sleep(min_interval_secs)
         except asyncio.CancelledError:
@@ -946,7 +1012,8 @@ class LiveExecutionEngine(ExecutionEngine):
             self._log.debug(f"Found {open_len} order{'' if open_len == 1 else 's'} open in cache")
 
             if not self._clients:
-                return  # No clients to query
+                self._log.debug("No execution clients to check orders consistency, early return")
+                return
 
             # For continuous reconciliation limit lookback to configured window
             order_status_start = self._clock.utc_now() - pd.Timedelta(
@@ -1131,12 +1198,328 @@ class LiveExecutionEngine(ExecutionEngine):
                     self._log.debug(
                         f"Order {client_order_id!r} not found at venue, retry {retries + 1}/{self.open_check_missing_retries}",
                     )
+
+            # Perform sanity check on all open orders to detect internal inconsistencies
+            for order in self._cache.orders_open():
+                computed_filled = sum(
+                    e.last_qty for e in order.events if isinstance(e, OrderFilled)
+                )
+                if computed_filled != order.filled_qty:
+                    self._log.error(
+                        f"INCONSISTENCY: {order.client_order_id} "
+                        f"computed={computed_filled} vs cached={order.filled_qty}",
+                    )
         except Exception as e:
             self._log.exception("Error in check_order_consistency", e)
 
     async def _check_open_orders(self) -> None:
         # Legacy method maintained for compatibility
         await self._check_orders_consistency()
+
+    async def _check_positions_consistency(self) -> None:
+        if self._is_shutting_down:
+            self._log.debug("Skipping position consistency check due to stop signal")
+            return
+
+        self._log.debug("Checking position consistency between cached-state and venues")
+
+        open_positions = self._cache.positions_open()
+
+        if self.reconciliation_instrument_ids:
+            open_positions = [
+                p for p in open_positions if p.instrument_id in self.reconciliation_instrument_ids
+            ]
+
+        # Group positions by instrument_id (for netting)
+        positions_by_instrument: dict[InstrumentId, list[Position]] = {}
+
+        for position in open_positions:
+            if position.instrument_id not in positions_by_instrument:
+                positions_by_instrument[position.instrument_id] = []
+            positions_by_instrument[position.instrument_id].append(position)
+
+        self._log.debug(
+            f"Found {len(positions_by_instrument)} unique instrument(s) with open positions",
+        )
+
+        if not self._clients:
+            self._log.debug("No execution clients to check position consistency, early return")
+            return
+
+        # Request position status reports from venues (all open positions, no time filter)
+        clients = self._clients.values()
+
+        tasks = [
+            c.generate_position_status_reports(
+                GeneratePositionStatusReports(
+                    instrument_id=None,  # Get all positions
+                    start=None,  # No time filter - we want all open and closed positions
+                    end=None,
+                    command_id=UUID4(),
+                    ts_init=self._clock.timestamp_ns(),
+                ),
+            )
+            for c in clients
+        ]
+
+        try:
+            position_reports_all = await asyncio.gather(*tasks, return_exceptions=True)
+        except Exception as e:
+            self._log.error(f"Failed to gather position status reports: {e}")
+            return
+
+        # Build mapping: instrument_id -> venue report
+        venue_positions: dict[InstrumentId, PositionStatusReport] = {}
+        for reports_or_exception in position_reports_all:
+            if isinstance(reports_or_exception, Exception):
+                self._log.error(
+                    f"Failed to generate position status reports: {reports_or_exception}",
+                )
+                continue
+
+            reports = cast("list[PositionStatusReport]", reports_or_exception)
+            for report in reports:
+                venue_positions[report.instrument_id] = report
+
+        # Check each cached position for discrepancies
+        for instrument_id, cached_positions in positions_by_instrument.items():
+            venue_report = venue_positions.get(instrument_id)
+
+            has_discrepancy = self._check_position_discrepancy(
+                cached_positions,
+                venue_report,
+                instrument_id,
+            )
+
+            if not has_discrepancy:
+                continue
+
+            last_activity_ts = self._position_local_activity_ns.get(instrument_id)
+            if last_activity_ts:
+                ts_now = self._clock.timestamp_ns()
+                if ts_now - last_activity_ts < self._position_check_threshold_ns:
+                    self._log.debug(
+                        f"Skipping position reconciliation for {instrument_id}: "
+                        f"recent activity within threshold ({self.position_check_threshold_ms}ms)",
+                    )
+                    continue
+
+            cached_qty = sum(p.signed_decimal_qty() for p in cached_positions)
+            venue_qty = venue_report.signed_decimal_qty if venue_report else Decimal(0)
+
+            self._log.warning(
+                f"Position discrepancy detected for {instrument_id}: "
+                f"cached_qty={cached_qty}, venue_qty={venue_qty}; querying for missing fills...",
+                LogColor.YELLOW,
+            )
+
+            # Query fills for this instrument
+            fill_lookback_start = self._clock.utc_now() - pd.Timedelta(
+                minutes=self.position_check_lookback_mins,
+            )
+
+            # Get fills from all clients for this instrument
+            fill_tasks = [
+                c.generate_fill_reports(
+                    GenerateFillReports(
+                        instrument_id=instrument_id,
+                        venue_order_id=None,  # Query all fills for the instrument
+                        start=fill_lookback_start,
+                        end=None,
+                        command_id=UUID4(),
+                        ts_init=self._clock.timestamp_ns(),
+                    ),
+                )
+                for c in clients
+            ]
+
+            try:
+                fill_reports_all = await asyncio.gather(*fill_tasks, return_exceptions=True)
+            except Exception as e:
+                self._log.error(
+                    f"Failed to gather fill reports for {instrument_id}: {e}",
+                )
+                continue
+
+            venue_fills: list[FillReport] = []
+
+            for fills_or_exception in fill_reports_all:
+                if isinstance(fills_or_exception, Exception):
+                    self._log.error(
+                        f"Failed to generate fill reports for {instrument_id}: {fills_or_exception}",
+                    )
+                    continue
+
+                fills = cast("list[FillReport]", fills_or_exception)  # Type checking
+                venue_fills.extend(fills)
+
+            cached_fill_trade_ids: set[TradeId] = set()
+
+            for order in self._cache.orders(instrument_id=instrument_id):
+                for event in order.events:
+                    if isinstance(event, OrderFilled):
+                        cached_fill_trade_ids.add(event.trade_id)
+
+            # Find missing fills (not in cache and not in recent fills cache)
+            missing_fills = [
+                fill
+                for fill in venue_fills
+                if fill.trade_id not in cached_fill_trade_ids
+                and fill.trade_id not in self._recent_fills_cache
+            ]
+
+            if missing_fills:
+                self._log.warning(
+                    f"Found {len(missing_fills)} missing fill(s) for {instrument_id}",
+                    LogColor.YELLOW,
+                )
+
+                # Process each missing fill
+                for fill_report in missing_fills:
+                    try:
+                        result = self._reconcile_fill_report_single(fill_report)
+                        if result:
+                            # Update position activity timestamp after successful processing
+                            self._position_local_activity_ns[instrument_id] = (
+                                self._clock.timestamp_ns()
+                            )
+                        else:
+                            # Fill reconciliation failed (e.g., order not cached yet)
+                            self._log.warning(
+                                f"Failed to reconcile fill {fill_report.trade_id} for {instrument_id}: "
+                                f"order not yet cached or other prerequisite missing. "
+                                f"Fill will be retried in next position check cycle",
+                                LogColor.YELLOW,
+                            )
+                    except Exception as e:
+                        self._log.error(
+                            f"Exception reconciling missing fill {fill_report.trade_id} for {instrument_id}: {e}",
+                        )
+            elif has_discrepancy:
+                # Discrepancy persists but no missing fills found
+                self._log.warning(
+                    f"Position discrepancy for {instrument_id} persists but no missing fills found. "
+                    f"Possible causes: fills outside lookback window ({self.position_check_lookback_mins}min), "
+                    f"venue position error, or internal calculation error",
+                    LogColor.YELLOW,
+                )
+                # TODO: Consider fallback to synthetic position adjustment if discrepancy persists
+
+        # Check venue-reported positions that we don't have cached (venue says open, we think flat)
+        for instrument_id, venue_report in venue_positions.items():
+            if instrument_id in positions_by_instrument:
+                continue  # Already checked above
+
+            # Apply instrument filter
+            if self.reconciliation_instrument_ids:
+                if instrument_id not in self.reconciliation_instrument_ids:
+                    continue
+
+            # Venue has a position but we don't - this is a discrepancy
+            if venue_report.signed_decimal_qty == 0:
+                continue  # Both flat, no discrepancy
+
+            # THRESHOLD CHECK
+            last_activity_ts = self._position_local_activity_ns.get(instrument_id)
+            if last_activity_ts:
+                ts_now = self._clock.timestamp_ns()
+                if ts_now - last_activity_ts < self._position_check_threshold_ns:
+                    self._log.debug(
+                        f"Skipping position reconciliation for {instrument_id}: "
+                        f"recent activity within threshold ({self.position_check_threshold_ms}ms)",
+                    )
+                    continue
+
+            self._log.warning(
+                f"Position discrepancy detected for {instrument_id}: "
+                f"cached_qty=0 (flat), venue_qty={venue_report.signed_decimal_qty}. Querying for missing fills...",
+                LogColor.YELLOW,
+            )
+
+            # Query fills for this instrument
+            fill_lookback_start = self._clock.utc_now() - pd.Timedelta(
+                minutes=self.position_check_lookback_mins,
+            )
+
+            fill_tasks = [
+                c.generate_fill_reports(
+                    GenerateFillReports(
+                        instrument_id=instrument_id,
+                        venue_order_id=None,
+                        start=fill_lookback_start,
+                        end=None,
+                        command_id=UUID4(),
+                        ts_init=self._clock.timestamp_ns(),
+                    ),
+                )
+                for c in clients
+            ]
+
+            try:
+                fill_reports_all = await asyncio.gather(*fill_tasks, return_exceptions=True)
+            except Exception as e:
+                self._log.error(
+                    f"Failed to gather fill reports for {instrument_id}: {e}",
+                )
+                continue
+
+            venue_fills_2 = []
+            for fills_or_exception in fill_reports_all:
+                if isinstance(fills_or_exception, Exception):
+                    self._log.error(
+                        f"Failed to generate fill reports for {instrument_id}: {fills_or_exception}",
+                    )
+                    continue
+
+                fills = cast("list[FillReport]", fills_or_exception)
+                venue_fills_2.extend(fills)
+
+            # Get cached fills for comparison
+            cached_fill_trade_ids_2 = set()
+            for order in self._cache.orders(instrument_id=instrument_id):
+                for event in order.events:
+                    if isinstance(event, OrderFilled):
+                        cached_fill_trade_ids_2.add(event.trade_id)
+
+            # Find missing fills
+            missing_fills = [
+                fill
+                for fill in venue_fills_2
+                if fill.trade_id not in cached_fill_trade_ids_2
+                and fill.trade_id not in self._recent_fills_cache
+            ]
+
+            if missing_fills:
+                self._log.warning(
+                    f"Found {len(missing_fills)} missing fill(s) for {instrument_id}",
+                    LogColor.YELLOW,
+                )
+
+                for fill_report in missing_fills:
+                    try:
+                        result = self._reconcile_fill_report_single(fill_report)
+                        if result:
+                            self._position_local_activity_ns[instrument_id] = (
+                                self._clock.timestamp_ns()
+                            )
+                        else:
+                            self._log.warning(
+                                f"Failed to reconcile fill {fill_report.trade_id} for {instrument_id}: "
+                                f"order not yet cached or other prerequisite missing; "
+                                f"fill will be retried in next position check cycle",
+                                LogColor.YELLOW,
+                            )
+                    except Exception as e:
+                        self._log.error(
+                            f"Exception reconciling missing fill {fill_report.trade_id} for {instrument_id}: {e}",
+                        )
+            else:
+                self._log.warning(
+                    f"Position discrepancy for {instrument_id} persists but no missing fills found; "
+                    f"possible causes: fills outside lookback window ({self.position_check_lookback_mins}min), "
+                    f"venue position error, or internal calculation error",
+                    LogColor.YELLOW,
+                )
 
     async def _purge_closed_orders_loop(self, interval_mins: int) -> None:
         interval_secs = interval_mins * 60
@@ -1416,9 +1799,7 @@ class LiveExecutionEngine(ExecutionEngine):
             return False
 
         self._msgbus.publish(
-            topic=f"reports.execution"
-            f".{report.instrument_id.venue}"
-            f".{report.instrument_id.symbol}",
+            topic=f"reports.execution.{report.instrument_id.venue}.{report.instrument_id.symbol}",
             msg=report,
         )
 
@@ -1448,11 +1829,128 @@ class LiveExecutionEngine(ExecutionEngine):
             color=LogColor.BLUE,
         )
 
+        # Adjust fills for instruments with incomplete first lifecycles
+        # Start with original orders and fills
+        final_orders = dict(mass_status._order_reports)
+        final_fills = dict(mass_status._fill_reports)
+
+        reconciliation_instruments: list[Instrument] = []
+        for instrument_id in mass_status.position_reports.keys():
+            # Respect reconciliation_instrument_ids filter
+            if not self._consider_for_reconciliation(instrument_id):
+                self._log.debug(
+                    f"Skipping fill adjustment for {instrument_id}: "
+                    f"not in `reconciliation_instrument_ids` include list",
+                )
+                continue
+
+            instrument = self._cache.instrument(instrument_id)
+            if not instrument:
+                self._log.debug(
+                    f"Skipping fill adjustment for {instrument_id}: "
+                    f"instrument not found in cache",
+                )
+                continue
+
+            reconciliation_instruments.append(instrument)
+
+        self._log.info(
+            f"Attempting to adjust fills for {len(reconciliation_instruments)} instruments",
+            LogColor.BLUE,
+        )
+        adjusted_results = adjust_fills_for_partial_window(
+            mass_status,
+            reconciliation_instruments,
+            self._log,
+        )
+        self._log.info(
+            f"Updating adjusted fills for {len(reconciliation_instruments)} instruments",
+            LogColor.BLUE,
+        )
+
+        for instrument_id, (
+            adjusted_orders_for_instrument,
+            adjusted_fills_for_instrument,
+        ) in adjusted_results.items():
+            # Remove old orders and fills for this instrument
+            for venue_order_id in list(final_orders.keys()):
+                order = final_orders[venue_order_id]
+                if order.instrument_id == instrument_id:
+                    del final_orders[venue_order_id]
+
+            for venue_order_id in list(final_fills.keys()):
+                fills = final_fills[venue_order_id]
+                if fills and fills[0].instrument_id == instrument_id:
+                    del final_fills[venue_order_id]
+
+            # Add adjusted orders and fills for this instrument
+            final_orders.update(adjusted_orders_for_instrument)
+            final_fills.update(adjusted_fills_for_instrument)
+
+        # Apply all adjustments at once
+        mass_status._order_reports = final_orders
+        mass_status._fill_reports = final_fills
+        self._log.info(
+            f"Final order_reports contains {len(final_orders)} orders, fill_reports contains {len(final_fills)} fills across all instruments",
+            LogColor.BLUE,
+        )
+
+        # TODO: Extract logic to dedicated function
+        # Deduplicate orders by client_order_id before reconciliation
+        seen_client_order_ids: dict[ClientOrderId, VenueOrderId] = {}
+        duplicate_venue_order_ids: list[VenueOrderId] = []
+
+        for venue_order_id, order_report in mass_status._order_reports.items():
+            if order_report.client_order_id is not None:
+                if order_report.client_order_id in seen_client_order_ids:
+                    # Duplicate found - mark for removal
+                    duplicate_venue_order_ids.append(venue_order_id)
+                    self._log.warning(
+                        f"Deduplicating order: {order_report.client_order_id} "
+                        f"(venue_order_id={venue_order_id}, "
+                        f"keeping first occurrence {seen_client_order_ids[order_report.client_order_id]})",
+                    )
+                else:
+                    # First occurrence - track it
+                    seen_client_order_ids[order_report.client_order_id] = venue_order_id
+
+        # Remove duplicates
+        for venue_order_id in duplicate_venue_order_ids:
+            del mass_status._order_reports[venue_order_id]
+            # Also remove associated fills
+            if venue_order_id in mass_status._fill_reports:
+                del mass_status._fill_reports[venue_order_id]
+
+        if duplicate_venue_order_ids:
+            self._log.info(
+                f"Removed {len(duplicate_venue_order_ids)} duplicate order(s) from reconciliation",
+                LogColor.YELLOW,
+            )
+
         results: list[bool] = []
         reconciled_orders: set[ClientOrderId] = set()
         reconciled_trades: set[TradeId] = set()
 
         # Reconcile all reported orders
+        total_ethusdt_fills = 0
+        for venue_order_id, order_report in mass_status.order_reports.items():
+            trades = mass_status.fill_reports.get(venue_order_id, [])
+            if (
+                order_report.instrument_id == InstrumentId.from_str("ETHUSDT-LINEAR.BYBIT")
+                and trades
+            ):
+                total_ethusdt_fills += len(trades)
+                for trade in trades:
+                    self._log.debug(
+                        f"Reconciling order {venue_order_id}: trade_id={trade.trade_id}, last_px={trade.last_px}",
+                    )
+
+        if total_ethusdt_fills > 0:
+            self._log.info(
+                f"Total ETHUSDT fills being reconciled: {total_ethusdt_fills}",
+                LogColor.BLUE,
+            )
+
         for venue_order_id, order_report in mass_status.order_reports.items():
             trades = mass_status.fill_reports.get(venue_order_id, [])
 
@@ -1460,18 +1958,12 @@ class LiveExecutionEngine(ExecutionEngine):
                 self._log_skipping_reconciliation_on_instrument_id(order_report)
                 continue
 
-            # Check and handle duplicate client order IDs
             client_order_id = order_report.client_order_id
 
             if client_order_id is not None:
                 if client_order_id in self.filtered_client_order_ids:
                     self._log_skipping_reconciliation_on_client_order_id(order_report)
                     continue
-
-                if client_order_id in reconciled_orders:
-                    self._log.error(f"Duplicate {client_order_id!r} detected: {order_report}")
-                    results.append(False)
-                    continue  # Determine how to handle this
 
             # Check for duplicate trade IDs
             for fill_report in trades:
@@ -1483,6 +1975,7 @@ class LiveExecutionEngine(ExecutionEngine):
                 reconciled_trades.add(fill_report.trade_id)
 
             try:
+                # Apply all fills - let position cycle naturally through all lifecycles
                 result = self._reconcile_order_report(order_report, trades)
             except InvalidStateTrigger as e:
                 self._log.error(str(e))
@@ -1519,6 +2012,8 @@ class LiveExecutionEngine(ExecutionEngine):
         trades: list[FillReport],
         is_external: bool = True,
     ) -> bool:
+        if self._is_shutting_down:
+            return True  # Skip reconciliation during shutdown
 
         client_order_id: ClientOrderId = report.client_order_id
 
@@ -1629,17 +2124,43 @@ class LiveExecutionEngine(ExecutionEngine):
             self._log.warning("report.avg_px was `None` when a value was expected")
 
         if report.filled_qty < order.filled_qty:
+            # Gather diagnostic information
+            fill_history = [
+                (event.trade_id, event.last_qty, event.ts_event)
+                for event in order.events
+                if isinstance(event, OrderFilled)
+            ]
+
             self._log.error(
                 f"report.filled_qty {report.filled_qty} < order.filled_qty {order.filled_qty}, "
-                "this could potentially be caused by duplicate fills or corrupted cached state",
+                f"this could potentially be caused by duplicate fills or corrupted cached state; "
+                f"order_id={order.client_order_id}, venue_order_id={order.venue_order_id}, "
+                f"total_fills_applied={len(fill_history)}, "
+                f"fill_trade_ids={order.trade_ids}, "
+                f"inferred_fill={'yes' if client_order_id in self._inferred_fill_ts else 'no'}, "
+                f"order_status={order.status}, report_status={report.order_status}",
             )
+
+            # Log each fill for forensics
+            for trade_id, qty, ts in fill_history:
+                self._log.error(f"  Fill: {trade_id}, qty={qty}, ts={ts}")
+
             return False  # Failed
 
         if report.filled_qty > order.filled_qty:
             # Check if order is already closed to avoid duplicate inferred fills
             if order.is_closed:
+                # Use the higher precision for tolerance check
+                precision = max(report.filled_qty.precision, order.filled_qty.precision)
+                if self._is_within_single_unit_tolerance(
+                    report.filled_qty.as_decimal(),
+                    order.filled_qty.as_decimal(),
+                    precision,
+                ):
+                    return True
+
                 self._log.warning(  # TODO: Reduce level to debug after initial development phase
-                    f"{order.client_order_id!r} already {order.status_string()} but "
+                    f"{order.instrument_id} {order.client_order_id!r} already {order.status_string()} but "
                     f"reported difference in filled_qty: "
                     f"report={report.filled_qty}, cached={order.filled_qty}, "
                     f"skipping inferred fill generation for closed order",
@@ -1672,6 +2193,9 @@ class LiveExecutionEngine(ExecutionEngine):
         return True  # Reconciled
 
     def _reconcile_fill_report_single(self, report: FillReport) -> bool:
+        if self._is_shutting_down:
+            return True  # Skip reconciliation during shutdown
+
         if not self._consider_for_reconciliation(report.instrument_id):
             self._log_skipping_reconciliation_on_instrument_id(report)
             return True  # Filtered
@@ -1728,6 +2252,17 @@ class LiveExecutionEngine(ExecutionEngine):
             # Fill already applied; check if data is consistent.
             # An existing fill may be sourced from the cache on start,
             # or may exist in-memory when a reconciliation is triggered.
+
+            # Log detailed info about when it was first applied
+            if order.client_order_id in self._fill_application_audit:
+                audit = self._fill_application_audit[order.client_order_id]
+                previous = [a for a in audit if a[0] == report.trade_id]
+                if previous:
+                    self._log.warning(
+                        f"Duplicate fill detected; {report.trade_id} was already applied "
+                        f"at ts={previous[0][2]}, source={previous[0][1]}",
+                    )
+
             existing_fill = self._get_existing_fill_for_trade_id(order, report.trade_id)
 
             if existing_fill:
@@ -1786,12 +2321,35 @@ class LiveExecutionEngine(ExecutionEngine):
             )
             return False  # Reject fill to prevent overfill
 
+        # Verify total fills consistency BEFORE applying
+        current_total = sum(
+            event.last_qty for event in order.events if isinstance(event, OrderFilled)
+        )
+        if current_total != order.filled_qty:
+            self._log.error(
+                f"INCONSISTENCY DETECTED before applying fill: "
+                f"sum(fills)={current_total} != order.filled_qty={order.filled_qty} "
+                f"for {order.client_order_id}",
+            )
+
+        # Track fill application in audit trail BEFORE generating the fill
+        # This ensures cleanup on close remains effective if this fill closes the order
+        if order.client_order_id not in self._fill_application_audit:
+            self._fill_application_audit[order.client_order_id] = []
+
+        audit_entry = (report.trade_id, "reconciliation", self._clock.timestamp_ns())
+        self._fill_application_audit[order.client_order_id].append(audit_entry)
+
         try:
             self._generate_order_filled(order, report, instrument)
         except InvalidStateTrigger as e:
+            # Roll back audit entry since fill was not applied
+            self._fill_application_audit[order.client_order_id].remove(audit_entry)
             self._log.error(str(e))
             return False
         except ValueError as e:
+            # Roll back audit entry since fill was not applied
+            self._fill_application_audit[order.client_order_id].remove(audit_entry)
             # Handle the negative leaves_qty error
             self._log.exception(
                 f"ValueError when applying fill to {order.client_order_id!r}: {e}",
@@ -1837,7 +2395,82 @@ class LiveExecutionEngine(ExecutionEngine):
             and cached_fill.ts_event == report.ts_event
         )
 
+    def _is_within_single_unit_tolerance(
+        self,
+        value1: Decimal,
+        value2: Decimal,
+        precision: int,
+    ) -> bool:
+        # Handles rounding discrepancies from venues (e.g., OKX fillSz vs accFillSz)
+        # Only apply tolerance for fractional quantities (precision > 0)
+        if precision == 0:
+            return value1 == value2  # Integer quantities require exact match
+
+        tolerance = Decimal(10) ** -precision
+        return abs(value1 - value2) <= tolerance
+
+    def _check_position_discrepancy(
+        self,
+        cached_positions: list[Position],
+        venue_report: PositionStatusReport | None,
+        instrument_id: InstrumentId,
+    ) -> bool:
+        # Calculate cached position quantity
+        cached_qty = Decimal(0)
+        for position in cached_positions:
+            cached_qty += position.signed_decimal_qty()
+
+        # Handle case where venue has no position report
+        if venue_report is None:
+            # We think we have a position, but venue says flat (or no report)
+            if cached_qty != 0:
+                instrument = self._cache.instrument(instrument_id)
+                if instrument is not None:
+                    if self._is_within_single_unit_tolerance(
+                        cached_qty,
+                        Decimal(0),
+                        instrument.size_precision,
+                    ):
+                        return False
+                else:
+                    self._log.debug(
+                        f"Cannot apply tolerance check for {instrument_id}: instrument not in cache",
+                    )
+
+                self._log.warning(
+                    f"Position discrepancy for {instrument_id}: "
+                    f"cached_qty={cached_qty}, venue has no position report",
+                    LogColor.YELLOW,
+                )
+                return True
+            # Both flat - no discrepancy
+            return False
+
+        venue_qty = venue_report.signed_decimal_qty
+
+        # Check if quantities match (both could be zero)
+        if cached_qty == venue_qty:
+            return False
+
+        instrument = self._cache.instrument(instrument_id)
+        if instrument is not None:
+            if self._is_within_single_unit_tolerance(
+                cached_qty,
+                venue_qty,
+                instrument.size_precision,
+            ):
+                return False
+        else:
+            self._log.debug(
+                f"Cannot apply tolerance check for {instrument_id}: instrument not in cache",
+            )
+
+        return True
+
     def _reconcile_position_report(self, report: PositionStatusReport) -> bool:
+        if self._is_shutting_down:
+            return True  # Skip reconciliation during shutdown
+
         if not self._consider_for_reconciliation(report.instrument_id):
             self._log_skipping_reconciliation_on_instrument_id(report)
             return True  # Filtered
@@ -1899,7 +2532,10 @@ class LiveExecutionEngine(ExecutionEngine):
         self._log.info(f"{report.signed_decimal_qty=}", LogColor.BLUE)
         self._log.info(f"{position_signed_decimal_qty=}", LogColor.BLUE)
 
-        if position_signed_decimal_qty != report.signed_decimal_qty:
+        # Check if quantities match
+        quantities_match = position_signed_decimal_qty == report.signed_decimal_qty
+
+        if not quantities_match:
             if not self.generate_missing_orders:
                 self._log.warning(
                     f"Discrepancy for {report.instrument_id} position "
@@ -2009,6 +2645,29 @@ class LiveExecutionEngine(ExecutionEngine):
                     if quote:
                         open_price = (
                             quote.ask_price if open_side == OrderSide.BUY else quote.bid_price
+                        )
+                    elif close_price:
+                        # Only allow fallback for CurrencyPair since spot asset positions may lack cost basis
+                        is_currency_pair = isinstance(instrument, CurrencyPair)
+
+                        if is_currency_pair:
+                            open_price = close_price
+                            self._log.warning(
+                                f"Using close price {close_price} as fallback for opening position "
+                                f"in cross-zero reconciliation for {report.instrument_id}; "
+                                f"venue position report lacks avg_px_open (spot asset position without cost basis)",
+                            )
+                        else:
+                            self._log.error(
+                                f"Cannot determine open price for {report.instrument_id}: "
+                                f"venue position report lacks avg_px_open and no quote tick available; "
+                                f"this fallback is only allowed for CurrencyPair (spot asset) positions",
+                            )
+                    else:
+                        self._log.error(
+                            f"Cannot determine open price for {report.instrument_id}: "
+                            f"no close price available (existing position lacks avg_px), "
+                            f"venue position report lacks avg_px_open, and no quote tick available",
                         )
 
                 open_result = False
@@ -2130,6 +2789,43 @@ class LiveExecutionEngine(ExecutionEngine):
                 )
 
             self._reconcile_order_report(diff_report, trades=[], is_external=False)
+        elif quantities_match and report.avg_px_open is not None:
+            # Quantities match, but verify avg_px_open also matches
+            current_avg_px = None
+            if positions_open:
+                # Calculate weighted average price of current positions
+                total_value = Decimal(0)
+                total_qty = Decimal(0)
+
+                for pos in positions_open:
+                    qty = abs(pos.signed_decimal_qty())
+
+                    if pos.avg_px_open and qty > 0:
+                        total_value += Decimal(str(pos.avg_px_open)) * qty
+                        total_qty += qty
+
+                if total_qty > 0:
+                    current_avg_px = total_value / total_qty
+
+            if current_avg_px is not None:
+                # Check if avg_px matches within tolerance
+                avg_px_diff = abs(current_avg_px - report.avg_px_open)
+                relative_diff = avg_px_diff / report.avg_px_open if report.avg_px_open != 0 else 0
+
+                if relative_diff > Decimal("0.0001"):  # 0.01% tolerance
+                    self._log.warning(
+                        f"Position avg_px mismatch for {report.instrument_id} after reconciliation: "
+                        f"internal={current_avg_px}, venue={report.avg_px_open}, "
+                        f"diff={avg_px_diff} ({relative_diff * 100:.4f}%). "
+                        f"This indicates incomplete reconciliation data from the venue.",
+                        LogColor.YELLOW,
+                    )
+                else:
+                    self._log.info(
+                        f"Position avg_px verified for {report.instrument_id}: "
+                        f"internal={current_avg_px}, venue={report.avg_px_open}",
+                        LogColor.GREEN,
+                    )
 
         return True  # Reconciled
 

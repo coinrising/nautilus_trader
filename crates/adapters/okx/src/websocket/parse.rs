@@ -15,6 +15,8 @@
 
 //! Functions translating raw OKX WebSocket frames into Nautilus data types.
 
+use std::str::FromStr;
+
 use ahash::AHashMap;
 use nautilus_core::{UUID4, nanos::UnixNanos};
 use nautilus_model::{
@@ -46,8 +48,8 @@ use crate::{
     common::{
         consts::{OKX_POST_ONLY_CANCEL_REASON, OKX_POST_ONLY_CANCEL_SOURCE},
         enums::{
-            OKXBookAction, OKXCandleConfirm, OKXOrderCategory, OKXOrderStatus, OKXOrderType,
-            OKXTriggerType,
+            OKXBookAction, OKXCandleConfirm, OKXInstrumentType, OKXOrderCategory, OKXOrderStatus,
+            OKXOrderType, OKXSide, OKXTargetCurrency, OKXTriggerType,
         },
         models::OKXInstrument,
         parse::{
@@ -58,6 +60,17 @@ use crate::{
     },
     websocket::messages::{ExecutionReport, NautilusWsMessage, OKXFundingRateMsg},
 };
+
+/// Checks if a price string indicates market execution.
+///
+/// OKX uses special sentinel values for market price:
+/// - "" (empty string)
+/// - "0"
+/// - "-1" (market price)
+/// - "-2" (market price with protection)
+fn is_market_price(px: &str) -> bool {
+    px.is_empty() || px == "0" || px == "-1" || px == "-2"
+}
 
 /// Extracts fee rates from a cached instrument.
 ///
@@ -90,7 +103,7 @@ fn extract_fees_from_cached_instrument(
             Some(future.maker_fee),
             Some(future.taker_fee),
         ),
-        InstrumentAny::OptionContract(option) => (
+        InstrumentAny::CryptoOption(option) => (
             Some(option.margin_init),
             Some(option.margin_maint),
             Some(option.maker_fee),
@@ -793,7 +806,7 @@ pub fn parse_algo_order_status_report(
     let order_side: OrderSide = msg.side.into();
 
     // Determine order type based on ord_px for conditional/stop orders
-    let order_type = if msg.ord_px == "-1" {
+    let order_type = if is_market_price(&msg.ord_px) {
         OrderType::StopMarket
     } else {
         OrderType::StopLimit
@@ -872,16 +885,29 @@ pub fn parse_order_status_report(
     let order_side: OrderSide = msg.side.into();
 
     let okx_order_type = msg.ord_type;
-    // For Trigger orders that come through regular orders channel (after being triggered),
-    // we determine the type based on whether they have a price
-    let order_type = if okx_order_type == OKXOrderType::Trigger {
-        if msg.px.is_empty() || msg.px == "0" {
-            OrderType::StopMarket
-        } else {
-            OrderType::StopLimit
+
+    // Determine order type based on presence of limit price for certain OKX order types
+    let order_type = match okx_order_type {
+        // Trigger orders: check if they have a price
+        OKXOrderType::Trigger => {
+            if is_market_price(&msg.px) {
+                OrderType::StopMarket
+            } else {
+                OrderType::StopLimit
+            }
         }
-    } else {
-        msg.ord_type.into()
+        // FOK/IOC orders: check if they have a price
+        // Without a price, they're market orders with TIF
+        // With a price, they're limit orders with TIF
+        OKXOrderType::Fok | OKXOrderType::Ioc | OKXOrderType::OptimalLimitIoc => {
+            if is_market_price(&msg.px) {
+                OrderType::Market
+            } else {
+                OrderType::Limit
+            }
+        }
+        // All other order types use standard mapping
+        _ => msg.ord_type.into(),
     };
     let order_status: OrderStatus = msg.state.into();
 
@@ -892,8 +918,84 @@ pub fn parse_order_status_report(
     };
 
     let size_precision = instrument.size_precision();
-    let quantity = parse_quantity(&msg.sz, size_precision)?;
-    let filled_qty = parse_quantity(&msg.acc_fill_sz.clone().unwrap_or_default(), size_precision)?;
+
+    // Parse quantities based on target currency
+    // OKX always returns acc_fill_sz in base currency, but sz depends on tgt_ccy
+
+    // Determine if this is a quote-quantity order
+    // Method 1: Explicit tgt_ccy field set to QuoteCcy
+    let is_quote_qty_explicit = msg.tgt_ccy == Some(OKXTargetCurrency::QuoteCcy);
+
+    // Method 2: Use OKX defaults when tgt_ccy is None (old orders or missing field)
+    // OKX API defaults for SPOT market orders: BUY orders use quote_ccy, SELL orders use base_ccy
+    // Note: tgtCcy only applies to SPOT market orders (not limit orders)
+    // For limit orders, sz is always in base currency regardless of side
+    let is_quote_qty_heuristic = msg.tgt_ccy.is_none()
+        && (msg.inst_type == OKXInstrumentType::Spot || msg.inst_type == OKXInstrumentType::Margin)
+        && msg.side == OKXSide::Buy
+        && msg.ord_type == OKXOrderType::Market;
+
+    let (quantity, filled_qty) = if is_quote_qty_explicit || is_quote_qty_heuristic {
+        // Quote-quantity order: sz is in quote currency, need to convert to base
+        let sz_quote_dec = Decimal::from_str(&msg.sz).map_err(|e| {
+            anyhow::anyhow!("Failed to parse sz='{}' as quote quantity: {}", msg.sz, e)
+        })?;
+
+        // Determine the price to use for conversion
+        // Priority: 1) limit price (px) for limit orders, 2) avg_px for market orders
+        let conversion_price_dec =
+            if !is_market_price(&msg.px) {
+                // Limit order: use the limit price (msg.px)
+                Some(
+                    Decimal::from_str(&msg.px)
+                        .map_err(|e| anyhow::anyhow!("Failed to parse px='{}': {}", msg.px, e))?,
+                )
+            } else if !msg.avg_px.is_empty() && msg.avg_px != "0" {
+                // Market order with fills: use average fill price
+                Some(Decimal::from_str(&msg.avg_px).map_err(|e| {
+                    anyhow::anyhow!("Failed to parse avg_px='{}': {}", msg.avg_px, e)
+                })?)
+            } else {
+                None
+            };
+
+        // Convert quote quantity to base: quantity_base = sz_quote / price
+        let quantity_base = if let Some(price) = conversion_price_dec {
+            if !price.is_zero() {
+                Quantity::from_decimal(sz_quote_dec / price, size_precision)?
+            } else {
+                parse_quantity(&msg.sz, size_precision)?
+            }
+        } else {
+            // No price available, can't convert - use sz as-is temporarily
+            // This will be corrected once the order gets filled and price is available
+            parse_quantity(&msg.sz, size_precision)?
+        };
+
+        let filled_qty =
+            parse_quantity(&msg.acc_fill_sz.clone().unwrap_or_default(), size_precision)?;
+
+        (quantity_base, filled_qty)
+    } else {
+        // Base-quantity order: both sz and acc_fill_sz are in base currency
+        let quantity = parse_quantity(&msg.sz, size_precision)?;
+        let filled_qty =
+            parse_quantity(&msg.acc_fill_sz.clone().unwrap_or_default(), size_precision)?;
+
+        (quantity, filled_qty)
+    };
+
+    // For quote-quantity orders marked as FILLED, adjust quantity to match filled_qty
+    // to avoid precision mismatches from quote-to-base conversion
+    let (quantity, filled_qty) = if (is_quote_qty_explicit || is_quote_qty_heuristic)
+        && msg.state == OKXOrderStatus::Filled
+        && filled_qty.is_positive()
+    {
+        (filled_qty, filled_qty)
+    } else {
+        (quantity, filled_qty)
+    };
+
     let ts_accepted = parse_millisecond_timestamp(msg.c_time);
     let ts_last = parse_millisecond_timestamp(msg.u_time);
 
@@ -945,15 +1047,14 @@ pub fn parse_order_status_report(
     if okx_order_type == OKXOrderType::Trigger {
         // For triggered orders coming through regular orders channel,
         // set the price if it's a stop-limit order
-        if !msg.px.is_empty()
-            && msg.px != "0"
+        if !is_market_price(&msg.px)
             && let Ok(price) = parse_price(&msg.px, price_precision)
         {
             report = report.with_price(price);
         }
     } else {
         // For regular orders, use px field
-        if !msg.px.is_empty()
+        if !is_market_price(&msg.px)
             && let Ok(price) = parse_price(&msg.px, price_precision)
         {
             report = report.with_price(price);
@@ -963,7 +1064,7 @@ pub fn parse_order_status_report(
     if !msg.avg_px.is_empty()
         && let Ok(avg_px) = msg.avg_px.parse::<f64>()
     {
-        report = report.with_avg_px(avg_px);
+        report = report.with_avg_px(avg_px)?;
     }
 
     if matches!(
@@ -1091,11 +1192,10 @@ pub fn parse_fill_report(
     };
 
     let fee_str = msg.fee.as_deref().unwrap_or("0");
-    let fee_value = fee_str
-        .parse::<f64>()
+    let fee_dec = Decimal::from_str(fee_str)
         .map_err(|e| anyhow::anyhow!("Failed to parse fee '{}': {}", fee_str, e))?;
 
-    let fee_currency = parse_fee_currency(msg.fee_ccy.as_str(), fee_value, || {
+    let fee_currency = parse_fee_currency(msg.fee_ccy.as_str(), fee_dec, || {
         format!("fill report for inst_id={}", msg.inst_id)
     });
 
@@ -1411,10 +1511,11 @@ mod tests {
             px: "".to_string(),
             reduce_only: "false".to_string(),
             side: OKXSide::Buy,
-            state: crate::common::enums::OKXOrderStatus::PartiallyFilled,
+            state: OKXOrderStatus::PartiallyFilled,
             exec_type: OKXExecType::Taker,
             sz: "0.03".to_string(),
             td_mode: OKXTradeMode::Isolated,
+            tgt_ccy: None,
             trade_id: trade_id.to_string(),
             u_time: 1746947317402,
         }
@@ -2135,7 +2236,7 @@ mod tests {
             fill_sz: "0.01".to_string(),
             fill_time: 1746947317402,
             inst_id: Ustr::from("BTC-USDT-SWAP"),
-            inst_type: crate::common::enums::OKXInstrumentType::Swap,
+            inst_type: OKXInstrumentType::Swap,
             lever: "2.0".to_string(),
             ord_id: Ustr::from("1234567890"),
             ord_type: OKXOrderType::Market,
@@ -2143,11 +2244,12 @@ mod tests {
             pos_side: OKXPositionSide::Long,
             px: "".to_string(),
             reduce_only: "false".to_string(),
-            side: crate::common::enums::OKXSide::Buy,
-            state: crate::common::enums::OKXOrderStatus::PartiallyFilled,
-            exec_type: crate::common::enums::OKXExecType::Maker,
+            side: OKXSide::Buy,
+            state: OKXOrderStatus::PartiallyFilled,
+            exec_type: OKXExecType::Maker,
             sz: "0.03".to_string(), // Total order size
             td_mode: OKXTradeMode::Isolated,
+            tgt_ccy: None,
             trade_id: "trade_1".to_string(),
             u_time: 1746947317402,
         };
@@ -2182,7 +2284,7 @@ mod tests {
             fill_sz: "0.02".to_string(),
             fill_time: 1746947317403,
             inst_id: Ustr::from("BTC-USDT-SWAP"),
-            inst_type: crate::common::enums::OKXInstrumentType::Swap,
+            inst_type: OKXInstrumentType::Swap,
             lever: "2.0".to_string(),
             ord_id: Ustr::from("1234567890"),
             ord_type: OKXOrderType::Market,
@@ -2190,11 +2292,12 @@ mod tests {
             pos_side: OKXPositionSide::Long,
             px: "".to_string(),
             reduce_only: "false".to_string(),
-            side: crate::common::enums::OKXSide::Buy,
-            state: crate::common::enums::OKXOrderStatus::Filled,
-            exec_type: crate::common::enums::OKXExecType::Maker,
+            side: OKXSide::Buy,
+            state: OKXOrderStatus::Filled,
+            exec_type: OKXExecType::Maker,
             sz: "0.03".to_string(), // Same total order size
             td_mode: OKXTradeMode::Isolated,
+            tgt_ccy: None,
             trade_id: "trade_2".to_string(),
             u_time: 1746947317403,
         };
@@ -2265,7 +2368,7 @@ mod tests {
             fill_sz: "0.01".to_string(),
             fill_time: 1746947317402,
             inst_id: Ustr::from("BTC-USDT-SWAP"),
-            inst_type: crate::common::enums::OKXInstrumentType::Swap,
+            inst_type: OKXInstrumentType::Swap,
             lever: "2.0".to_string(),
             ord_id: Ustr::from("rebate_order_123"),
             ord_type: OKXOrderType::Market,
@@ -2273,11 +2376,12 @@ mod tests {
             pos_side: OKXPositionSide::Long,
             px: "".to_string(),
             reduce_only: "false".to_string(),
-            side: crate::common::enums::OKXSide::Buy,
-            state: crate::common::enums::OKXOrderStatus::PartiallyFilled,
-            exec_type: crate::common::enums::OKXExecType::Maker,
+            side: OKXSide::Buy,
+            state: OKXOrderStatus::PartiallyFilled,
+            exec_type: OKXExecType::Maker,
             sz: "0.02".to_string(),
             td_mode: OKXTradeMode::Isolated,
+            tgt_ccy: None,
             trade_id: "trade_rebate_1".to_string(),
             u_time: 1746947317402,
         };
@@ -2312,7 +2416,7 @@ mod tests {
             fill_sz: "0.01".to_string(),
             fill_time: 1746947317403,
             inst_id: Ustr::from("BTC-USDT-SWAP"),
-            inst_type: crate::common::enums::OKXInstrumentType::Swap,
+            inst_type: OKXInstrumentType::Swap,
             lever: "2.0".to_string(),
             ord_id: Ustr::from("rebate_order_123"),
             ord_type: OKXOrderType::Market,
@@ -2320,11 +2424,12 @@ mod tests {
             pos_side: OKXPositionSide::Long,
             px: "".to_string(),
             reduce_only: "false".to_string(),
-            side: crate::common::enums::OKXSide::Buy,
-            state: crate::common::enums::OKXOrderStatus::Filled,
-            exec_type: crate::common::enums::OKXExecType::Maker,
+            side: OKXSide::Buy,
+            state: OKXOrderStatus::Filled,
+            exec_type: OKXExecType::Maker,
             sz: "0.02".to_string(),
             td_mode: OKXTradeMode::Isolated,
+            tgt_ccy: None,
             trade_id: "trade_rebate_2".to_string(),
             u_time: 1746947317403,
         };
@@ -2393,7 +2498,7 @@ mod tests {
             fill_sz: "0.01".to_string(),
             fill_time: 1746947317402,
             inst_id: Ustr::from("BTC-USDT-SWAP"),
-            inst_type: crate::common::enums::OKXInstrumentType::Swap,
+            inst_type: OKXInstrumentType::Swap,
             lever: "2.0".to_string(),
             ord_id: Ustr::from("transition_order_456"),
             ord_type: OKXOrderType::Market,
@@ -2401,11 +2506,12 @@ mod tests {
             pos_side: OKXPositionSide::Long,
             px: "".to_string(),
             reduce_only: "false".to_string(),
-            side: crate::common::enums::OKXSide::Buy,
-            state: crate::common::enums::OKXOrderStatus::PartiallyFilled,
-            exec_type: crate::common::enums::OKXExecType::Maker,
+            side: OKXSide::Buy,
+            state: OKXOrderStatus::PartiallyFilled,
+            exec_type: OKXExecType::Maker,
             sz: "0.02".to_string(),
             td_mode: OKXTradeMode::Isolated,
+            tgt_ccy: None,
             trade_id: "trade_transition_1".to_string(),
             u_time: 1746947317402,
         };
@@ -2442,7 +2548,7 @@ mod tests {
             fill_sz: "0.01".to_string(),
             fill_time: 1746947317403,
             inst_id: Ustr::from("BTC-USDT-SWAP"),
-            inst_type: crate::common::enums::OKXInstrumentType::Swap,
+            inst_type: OKXInstrumentType::Swap,
             lever: "2.0".to_string(),
             ord_id: Ustr::from("transition_order_456"),
             ord_type: OKXOrderType::Market,
@@ -2450,11 +2556,12 @@ mod tests {
             pos_side: OKXPositionSide::Long,
             px: "".to_string(),
             reduce_only: "false".to_string(),
-            side: crate::common::enums::OKXSide::Buy,
-            state: crate::common::enums::OKXOrderStatus::Filled,
-            exec_type: crate::common::enums::OKXExecType::Taker,
+            side: OKXSide::Buy,
+            state: OKXOrderStatus::Filled,
+            exec_type: OKXExecType::Taker,
             sz: "0.02".to_string(),
             td_mode: OKXTradeMode::Isolated,
+            tgt_ccy: None,
             trade_id: "trade_transition_2".to_string(),
             u_time: 1746947317403,
         };
@@ -2524,7 +2631,7 @@ mod tests {
             fill_sz: "0.01".to_string(),
             fill_time: 1746947317402,
             inst_id: Ustr::from("BTC-USDT-SWAP"),
-            inst_type: crate::common::enums::OKXInstrumentType::Swap,
+            inst_type: OKXInstrumentType::Swap,
             lever: "2.0".to_string(),
             ord_id: Ustr::from("neg_inc_order_789"),
             ord_type: OKXOrderType::Market,
@@ -2532,11 +2639,12 @@ mod tests {
             pos_side: OKXPositionSide::Long,
             px: "".to_string(),
             reduce_only: "false".to_string(),
-            side: crate::common::enums::OKXSide::Buy,
-            state: crate::common::enums::OKXOrderStatus::PartiallyFilled,
-            exec_type: crate::common::enums::OKXExecType::Taker,
+            side: OKXSide::Buy,
+            state: OKXOrderStatus::PartiallyFilled,
+            exec_type: OKXExecType::Taker,
             sz: "0.02".to_string(),
             td_mode: OKXTradeMode::Isolated,
+            tgt_ccy: None,
             trade_id: "trade_neg_inc_1".to_string(),
             u_time: 1746947317402,
         };
@@ -2571,7 +2679,7 @@ mod tests {
             fill_sz: "0.01".to_string(),
             fill_time: 1746947317403,
             inst_id: Ustr::from("BTC-USDT-SWAP"),
-            inst_type: crate::common::enums::OKXInstrumentType::Swap,
+            inst_type: OKXInstrumentType::Swap,
             lever: "2.0".to_string(),
             ord_id: Ustr::from("neg_inc_order_789"),
             ord_type: OKXOrderType::Market,
@@ -2579,11 +2687,12 @@ mod tests {
             pos_side: OKXPositionSide::Long,
             px: "".to_string(),
             reduce_only: "false".to_string(),
-            side: crate::common::enums::OKXSide::Buy,
-            state: crate::common::enums::OKXOrderStatus::Filled,
-            exec_type: crate::common::enums::OKXExecType::Maker,
+            side: OKXSide::Buy,
+            state: OKXOrderStatus::Filled,
+            exec_type: OKXExecType::Maker,
             sz: "0.02".to_string(),
             td_mode: OKXTradeMode::Isolated,
+            tgt_ccy: None,
             trade_id: "trade_neg_inc_2".to_string(),
             u_time: 1746947317403,
         };
@@ -3258,6 +3367,7 @@ mod tests {
             exec_type: OKXExecType::Taker,
             sz: "0.25".to_string(),
             td_mode: OKXTradeMode::Isolated,
+            tgt_ccy: None,
             trade_id: "1518905888".to_string(),
             u_time: 1746947317402,
         };

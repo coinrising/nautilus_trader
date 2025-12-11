@@ -1,12 +1,77 @@
-# NautilusTrader 1.221.0 Beta
+# NautilusTrader 1.222.0 Beta
 
 Released on TBD (UTC).
+
+This release adds support for Python 3.14 with the following limitations:
+- Windows platform: Python 3.14 not supported yet (available on Python 3.12-3.13)
+- dYdX adapter extras (`[dydx]`) unavailable due to upstream `coincurve` compatibility (available on Python 3.12-3.13)
+- Interactive Brokers adapter extras (`[ib]`) unavailable due to upstream `nautilus-ibapi` compatibility (available on Python 3.12-3.13)
+
+### Enhancements
+- Added support for Python 3.14
+- Added initial backtest visualization tearsheets with plotly
+- Added `create_bars_with_fills` to Tearsheet (#3137), thanks @faysou
+- Added `proxy_url` support for HTTP clients
+- Added `CAGR` portfolio statistic
+- Added `CalmarRatio` portfolio statistic
+- Added `MaxDrawdown` portfolio statistic
+- Added `quote_quantity` parameter for `close_position(...)` and `close_all_positions(...)` strategy methods
+- Added PolymarketDataLoader for loading historical data with docs and example
+- Introduced `PositionAdjusted` events for tracking quantity/PnL changes outside normal order fills (base currency commissions, funding payments, manual adjustments)
+- Upgraded continuous reconciliation for execution engine using position reports to detect missed fills
+
+### Breaking Changes
+- Dropped support for Python 3.11
+- Removed `use_ws_trade_api` config option from Bybit execution client (using WebSocket trade API only)
+- dYdX adapter extras (`[dydx]`) unavailable on Python 3.14 due to upstream `coincurve` compatibility (available on Python 3.12-3.13)
+- Interactive Brokers adapter extras (`[ib]`) unavailable on Python 3.14 due to upstream `nautilus-ibapi` compatibility (available on Python 3.12-3.13)
+
+### Security
+TBD
+
+### Fixes
+- Fixed risk engine negative price handling for spread instruments (#3136), thanks for reporting @q351941406
+- Fixed spawned order client_id caching in `ExecAlgorithm` (#3122), thanks for reporting @kirill-gr1
+- Fixed parse_dates parameter in CSV loaders (#3132), thanks @maomao9-0
+- Fixed Binance instrument info dict JSON serialization (#3128), thanks for reporting @woung717
+- Fixed Interactive Brokers quote tick subscriptions to use tick-by-tick data (#3135), thanks for reporting @genliusrocks
+- Fixed OKX pre-open instrument parsing and standardize enum usage (#3134), thanks for reporting @3wtz
+- Fixed Polymarket maker fill order side inversion (#3126), thanks for reporting @santivazq
+- Fixed Polymarket instrument provider market filtering (#3133), thanks @MisterMM23
+
+### Internal Improvements
+- Added BitMEX submit broadcaster
+- Added non-mutating swap quote simulation for Pool tickmap profiling (#3123), thanks @filipmacek
+- Ported Bybit integration adapter to Rust
+- Refactored network crate to modularize `http`, `socket`, and `websocket`
+- Refactored reading of feather files in catalog (#3114), thanks @faysou
+- Optimized execution reconciliation to avoid quadratic complexity (#3140), thanks @DeirhX
+- Repaired OKX spot margin position reports for borrowing, thanks @sunlei
+- Repaired Bybit docs links in comment (#3125), thanks @sunlei
+- Repaired Bybit HTTP order place (#3127), thanks @sunlei
+- Upgraded implied-vol crate (#3115), thanks @faysou
+- Upgraded Rust (MSRV) to 1.91.0
+- Upgraded `pyo3` crate to v0.27.0
+- Upgraded `pyo3-async-runtimes` crate to v0.27.0
+
+### Documentation Updates
+- Added Polymarket historical data loading docs
+
+### Deprecations
+None
+
+---
+
+# NautilusTrader 1.221.0 Beta
+
+Released on 26th October 2025 (UTC).
 
 This will be the final release with support for Python 3.11.
 
 ### Enhancements
 - Added support for `OrderBookDepth10` requests (#2955), thanks @faysou
 - Added support for quotes from book depths (#2977), thanks @faysou
+- Added support for quotes from order book deltas updates (#3106), thanks @faysou
 - Added execution engine rate limiting for single-order reconciliation queries
 - Added `subscribe_order_fills(...)` and `unsubscribe_order_fills(...)` for `Actor` allowing to subscribe to all fills for an instrument ID
 - Added `on_order_filled(...)` for `Actor`
@@ -63,6 +128,7 @@ This will be the final release with support for Python 3.11.
 - Fixed PyO3 interpreter lifecycle for async shutdown preventing edge case `"interpreter not initialized"` panics during shutdown
 - Fixed `RiskEngine` reduce-only cash exits (#2986), thanks for reporting @dennisnissle
 - Fixed `RiskEngine` quote quantity validation
+- Fixed `BacktestEngine` to retain instruments on reset (#3096), thanks for reporting @woung717
 - Fixed overflow in `NautilusKernel` build time calculation due to negative duration (#2998), thanks for reporting @HaakonFlaaronning
 - Fixed handling of asyncio.CancelledError in execution reconciliation (#3073), thanks @dinana
 - Fixed edge case where rejected orders can remain in own order book
@@ -77,10 +143,12 @@ This will be the final release with support for Python 3.11.
 - Fixed `OptionSpread` Arrow schema missing max/min quantity and price fields
 - Fixed `Commodity` Arrow schema to match from_dict requirements
 - Fixed safe encoded symbols (#2964), thanks @ms32035
+- Fixed msgspec encoding for type objects with qualified names
 - Fixed nautilus CLI macOS compatibility with regex unicode-perl feature (#2969), thanks @learnerLj
 - Fixed fuzzy candlesticks indicator bugs (#3021), thanks @benhaben
 - Fixed return type annotation for `ArrowSerializer.deserialize` (#3076), thanks @MK27MK
 - Fixed initializing of sqrt price setting flow when `Pool` profiling (#3100), thanks @filipmacek
+- Fixed Redis multi-stream consumer skipping messages (#3094), thanks for reporting @kirill-gr1
 - Fixed Binance duplicate `OrderSubmitted` event generation for order lists (#2994), thanks @sunlei
 - Fixed Binance websocket fill message parsing for Binance US with extra fields (#3006), thanks for reporting @bmlquant
 - Fixed Binance order status parsing for external orders (#3006), thanks for reporting @bmlquant
@@ -108,10 +176,12 @@ This will be the final release with support for Python 3.11.
 - Fixed Interactive Brokers bars response handling by removing partial bar (#3040), thanks @sunlei
 - Fixed Interactive Brokers account summary handling (#3052), thanks @shinhwasbiz02
 - Fixed Interactive Brokers account balance calculation (#3064), thanks @sunlei
+- Fixed OKX spot margin quote quantity order handling
 - Fixed OKX API credentials handling to allow passing explicitly
 - Fixed OKX fee calculations to account for negative fees
 - Fixed OKX parsing for `tick_sz` across instrument types
 - Fixed OKX parsing for instruments `multiplier` field
+- Fixed OKX WebSocket heartbeat and standardize logging
 - Fixed Polymarket handling of one-sided quotes (#2950), thanks for reporting @thefabus
 - Fixed Polymarket websocket message handling (#2963, #2968), thanks @thefabus
 - Fixed Polymarket tick size change handling for quotes (#2980), thanks for reporting @santivazq
@@ -127,6 +197,8 @@ This will be the final release with support for Python 3.11.
 - Added BitMEX adapter integration tests
 - Added OKX adapter integration tests
 - Added turmoil network simulation testing to network crate
+- Added liquidity utilization rate to AMM pool profiler (#3107), thanks @filipmacek
+- Added `filter_sec_types` config to skip unsupported IB instrument types (#3108), thanks @sunlei
 - Ported `PortfolioAnalyzer` and all portfolio statistics to Rust
 - Introduced AMM Pool profiler with tickmaps and Uniswapv3 support (#3000, #3010, #3019, #3036), thanks @filipmacek
 - Introduced snapshot, analytics, and PSQL schema for PoolProfiler (#3048), thanks @filipmacek
@@ -189,9 +261,9 @@ This will be the final release with support for Python 3.11.
 - Optimized `ExecutionEngine` hot path with topic caching and reduced cache lookups
 - Optimized rate limiter quota keys with string interning to avoid repeated allocations
 - Upgraded Rust (MSRV) to 1.90.0
-- Upgraded Cython to v3.1.4
+- Upgraded Cython to v3.1.6
 - Upgraded `databento` crate to v0.35.0
-- Upgraded `datafusion` crate to v50.2.0
+- Upgraded `datafusion` crate to v50.3.0
 - Upgraded `pyo3` and `pyo3-async-runtimes` crates to v0.26.0
 - Upgraded `redis` crate to v0.32.7
 - Upgraded `tokio` crate to v1.48.0

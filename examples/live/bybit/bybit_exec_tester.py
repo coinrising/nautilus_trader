@@ -68,8 +68,14 @@ instrument_id = InstrumentId.from_str(f"{symbol}.{BYBIT}")
 reconciliation_instrument_ids = [instrument_id]
 # reconciliation_instrument_ids = [instrument_id, instrument_id2]
 
-product_types: list[BybitProductType] = [product_type]
-# product_types: list[BybitProductType] = [product_type, BybitProductType.LINEAR]
+# product_types: tuple[BybitProductType, ...] = (product_type,)
+# product_types: tuple[BybitProductType, ...] = (product_type, BybitProductType.LINEAR)
+product_types: tuple[BybitProductType, ...] = (
+    BybitProductType.SPOT,
+    BybitProductType.LINEAR,
+    BybitProductType.INVERSE,
+    BybitProductType.OPTION,
+)
 
 # INVERSE
 # product_type = BybitProductType.INVERSE
@@ -87,10 +93,11 @@ config_node = TradingNodeConfig(
     ),
     exec_engine=LiveExecEngineConfig(
         reconciliation=True,
-        reconciliation_lookback_mins=2880,
+        # reconciliation_lookback_mins=2880,
         reconciliation_instrument_ids=reconciliation_instrument_ids,
         open_check_interval_secs=5.0,
         open_check_open_only=False,
+        position_check_interval_secs=5.0,
         # filtered_client_order_ids=[ClientOrderId("1757985206157")],  # For demonstration
         # own_books_audit_interval_secs=2.0,
         # manage_own_order_books=True,
@@ -123,7 +130,7 @@ config_node = TradingNodeConfig(
     #     use_trader_id=False,
     #     use_instance_id=False,
     #     stream_per_topic=False,
-    #     types_filter=[QuoteTick],
+    #     types_filter=[QuoteTick),
     #     autotrim_mins=30,
     #     heartbeat_interval_secs=1,
     # ),
@@ -136,7 +143,6 @@ config_node = TradingNodeConfig(
             product_types=product_types,
             demo=False,  # If client uses the demo API
             testnet=False,  # If client uses the testnet API
-            recv_window_ms=5_000,  # Default
         ),
     },
     exec_clients={
@@ -145,16 +151,11 @@ config_node = TradingNodeConfig(
             api_secret=None,  # 'BYBIT_API_SECRET' env var
             base_url_http=None,  # Override with custom endpoint
             base_url_ws_private=None,  # Override with custom endpoint
-            use_ws_trade_api=True,
             instrument_provider=InstrumentProviderConfig(load_all=True),
             product_types=product_types,
             use_spot_position_reports=use_spot_position_reports,
             demo=False,  # If client uses the demo API
             testnet=False,  # If client uses the testnet API
-            max_retries=3,
-            retry_delay_initial_ms=1_000,
-            retry_delay_max_ms=10_000,
-            recv_window_ms=5_000,  # Default
         ),
     },
     timeout_connection=20.0,
@@ -175,14 +176,19 @@ config_tester = ExecTesterConfig(
     subscribe_trades=True,
     # subscribe_book=True,
     enable_sells=enable_sells,
+    # enable_stop_buys=True,  # Test stop orders
+    # enable_stop_sells=True,  # Test stop orders
+    # enable_brackets=True,
     order_qty=order_qty,
-    open_position_on_start_qty=order_qty,
-    # tob_offset_ticks=1,
+    open_position_on_start_qty=order_qty,  # Positive quantity to open LONG position
+    # tob_offset_ticks=0,
     use_post_only=True,
     # test_reject_post_only=True,
-    reduce_only_on_stop=False,  # Not supported for Bybit SPOT
+    # reduce_only_on_stop=False,  # Not supported for Bybit SPOT
     # cancel_orders_on_stop=False,
     # close_positions_on_stop=False,
+    # use_batch_cancel_on_stop=True,
+    # use_individual_cancels_on_stop=True,
     log_data=False,
     log_rejected_due_post_only_as_warning=False,
 )

@@ -20,13 +20,16 @@ use std::convert::TryFrom;
 use anyhow::Context;
 use nautilus_core::{nanos::UnixNanos, uuid::UUID4};
 use nautilus_model::{
-    data::{Bar, BarType, BookOrder, OrderBookDelta, OrderBookDeltas, QuoteTick, TradeTick},
+    data::{
+        Bar, BarType, BookOrder, FundingRateUpdate, OrderBookDelta, OrderBookDeltas, QuoteTick,
+        TradeTick,
+    },
     enums::{
         AccountType, AggressorSide, BookAction, LiquiditySide, OrderSide, OrderStatus, OrderType,
         PositionSideSpecified, RecordFlag, TimeInForce,
     },
     events::account::state::AccountState,
-    identifiers::{AccountId, ClientOrderId, TradeId, VenueOrderId},
+    identifiers::{AccountId, ClientOrderId, InstrumentId, TradeId, VenueOrderId},
     instruments::{Instrument, any::InstrumentAny},
     reports::{FillReport, OrderStatusReport, PositionStatusReport},
     types::{AccountBalance, Currency, Money, Price, Quantity},
@@ -35,8 +38,8 @@ use rust_decimal::Decimal;
 
 use super::messages::{
     BybitWsAccountExecution, BybitWsAccountOrder, BybitWsAccountPosition, BybitWsAccountWallet,
-    BybitWsKline, BybitWsOrderbookDepthMsg, BybitWsTickerLinearMsg, BybitWsTickerOptionMsg,
-    BybitWsTrade,
+    BybitWsKline, BybitWsOrderbookDepthMsg, BybitWsTickerLinear, BybitWsTickerLinearMsg,
+    BybitWsTickerOptionMsg, BybitWsTrade,
 };
 use crate::common::{
     enums::{BybitOrderStatus, BybitOrderType, BybitTimeInForce},
@@ -310,6 +313,47 @@ pub fn parse_ticker_option_quote(
     .context("failed to construct QuoteTick from Bybit option ticker message")
 }
 
+/// Parses a linear ticker payload into a [`FundingRateUpdate`].
+///
+/// # Errors
+///
+/// Returns an error if funding rate or next funding time fields are missing or cannot be parsed.
+pub fn parse_ticker_linear_funding(
+    data: &BybitWsTickerLinear,
+    instrument_id: InstrumentId,
+    ts_event: UnixNanos,
+    ts_init: UnixNanos,
+) -> anyhow::Result<FundingRateUpdate> {
+    let funding_rate_str = data
+        .funding_rate
+        .as_ref()
+        .context("Bybit ticker missing funding_rate")?;
+
+    let funding_rate = funding_rate_str
+        .as_str()
+        .parse::<Decimal>()
+        .context("Invalid funding_rate value")?
+        .normalize();
+
+    let next_funding_ns = if let Some(next_funding_time) = &data.next_funding_time {
+        let next_funding_millis = next_funding_time
+            .as_str()
+            .parse::<i64>()
+            .context("Invalid next_funding_time value")?;
+        Some(parse_millis_i64(next_funding_millis, "next_funding_time")?)
+    } else {
+        None
+    };
+
+    Ok(FundingRateUpdate::new(
+        instrument_id,
+        funding_rate,
+        next_funding_ns,
+        ts_event,
+        ts_init,
+    ))
+}
+
 pub(crate) fn parse_millis_i64(value: i64, field: &str) -> anyhow::Result<UnixNanos> {
     if value < 0 {
         Err(anyhow::anyhow!("{field} must be non-negative, was {value}"))
@@ -474,7 +518,7 @@ pub fn parse_ws_order_status_report(
             .avg_price
             .parse::<f64>()
             .with_context(|| format!("Failed to parse avg_price='{}' as f64", order.avg_price))?;
-        report = report.with_avg_px(avg_px);
+        report = report.with_avg_px(avg_px)?;
     }
 
     if !order.trigger_price.is_empty() && order.trigger_price != "0" {
@@ -662,12 +706,26 @@ pub fn parse_ws_account_state(
     for coin_data in &wallet.coin {
         let currency = Currency::from(coin_data.coin.as_str());
 
-        let total_amount = coin_data.wallet_balance.parse::<f64>().with_context(|| {
+        let wallet_balance_amount = coin_data.wallet_balance.parse::<f64>().with_context(|| {
             format!(
                 "Failed to parse walletBalance='{}' as f64",
                 coin_data.wallet_balance
             )
         })?;
+
+        let spot_borrow_amount = if let Some(ref spot_borrow) = coin_data.spot_borrow {
+            if spot_borrow.is_empty() {
+                0.0
+            } else {
+                spot_borrow.parse::<f64>().with_context(|| {
+                    format!("Failed to parse spotBorrow='{}' as f64", spot_borrow)
+                })?
+            }
+        } else {
+            0.0
+        };
+
+        let total_amount = wallet_balance_amount - spot_borrow_amount;
 
         let free_amount = if coin_data.available_to_withdraw.is_empty() {
             0.0
@@ -953,7 +1011,7 @@ mod tests {
         assert_eq!(report.quantity, instrument.make_qty(0.100, None));
         assert_eq!(report.filled_qty, instrument.make_qty(0.100, None));
         assert_eq!(report.price, Some(instrument.make_price(30000.50)));
-        assert_eq!(report.avg_px, Some(30000.50));
+        assert_eq!(report.avg_px, Some(Decimal::try_from(30000.50).unwrap()));
         assert_eq!(
             report.client_order_id.as_ref().unwrap().to_string(),
             "test-client-order-001"
@@ -1112,5 +1170,26 @@ mod tests {
 
         assert_eq!(state.ts_event, ts_event);
         assert_eq!(state.ts_init, TS);
+    }
+
+    #[rstest]
+    fn parse_ticker_linear_into_funding_rate() {
+        let instrument = linear_instrument();
+        let json = load_test_json("ws_ticker_linear.json");
+        let msg: BybitWsTickerLinearMsg = serde_json::from_str(&json).unwrap();
+
+        let ts_event = UnixNanos::new(1_673_272_861_686_000_000);
+
+        let funding =
+            parse_ticker_linear_funding(&msg.data, instrument.id(), ts_event, TS).unwrap();
+
+        assert_eq!(funding.instrument_id, instrument.id());
+        assert_eq!(funding.rate, Decimal::new(-212, 6)); // -0.000212
+        assert_eq!(
+            funding.next_funding_ns,
+            Some(UnixNanos::new(1_673_280_000_000_000_000))
+        );
+        assert_eq!(funding.ts_event, ts_event);
+        assert_eq!(funding.ts_init, TS);
     }
 }

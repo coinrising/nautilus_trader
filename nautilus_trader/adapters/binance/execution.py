@@ -295,32 +295,27 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
                 self._log.error(message)
 
     async def _connect(self) -> None:
-        try:
-            await self._instrument_provider.initialize()
-            await self._update_account_state()
-            await self._await_account_registered()
-            await self._init_dual_side_position()
+        await self._instrument_provider.initialize()
+        await self._update_account_state()
+        await self._await_account_registered()
+        await self._init_dual_side_position()
 
-            response: BinanceListenKey = await self._http_user.create_listen_key()
+        response: BinanceListenKey = await self._http_user.create_listen_key()
 
-            # Check Binance-Nautilus clock sync
-            server_time: int = await self._http_market.request_server_time()
-            self._log.info(f"Binance server time {server_time} UNIX (ms)")
+        # Check Binance-Nautilus clock sync
+        server_time: int = await self._http_market.request_server_time()
+        self._log.info(f"Binance server time {server_time} UNIX (ms)")
 
-            nautilus_time: int = self._clock.timestamp_ms()
-            self._log.info(f"Nautilus clock time {nautilus_time} UNIX (ms)")
+        nautilus_time: int = self._clock.timestamp_ms()
+        self._log.info(f"Nautilus clock time {nautilus_time} UNIX (ms)")
 
-            # Set up WebSocket listen key
-            self._listen_key = response.listenKey
-            self._last_successful_ping_ns = self._clock.timestamp_ns()  # Initialize on connection
-            self._log.info(f"Listen key {self._listen_key}")
-            self._ping_listen_keys_task = self.create_task(self._ping_listen_keys())
+        # Set up WebSocket listen key
+        self._listen_key = response.listenKey
+        self._last_successful_ping_ns = self._clock.timestamp_ns()  # Initialize on connection
+        self._log.info(f"Listen key {self._listen_key}")
+        self._ping_listen_keys_task = self.create_task(self._ping_listen_keys())
 
-            # Connect WebSocket client
-            await self._ws_client.subscribe_listen_key(self._listen_key)
-        except BinanceError as e:
-            self._log.exception(f"Error on connect: {e.message}", e)
-            return
+        await self._ws_client.subscribe_listen_key(self._listen_key)
 
     async def _update_account_state(self) -> None:
         # Replace method in child class
@@ -806,7 +801,6 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
         return position_side
 
     async def _query_account(self, _command: QueryAccount) -> None:
-        # Specific account ID (sub account) not yet supported
         await self._update_account_state()
 
     async def _submit_order(self, command: SubmitOrder) -> None:
@@ -828,8 +822,8 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
 
         try:
             price_match = self._extract_price_match(order, params)
-        except ValueError as ex:
-            self._deny_order_pre_submit(order, str(ex))
+        except ValueError as e:
+            self._deny_order_pre_submit(order, str(e))
             return
 
         # Validate order before submission
@@ -861,8 +855,12 @@ class BinanceCommonExecutionClient(LiveExecutionClient):
             if not retry_manager.result:
                 # Determine if the rejection was specifically due to a POST-ONLY order
                 # that would have executed immediately as a taker (GTX_ORDER_REJECT -5022).
-                e = retry_manager.last_exception
-                due_post_only = _is_post_only_rejection(e) if isinstance(e, BinanceError) else False
+                last_exc = retry_manager.last_exception
+                due_post_only = (
+                    _is_post_only_rejection(last_exc)
+                    if isinstance(last_exc, BinanceError)
+                    else False
+                )
 
                 self.generate_order_rejected(
                     strategy_id=order.strategy_id,

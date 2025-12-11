@@ -53,6 +53,12 @@ class OKXDataClientConfig(LiveDataClientConfig, frozen=True):
     base_url_ws : str, optional
         The base url to OKX's websocket API.
         If ``None`` then will source the url from `get_ws_base_url()`.
+    http_proxy_url : str, optional
+        Optional HTTP proxy URL.
+    ws_proxy_url : str, optional
+        Optional WebSocket proxy URL.
+        Note: WebSocket proxy support is not yet implemented. This field is reserved
+        for future functionality. Use `http_proxy_url` for REST API proxy support.
     is_demo : bool, default False
         If the client is connecting to the OKX demo API.
     update_instruments_interval_mins: PositiveInt or None, default 60
@@ -72,6 +78,8 @@ class OKXDataClientConfig(LiveDataClientConfig, frozen=True):
     contract_types: tuple[OKXContractType, ...] | None = None
     base_url_http: str | None = None
     base_url_ws: str | None = None
+    http_proxy_url: str | None = None
+    ws_proxy_url: str | None = None
     is_demo: bool = False
     http_timeout_secs: PositiveInt | None = 60
     max_retries: PositiveInt | None = 3
@@ -112,6 +120,12 @@ class OKXExecClientConfig(LiveExecClientConfig, frozen=True):
     base_url_ws : str, optional
         The base url to OKX's websocket API.
         If ``None`` then will source the url from `get_ws_base_url()`.
+    http_proxy_url : str, optional
+        Optional HTTP proxy URL.
+    ws_proxy_url : str, optional
+        Optional WebSocket proxy URL.
+        Note: WebSocket proxy support is not yet implemented. This field is reserved
+        for future functionality. Use `http_proxy_url` for REST API proxy support.
     is_demo : bool, default False
         If the client is connecting to the OKX demo API.
     margin_mode : OKXMarginMode, optional
@@ -127,9 +141,9 @@ class OKXExecClientConfig(LiveExecClientConfig, frozen=True):
     max_retries : PositiveInt, default 3
         The maximum retry attempts for requests.
     retry_delay_initial_ms : PositiveInt, default 1_000
-        The initial delay (milliseconds) for retries.
+        The initial delay (milliseconds) between retries.
     retry_delay_max_ms : PositiveInt, default 10_000
-        The maximum delay (milliseconds) for exponential backoff.
+        The maximum delay (milliseconds) between retries.
     use_fills_channel : bool, default False
         If True, subscribes to the fills channel for separate fill reports (requires VIP5+).
         If False, generates fill reports from order status reports (works for all users).
@@ -137,6 +151,12 @@ class OKXExecClientConfig(LiveExecClientConfig, frozen=True):
         If True, uses OKX's mass-cancel endpoint for cancel_all_orders operations.
         This endpoint is typically restricted to market makers and high-volume traders.
         If False, cancels orders individually (works for all users).
+    use_spot_cash_position_reports : bool, default False
+        If True, generates position reports for SPOT CASH instruments based on wallet balances.
+        Positive balances (cash_bal - liab) are treated as LONG positions, and negative balances
+        (borrowing) as SHORT positions. This may lead to unintended liquidation of wallet assets
+        if strategies are not designed to handle SPOT positions properly.
+        If False, SPOT instruments return FLAT position reports (default behavior).
 
     """
 
@@ -148,6 +168,8 @@ class OKXExecClientConfig(LiveExecClientConfig, frozen=True):
     instrument_families: tuple[str, ...] | None = None
     base_url_http: str | None = None
     base_url_ws: str | None = None
+    http_proxy_url: str | None = None
+    ws_proxy_url: str | None = None
     is_demo: bool = False
     margin_mode: OKXMarginMode | None = None
     use_spot_margin: bool = False
@@ -157,3 +179,4 @@ class OKXExecClientConfig(LiveExecClientConfig, frozen=True):
     retry_delay_max_ms: PositiveInt | None = 10_000
     use_fills_channel: bool = False
     use_mm_mass_cancel: bool = False
+    use_spot_cash_position_reports: bool = False
