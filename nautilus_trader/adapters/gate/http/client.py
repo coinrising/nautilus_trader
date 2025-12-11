@@ -38,10 +38,29 @@ class GateHttpClient:
         #     keyed_quotas=ratelimiter_quotas or [],
         #     default_quota=ratelimiter_default_quota,
         # )
+        
+        # Use Session for connection pooling to prevent socket leaks
+        self._session = requests.Session()
+        # Configure connection pool
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,  # Number of connection pools to cache
+            pool_maxsize=20,      # Maximum connections to save in the pool
+            max_retries=0,        # Retries handled by retry manager
+        )
+        self._session.mount('http://', adapter)
+        self._session.mount('https://', adapter)
+    
+    def __del__(self):
+        """Ensure session is closed to prevent resource leaks."""
+        if hasattr(self, '_session'):
+            try:
+                self._session.close()
+            except:
+                pass
 
     def _request(self, method, url, params={}):
         headers = {'Accept': 'application/json', 'Content-Type': 'application/json'}
-        res = requests.request(method, self.base_url + url, headers=headers, json=params)
+        res = self._session.request(method, self.base_url + url, headers=headers, json=params)
         return res.json()
 
     def _gen_sign(self, method, url, query_string, payload_string):
@@ -68,9 +87,9 @@ class GateHttpClient:
         sign_headers = self._gen_sign(method, url, query_string, payload_string)
         sign_headers.update(common_headers)
         if query_string:
-            resp = requests.request(method, self.base_url + url + '?' + query_string, headers=sign_headers, json=payload)
+            resp = self._session.request(method, self.base_url + url + '?' + query_string, headers=sign_headers, json=payload)
         else:
-            resp = requests.request(method, self.base_url + url + query_string, headers=sign_headers, json=payload)
+            resp = self._session.request(method, self.base_url + url + query_string, headers=sign_headers, json=payload)
         if "Trigger.Price must" in resp.text:
             return None
         if resp.status_code // 100 != 2:

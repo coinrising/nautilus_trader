@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from cachetools import LRUCache
 
 from nautilus_trader.cache.cache import Cache
 from nautilus_trader.common.component import LiveClock
@@ -92,9 +93,9 @@ class GateDataClient(LiveMarketDataClient):
 
         # self._msgbus.register(endpoint="gate.data.tickers", handler=self.complete_fetch_tickers_task)
 
-        # Hot caches
-        # self._instrument_ids: dict[str, InstrumentId] = {}
-        self._last_quotes: dict[InstrumentId, QuoteTick] = {}
+        # Hot caches - use LRU cache to prevent unbounded growth
+        # Maximum 1000 instruments cached, evicts least recently used
+        self._last_quotes: LRUCache = LRUCache(maxsize=1000)
 
 
     async def _connect(self) -> None:
@@ -155,6 +156,8 @@ class GateDataClient(LiveMarketDataClient):
         symbol = GateSymbol(command.instrument_id.symbol.value)
         ws_client = self._ws_clients[symbol.product_type]
         await ws_client.unsubscribe_book_ticker(symbol.raw_symbol)
+        # Clean up cache entry when unsubscribing to free memory
+        self._last_quotes.pop(command.instrument_id, None)
 
     async def _unsubscribe_trade_ticks(self, command: UnsubscribeTradeTicks) -> None:
         symbol = GateSymbol(command.instrument_id.symbol.value)

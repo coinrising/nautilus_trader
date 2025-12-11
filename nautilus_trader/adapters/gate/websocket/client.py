@@ -75,12 +75,18 @@ class GateWebSocketClient:
         self._log.info(f"Connected to {self._base_url}", LogColor.BLUE)
         self.running = True
 
-        # Create and track tasks
-        heartbeat_task = self._loop.create_task(self._heartbeat())
-        listening_task = self._loop.create_task(self._keep_listening())
-        login_task = self._loop.create_task(self._keep_login())
-        
-        self._tasks.update([heartbeat_task, listening_task, login_task])
+        # Create and track tasks with automatic cleanup
+        heartbeat_task = self._create_task(self._heartbeat(), "heartbeat")
+        listening_task = self._create_task(self._keep_listening(), "listening")
+        login_task = self._create_task(self._keep_login(), "login")
+    
+    def _create_task(self, coro, name: str = None) -> asyncio.Task:
+        """Create a task with automatic cleanup on completion."""
+        task = self._loop.create_task(coro, name=name)
+        self._tasks.add(task)
+        # Automatically remove task from set when done to prevent memory leak
+        task.add_done_callback(lambda t: self._tasks.discard(t))
+        return task
 
     async def disconnect(self) -> None:
         self.running = False

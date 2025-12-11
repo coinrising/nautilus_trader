@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import asyncio
 import traceback
+from collections import deque
 
 from nautilus_trader.cache.cache import Cache
 from nautilus_trader.common.component import LiveClock
@@ -138,9 +139,8 @@ class GateExecutionClient(LiveExecutionClient):
             OrderType.STOP_LIMIT: self._submit_stop_limit_order,
         }
 
-        # Hot caches
-        self._instrument_ids: dict[str, InstrumentId] = {}
-
+        # Hot caches - removed unused _instrument_ids to prevent memory leak
+        
         self._retry_manager_pool = RetryManagerPool[None](
             pool_size=100,
             max_retries=config.max_retries or 0,
@@ -151,7 +151,9 @@ class GateExecutionClient(LiveExecutionClient):
             exc_types=(GateError,),
             retry_check=should_retry,
         )
-        self.handle_trade_id = set()
+        # Use deque with max size to prevent unbounded growth
+        # Keeps track of recent trade IDs to prevent duplicate processing
+        self.handle_trade_id = deque(maxlen=10000)  # ~500KB max, vs potentially GB with set()
 
     async def _connect(self) -> None:
         await self._instrument_provider.initialize()
@@ -796,7 +798,7 @@ class GateExecutionClient(LiveExecutionClient):
                 if gate_trade.execId in self.handle_trade_id:
                     self._log.info(f"Trade {gate_trade.execId} already handled")
                     return
-                self.handle_trade_id.add(gate_trade.execId)
+                self.handle_trade_id.append(gate_trade.execId)
                 self.generate_order_filled(
                     strategy_id=strategy_id,
                     instrument_id=instrument_id,
