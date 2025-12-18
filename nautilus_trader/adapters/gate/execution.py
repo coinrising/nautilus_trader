@@ -21,6 +21,8 @@ from nautilus_trader.execution.messages import GenerateOrderStatusReports
 from nautilus_trader.execution.messages import GeneratePositionStatusReports
 from nautilus_trader.execution.messages import ModifyOrder
 from nautilus_trader.execution.messages import SubmitOrder
+from nautilus_trader.execution.messages import SubmitOrderList
+from nautilus_trader.execution.messages import BatchCancelOrders
 from nautilus_trader.execution.reports import FillReport
 from nautilus_trader.execution.reports import OrderStatusReport
 from nautilus_trader.execution.reports import PositionStatusReport
@@ -470,6 +472,37 @@ class GateExecutionClient(LiveExecutionClient):
                 client_order_id=str(order.client_order_id),
             )
 
+    async def _submit_order_list(self, command: SubmitOrderList) -> None:
+        if not command.order_list.orders:
+            return
+        order_params = []
+        for order in command.order_list.orders:
+            gate_symbol = GateSymbol(command.instrument_id.symbol.value)
+            if not self._check_order_validity(order, gate_symbol.product_type):
+                return
+
+            # Generate order submitted event, to ensure correct ordering of event
+            self.generate_order_submitted(
+                strategy_id=order.strategy_id,
+                instrument_id=order.instrument_id,
+                client_order_id=order.client_order_id,
+                ts_event=self._clock.timestamp_ns(),
+            )
+
+            order_params.append({
+                "product_type": gate_symbol.product_type,
+                "symbol": gate_symbol.raw_symbol,
+                "side": self._enum_parser.parse_nautilus_order_side(order.side),
+                "order_type": GateOrderType.LIMIT,
+                "quantity": str(order.quantity),
+                "price": str(order.price),
+                "time_in_force": self._determine_time_in_force(order),
+                "client_order_id": str(order.client_order_id),
+            })
+
+        if order_params:
+            await self._ws_clients[gate_symbol.product_type].batch_place_orders(order_params)
+
     async def _submit_stop_limit_order(self, order: StopLimitOrder) -> None:
         gate_symbol = GateSymbol(order.instrument_id.symbol.value)
         time_in_force = self._determine_time_in_force(order)
@@ -511,6 +544,8 @@ class GateExecutionClient(LiveExecutionClient):
                 time_in_force=time_in_force,
                 client_order_id=str(order.client_order_id),
             )
+
+    
 
     # -- WEBSOCKET HANDLERS -------------------------------------------------------------------------
 
@@ -880,6 +915,24 @@ class GateExecutionClient(LiveExecutionClient):
                 venue_order_id=venue_order_id,
                 client_order_id=client_order_id,
             )
+
+    async def _batch_cancel_orders(self, command: BatchCancelOrders) -> None:
+        if not command.cancels:
+            return
+        venue_order_ids = []
+        client_order_ids = []
+        for cancel in command.cancels:
+            symbol = GateSymbol(cancel.instrument_id.symbol.value)
+            client_order_id = cancel.client_order_id.value
+            venue_order_id = str(cancel.venue_order_id) if command.venue_order_id else None
+            await self._ws_clients[symbol.product_type].batch_cancel_orders(
+                product_type=symbol.product_type,
+                symbol=symbol.raw_symbol,
+                venue_order_ids=venue_order_ids,
+                client_order_ids=client_order_ids,
+            )
+
+
     async def _cancel_all_orders(self, command: CancelAllOrders) -> None:
         gate_symbol = GateSymbol(command.instrument_id.symbol.value)
         try:

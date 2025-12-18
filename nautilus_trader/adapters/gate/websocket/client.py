@@ -446,6 +446,28 @@ class GateWebSocketClient:
         }
         await self._send(PlaceOrderDict)
 
+    async def batch_place_orders(self, orders: list[dict]) -> None:
+        BatchPlaceOrdersDict = {
+            'time': int(time.time()),
+            'channel': 'spot.order_place', 
+            "event": "api",
+            "payload": [
+                {
+                    "account": order["product_type"].value,
+                    "currency_pair": order["symbol"],
+                    "side": order["side"].value,
+                    "type": order["order_type"].value,
+                    "amount": order["quantity"],
+                    "price": order["price"],
+                    "time_in_force": order["time_in_force"].value,
+                    "text": order["client_order_id"],
+                    "auto_borrow": False,
+                    "auto_repay": False,
+                } for order in orders
+            ]
+        }
+        await self._send(BatchPlaceOrdersDict)
+
     async def cancel_order(self, product_type: GateProductType, symbol: str, venue_order_id: str=None, client_order_id: str=None) -> None:
         CancelOrderDict = {
             'time': int(time.time()),
@@ -460,5 +482,19 @@ class GateWebSocketClient:
             }
         }
         await self._send(CancelOrderDict)
+
+    async def batch_cancel_orders(self, product_type: GateProductType, symbol: str, venue_order_ids: list[str], client_order_ids: list[str]) -> None:
+        BatchCancelOrdersDict = {
+            'time': int(time.time()),
+            'channel': 'spot.order_cancel_ids', 
+            "event": "api",
+            "payload": [
+                {
+                    "currency_pair": symbol,
+                    "order_id": venue_order_id if venue_order_id else client_order_id,
+                } for venue_order_id, client_order_id in zip(venue_order_ids, client_order_ids)
+            ]
+        }
+        await self._send(BatchCancelOrdersDict)
 
     
