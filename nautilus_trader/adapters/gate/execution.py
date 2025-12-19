@@ -579,11 +579,10 @@ class GateExecutionClient(LiveExecutionClient):
             elif topic == 'usertrades':
                 self._handle_account_trade_update(product_type, msg)
             elif topic == "order_place":
-                self._handle_order_place(product_type, msg)
-            elif topic == "order_cancel":
-                self._handle_order_cancel(product_type, msg)
-            elif topic == "priceorders":
-                self._handle_priceorder_place(product_type, msg)
+                pass
+            #     self._handle_order_place(product_type, msg)
+            elif topic in ["order_cancel", "order_cancel_ids", "order_cancel_cp"]:
+                pass          
             else:
                 raise ValueError(f"Unknown websocket channel: {channel}")
         except Exception as e:
@@ -619,89 +618,9 @@ class GateExecutionClient(LiveExecutionClient):
             return True
         return False
 
-    def _handle_priceorder_place(self, product_type: str, msg: dict) -> None:
-            # {
-            # "time": 1691847986,
-            # "time_ms": 1691847986454,
-            # "channel": "spot.priceorders",
-            # "event": "update",
-            # "result": {
-            #     "market": "ETH_USDT",
-            #     "uid": "13679450",
-            #     "id": "247480109",
-            #     "currency_type": "ETH",
-            #     "exchange_type": "USDT",
-            #     "reason": "",
-            #     "err_msg": "",
-            #     "fired_order_id": 0,
-            #     "instant_cancel": false,
-            #     "trigger_price": "0.00302",
-            #     "trigger_rule": "<=",
-            #     "trigger_expiration": 900,
-            #     "price": "0.00300",
-            #     "amount": "26666.667",
-            #     "source": "",
-            #     "order_type": "limit",
-            #     "side": "buy",
-            #     "engine_type": "normal",
-            #     "is_stop_order": false,
-            #     "stop_trigger_price": "",
-            #     "stop_trigger_rule": "",
-            #     "stop_price": "",
-            #     "ctime": "1691517983131",
-            #     "ftime": "1691517983131"
-            #   }
-            # }
-        try:
-            result = msg['result']
-            self._log.info(f"WebSocket price order result: {result}")
-            # for order in result:
-            #     gate_order = GateOrder.from_ws_dict(order)
-            #     instrument_id = self._get_cached_instrument_id(gate_order.symbol, GateProductType(product_type))
-            #     client_order_id = ClientOrderId(gate_order.orderLinkId) if gate_order.orderLinkId else None
-            #     venue_order_id = VenueOrderId(gate_order.orderId)
-            #     if client_order_id is None:
-            #         client_order_id = self._cache.client_order_id(venue_order_id)
-
-            #     report = gate_order.parse_to_order_status_report(
-            #         client_order_id=client_order_id,
-            #         account_id=self.account_id,
-            #         instrument_id=instrument_id,
-            #         report_id=UUID4(),
-            #         enum_parser=self._enum_parser,
-            #         ts_init=self._clock.timestamp_ns(),
-            #     )
-
-            #     strategy_id = None
-            #     if report.client_order_id:
-            #         strategy_id = self._cache.strategy_id_for_order(report.client_order_id)
-            #     if strategy_id is None:
-            #         # External order
-            #         self._send_order_status_report(report)
-            #         return
-
-            #     cache_order = self._cache.order(report.client_order_id)
-            #     if cache_order is None:
-            #         exception_text = traceback.format_exc()
-            #         self._log.error(f"Cannot find {report.client_order_id!r}")
-            #         return
-                
-            #     if order['event'] == 'put':
-            #         # self._log.info(f'order accepted: {cache_order}, {report}')
-            #         self.generate_order_accepted(
-            #             strategy_id=strategy_id,
-            #             instrument_id=report.instrument_id,
-            #             client_order_id=report.client_order_id,
-            #             venue_order_id=report.venue_order_id,
-            #             ts_event=report.ts_last,
-                    # )
-
-        except Exception:
-            exception_text = traceback.format_exc()
-            self._log.error(f'Failed to handle order update: {exception_text}')
-
     def _handle_order_cancel(self, product_type: str, msg: dict) -> None:
         """Handle order cancel response. Auth errors are handled in _check_and_handle_auth_error."""
+        # self._log.info(f"Handling order cancel")
         if "errs" in msg.get("data", {}):
             errs = msg["data"]["errs"]
             if isinstance(errs, dict) and "message" in errs:
@@ -709,9 +628,77 @@ class GateExecutionClient(LiveExecutionClient):
                 # Log non-auth errors
                 if "Not login" not in message:
                     self._log.info(f"WebSocket order cancel result: {msg}")
-
+        else:
+            result = msg.get("data", {}).get("result", {}).get("req_param")
+            if result is None:
+                return
+            if isinstance(result, dict):
+                # single order cancel
+                order = result
+                gate_order = GateOrder.from_ws_dict(order)
+                instrument_id = self._get_cached_instrument_id(gate_order.symbol, GateProductType(product_type))
+                client_order_id = ClientOrderId(gate_order.orderLinkId) if gate_order.orderLinkId else None
+                venue_order_id = VenueOrderId(gate_order.orderId)
+                if client_order_id is None:
+                    client_order_id = self._cache.client_order_id(venue_order_id)
+                report = gate_order.parse_to_order_status_report(
+                    client_order_id=client_order_id,
+                    account_id=self.account_id,
+                    instrument_id=instrument_id,
+                    report_id=UUID4(),
+                    enum_parser=self._enum_parser,
+                    ts_init=self._clock.timestamp_ns(),
+                )
+                strategy_id = None
+                if client_order_id:
+                    strategy_id = self._cache.strategy_id_for_order(client_order_id)
+                if strategy_id is None:
+                    # External order
+                    self._log.info(f"External order: {client_order_id}")
+                    return
+                self.generate_order_canceled(
+                    strategy_id=strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=client_order_id,
+                    venue_order_id=venue_order_id,
+                    ts_event=report.ts_last,
+                )
+            elif isinstance(result, list):
+                for order in result:
+                    gate_order = GateOrder.from_ws_dict(order)
+                    instrument_id = self._get_cached_instrument_id(gate_order.symbol, GateProductType(product_type))
+                    client_order_id = ClientOrderId(gate_order.orderLinkId) if gate_order.orderLinkId else None
+                    venue_order_id = VenueOrderId(gate_order.orderId)
+                    if client_order_id is None:
+                        client_order_id = self._cache.client_order_id(venue_order_id)
+                    report = gate_order.parse_to_order_status_report(
+                        client_order_id=client_order_id,
+                        account_id=self.account_id,
+                        instrument_id=instrument_id,
+                        report_id=UUID4(),
+                        enum_parser=self._enum_parser,
+                        ts_init=self._clock.timestamp_ns(),
+                    )
+                    strategy_id = None
+                    if client_order_id:
+                        strategy_id = self._cache.strategy_id_for_order(client_order_id)
+                    if strategy_id is None:
+                        # External order
+                        self._log.info(f"External order: {client_order_id}")
+                        return
+                    self.generate_order_canceled(
+                        strategy_id=strategy_id,
+                        instrument_id=instrument_id,
+                        client_order_id=client_order_id,
+                        venue_order_id=venue_order_id,
+                        ts_event=report.ts_last,
+                    )
+            else:
+                self._log.error(f"Unknown order cancel result: {result}")
+            
     def _handle_order_place(self, product_type: str, msg: dict) -> None:
         """Handle order place response. Auth errors are handled in _check_and_handle_auth_error."""
+        # self._log.info(f"Handling order place")
         if "errs" in msg.get("data", {}):
             errs = msg["data"]["errs"]
             if isinstance(errs, dict) and "message" in errs:
@@ -721,9 +708,84 @@ class GateExecutionClient(LiveExecutionClient):
                     self._log.info(f"WebSocket order place result: {msg}")
                 elif "Not login" not in message:
                     self._log.error(f"WebSocket order place result: {msg}") 
+        else:
+            result = msg.get("data", {}).get("result", {})
+            if isinstance(result, dict) and result.get("req_param"):
+                result = result.get("req_param")
+            if result is None:
+                return
+            if isinstance(result, dict):
+                # single order place
+                order = result
+                gate_order = GateOrder.from_ws_dict(order)
+                instrument_id = self._get_cached_instrument_id(gate_order.symbol, GateProductType(product_type))
+                client_order_id = ClientOrderId(gate_order.orderLinkId) if gate_order.orderLinkId else None
+                venue_order_id = VenueOrderId(gate_order.orderId)
+                if client_order_id is None:
+                    client_order_id = self._cache.client_order_id(venue_order_id)
 
+                report = gate_order.parse_to_order_status_report(
+                    client_order_id=client_order_id,
+                    account_id=self.account_id,
+                    instrument_id=instrument_id,
+                    report_id=UUID4(),
+                    enum_parser=self._enum_parser,
+                    ts_init=self._clock.timestamp_ns(),
+                )
+
+                strategy_id = None
+                if client_order_id:
+                    strategy_id = self._cache.strategy_id_for_order(client_order_id)
+                if strategy_id is None:
+                    # External order
+                    self._log.info(f"External order: {client_order_id}")
+                    self._send_order_status_report(report)
+                    return
+                if client_order_id:
+                    strategy_id = self._cache.strategy_id_for_order(client_order_id)
+                self.generate_order_accepted(
+                    strategy_id=strategy_id,
+                    instrument_id=instrument_id,
+                    client_order_id=client_order_id,
+                    venue_order_id=venue_order_id,
+                    ts_event=report.ts_last,
+                )
+            elif isinstance(result, list):
+                for order in result:
+                    gate_order = GateOrder.from_ws_dict(order)
+                    instrument_id = self._get_cached_instrument_id(gate_order.symbol, GateProductType(product_type))
+                    client_order_id = ClientOrderId(gate_order.orderLinkId) if gate_order.orderLinkId else None
+                    venue_order_id = VenueOrderId(gate_order.orderId)
+                    if client_order_id is None:
+                        client_order_id = self._cache.client_order_id(venue_order_id)
+
+                    report = gate_order.parse_to_order_status_report(
+                        client_order_id=client_order_id,
+                        account_id=self.account_id,
+                        instrument_id=instrument_id,
+                        report_id=UUID4(),
+                        enum_parser=self._enum_parser,
+                        ts_init=self._clock.timestamp_ns(),
+                    )
+                    strategy_id = None
+                    if client_order_id:
+                        strategy_id = self._cache.strategy_id_for_order(client_order_id)
+                    if strategy_id is None:
+                        # External order
+                        self._log.info(f"External order: {client_order_id}")
+                        return
+                    self.generate_order_accepted(
+                        strategy_id=strategy_id,
+                        instrument_id=instrument_id,
+                        client_order_id=client_order_id,
+                        venue_order_id=venue_order_id,
+                        ts_event=report.ts_last,
+                    )
+            else:
+                self._log.error(f"Unknown order place result: {result}")
 
     def _handle_account_order_update(self, product_type: str, msg: dict) -> None:
+        # self._log.info(f"Handling account order update")
         try:
             result = msg['result']
             for order in result:
@@ -748,6 +810,7 @@ class GateExecutionClient(LiveExecutionClient):
                     strategy_id = self._cache.strategy_id_for_order(report.client_order_id)
                 if strategy_id is None:
                     # External order
+                    self._log.info(f"External order: {client_order_id}")
                     self._send_order_status_report(report)
                     return
 
@@ -793,6 +856,7 @@ class GateExecutionClient(LiveExecutionClient):
             self._log.error(f'Failed to handle order update: {exception_text}')
 
     def _handle_account_trade_update(self, product_type: str, msg: dict) -> None:
+        # self._log.info(f"Handling account trade update")
         try:
             result = msg['result']
             for raw_trade in result:
@@ -924,7 +988,7 @@ class GateExecutionClient(LiveExecutionClient):
         for cancel in command.cancels:
             symbol = GateSymbol(cancel.instrument_id.symbol.value)
             client_order_id = cancel.client_order_id.value
-            venue_order_id = str(cancel.venue_order_id) if command.venue_order_id else None
+            venue_order_id = str(cancel.venue_order_id) if cancel.venue_order_id else None
             await self._ws_clients[symbol.product_type].batch_cancel_orders(
                 product_type=symbol.product_type,
                 symbol=symbol.raw_symbol,
@@ -939,34 +1003,40 @@ class GateExecutionClient(LiveExecutionClient):
             side = command.order_side
         except:
             side = None
-        retry_manager = await self._retry_manager_pool.acquire()
 
-        try:
-            await retry_manager.run(
-                "cancel_all_orders",
-                None,
-                self._http_clt.cancel_all_orders,
-                product_type=gate_symbol.product_type,
-                symbol=gate_symbol.raw_symbol,
-                side=side,
-            )
-            if not retry_manager.result:
-                orders_open = self._cache.orders_open(
-                    venue=None,
-                    instrument_id=command.instrument_id)
-                for order in orders_open:
-                    if order.is_closed:
-                        continue
-                    self.generate_order_cancel_rejected(
-                        order.strategy_id,
-                        order.instrument_id,
-                        order.client_order_id,
-                        order.venue_order_id,
-                        retry_manager.message,
-                        self._clock.timestamp_ns(),
-                    )
-        finally:
-            await self._retry_manager_pool.release(retry_manager)
+        await self._ws_clients[gate_symbol.product_type].cancel_all_orders(
+            product_type=gate_symbol.product_type,
+            symbol=gate_symbol.raw_symbol,
+            side=side,
+        )
+        # retry_manager = await self._retry_manager_pool.acquire()
+
+        # try:
+        #     await retry_manager.run(
+        #         "cancel_all_orders",
+        #         None,
+        #         self._http_clt.cancel_all_orders,
+        #         product_type=gate_symbol.product_type,
+        #         symbol=gate_symbol.raw_symbol,
+        #         side=side,
+        #     )
+        #     if not retry_manager.result:
+        #         orders_open = self._cache.orders_open(
+        #             venue=None,
+        #             instrument_id=command.instrument_id)
+        #         for order in orders_open:
+        #             if order.is_closed:
+        #                 continue
+        #             self.generate_order_cancel_rejected(
+        #                 order.strategy_id,
+        #                 order.instrument_id,
+        #                 order.client_order_id,
+        #                 order.venue_order_id,
+        #                 retry_manager.message,
+        #                 self._clock.timestamp_ns(),
+        #             )
+        # finally:
+        #     await self._retry_manager_pool.release(retry_manager)
 
     async def _modify_order(self, command: ModifyOrder) -> None:
         order: Order | None = self._cache.order(command.client_order_id)

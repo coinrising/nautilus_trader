@@ -76,30 +76,60 @@ class GateOrder(msgspec.Struct, omit_defaults=True, kw_only=True):
 
     @staticmethod
     def from_ws_dict(order):
-        event = GateOrderEvent(order['event'])
-        finish_as = GateOrderFinishAs(order['finish_as'])
-        if event == GateOrderEvent.PUT:
+        event = order.get('event')
+        finish_as = order.get('finish_as')
+        if event is not None:
+            event = GateOrderEvent(event)
+        if finish_as is not None:
+            finish_as = GateOrderFinishAs(finish_as)
+        else:
+            finish_as = GateOrderStatus.OPEN
+
+        if finish_as == GateOrderFinishAs.OPEN:
             status = GateOrderStatus.OPEN
-        elif event == GateOrderEvent.UPDATE:
-            status = GateOrderStatus.OPEN
-        elif event == GateOrderEvent.FINISH:
-            if finish_as == GateOrderFinishAs.FILLED:
-                status = GateOrderStatus.CLOSED
-            else:
-                status = GateOrderStatus.CANCELLED
-        filled_amount = str(Decimal(order['amount']) - Decimal(order['left']))
-        return GateOrder(orderId=order['id'], orderLinkId=order['text'], createdTime=order['create_time_ms'], updatedTime=order['update_time_ms'],
+        else:
+            if event == GateOrderEvent.PUT:
+                status = GateOrderStatus.OPEN
+            elif event == GateOrderEvent.UPDATE:
+                status = GateOrderStatus.OPEN
+            elif event == GateOrderEvent.FINISH:
+                if finish_as == GateOrderFinishAs.FILLED:
+                    status = GateOrderStatus.CLOSED
+                else:
+                    status = GateOrderStatus.CANCELLED
+            elif event is None:
+                status = GateOrderStatus.OPEN
+        if order.get("left"):
+            filled_amount = str(Decimal(order['amount']) - Decimal(order['left']))
+        else:
+            filled_amount = "0"
+        if order.get("create_time_ms"):
+            created_time = order['create_time_ms']
+        else:
+            created_time = str(order["text"].split("-")[1])
+        if order.get("update_time_ms"):
+            updated_time = order['update_time_ms']
+        else:
+            updated_time = str(order["text"].split("-")[1])
+        return GateOrder(orderId=order['id'] if order.get("id") else order["text"], 
+                         orderLinkId=order['text'], 
+                         createdTime=created_time, 
+                         updatedTime=updated_time,
                          status=status,
-                         symbol=order['currency_pair'], orderType=GateOrderType(order['type']), price=order['price'], qty=order['amount'],
+                         symbol=order['currency_pair'], 
+                         orderType=GateOrderType(order['type']), 
+                         price=order['price'], 
+                         qty=order['amount'],
                          side=GateOrderSide(order['side']), 
                          timeInForce=GateTimeInForce(order['time_in_force']),
-                         finishAs=GateOrderFinishAs(order['finish_as']),
+                         finishAs=finish_as,
                          avgPrice=order.get('avg_deal_price'),
-                         leavesQty=order['left'], cumExecQty=filled_amount, cumExecValue=order['filled_total'],
-                         cumExecFee=order['fee'], cumExecFeeCurrency=order['fee_currency'],
-                         pointFee=order['point_fee'], gtFee=order['gt_fee'], gtMakerFee=order.get('gt_maker_fee'), gtTakerFee=order.get('gt_taker_fee'),
+                         leavesQty=order.get('left'), cumExecQty=filled_amount, cumExecValue=order.get('filled_total'),
+                         cumExecFee=order.get('fee'), cumExecFeeCurrency=order.get('fee_currency'),
+                         pointFee=order.get('point_fee'), gtFee=order.get('gt_fee'), 
+                         gtMakerFee=order.get('gt_maker_fee'), gtTakerFee=order.get('gt_taker_fee'),
                          gtDiscount=order.get('gt_discount'),
-                         rebatedFee=order['rebated_fee'], rebatedFeeCurrency=order['rebated_fee_currency'],
+                         rebatedFee=order.get('rebated_fee'), rebatedFeeCurrency=order.get('rebated_fee_currency'),
                          account=order['account'], iceberg=order.get('iceberg', '0'),
                          )
 
